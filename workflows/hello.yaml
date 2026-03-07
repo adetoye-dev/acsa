@@ -1,0 +1,14 @@
+version: v1
+name: hello-http
+trigger:
+  type: cron
+  schedule: "0 */6 * * * *"
+steps:
+  - id: fetch_status
+    type: http_request
+    params:
+      method: GET
+      url: https://example.com/health
+      headers:
+        accept: application/json
+    next: []
