@@ -20,6 +20,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
@@ -64,7 +65,12 @@ impl RunStore {
         &self.pool
     }
 
-    pub async fn start_run(&self, workflow_name: &str) -> Result<RunRecord, StorageError> {
+    pub async fn start_run(
+        &self,
+        workflow_name: &str,
+        workflow_snapshot: &str,
+        initial_payload: &Value,
+    ) -> Result<RunRecord, StorageError> {
         let record = RunRecord {
             id: Uuid::new_v4().to_string(),
             workflow_name: workflow_name.to_string(),
@@ -72,12 +78,25 @@ impl RunStore {
             started_at: current_timestamp(),
             finished_at: None,
             error_message: None,
+            initial_payload: Some(serde_json::to_string(initial_payload)?),
+            state_json: None,
+            workflow_snapshot: Some(workflow_snapshot.to_string()),
         };
 
         sqlx::query(
             r#"
-            INSERT INTO runs (id, workflow_name, status, started_at, finished_at, error_message)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO runs (
+              id,
+              workflow_name,
+              status,
+              started_at,
+              finished_at,
+              error_message,
+              workflow_snapshot,
+              initial_payload,
+              state_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&record.id)
@@ -86,17 +105,36 @@ impl RunStore {
         .bind(record.started_at)
         .bind(record.finished_at)
         .bind(&record.error_message)
+        .bind(&record.workflow_snapshot)
+        .bind(&record.initial_payload)
+        .bind(&record.state_json)
         .execute(&self.pool)
         .await?;
 
         Ok(record)
     }
 
+    pub async fn get_run(&self, run_id: &str) -> Result<RunRecord, StorageError> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, workflow_name, status, started_at, finished_at, error_message, workflow_snapshot, initial_payload, state_json
+            FROM runs
+            WHERE id = ?
+            "#,
+        )
+        .bind(run_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| StorageError::RunNotFound(run_id.to_string()))?;
+
+        map_run_row(row)
+    }
+
     pub async fn complete_run_success(&self, run_id: &str) -> Result<(), StorageError> {
         let result = sqlx::query(
             r#"
             UPDATE runs
-            SET status = ?, finished_at = ?, error_message = NULL
+            SET status = ?, finished_at = ?, error_message = NULL, state_json = NULL
             WHERE id = ?
             "#,
         )
@@ -121,13 +159,59 @@ impl RunStore {
         let result = sqlx::query(
             r#"
             UPDATE runs
-            SET status = ?, finished_at = ?, error_message = ?
+            SET status = ?, finished_at = ?, error_message = ?, state_json = NULL
             WHERE id = ?
             "#,
         )
         .bind(RunStatus::Failed.as_str())
         .bind(current_timestamp())
         .bind(error_message)
+        .bind(run_id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StorageError::RunNotFound(run_id.to_string()));
+        }
+
+        Ok(())
+    }
+
+    pub async fn pause_run(&self, run_id: &str, state_json: &str) -> Result<(), StorageError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE runs
+            SET status = ?, finished_at = NULL, error_message = NULL, state_json = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(RunStatus::Paused.as_str())
+        .bind(state_json)
+        .bind(run_id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StorageError::RunNotFound(run_id.to_string()));
+        }
+
+        Ok(())
+    }
+
+    pub async fn mark_run_running(
+        &self,
+        run_id: &str,
+        state_json: &str,
+    ) -> Result<(), StorageError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE runs
+            SET status = ?, finished_at = NULL, error_message = NULL, state_json = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(RunStatus::Running.as_str())
+        .bind(state_json)
         .bind(run_id)
         .execute(&self.pool)
         .await?;
@@ -225,6 +309,27 @@ impl RunStore {
         Ok(())
     }
 
+    pub async fn complete_step_paused(
+        &self,
+        step_run_id: &str,
+        pause_message: &str,
+    ) -> Result<(), StorageError> {
+        sqlx::query(
+            r#"
+            UPDATE step_runs
+            SET status = ?, finished_at = NULL, error_message = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(RunStatus::Paused.as_str())
+        .bind(pause_message)
+        .bind(step_run_id)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn record_step_skipped(
         &self,
         run_id: &str,
@@ -270,7 +375,7 @@ impl RunStore {
     pub async fn list_runs(&self) -> Result<Vec<RunRecord>, StorageError> {
         let rows = sqlx::query(
             r#"
-            SELECT id, workflow_name, status, started_at, finished_at, error_message
+            SELECT id, workflow_name, status, started_at, finished_at, error_message, workflow_snapshot, initial_payload, state_json
             FROM runs
             ORDER BY started_at DESC
             "#,
@@ -295,6 +400,110 @@ impl RunStore {
         .await?;
 
         rows.into_iter().map(map_step_run_row).collect()
+    }
+
+    pub async fn create_human_task(
+        &self,
+        task: NewHumanTask<'_>,
+    ) -> Result<HumanTaskRecord, StorageError> {
+        let record = HumanTaskRecord {
+            id: Uuid::new_v4().to_string(),
+            run_id: task.run_id.to_string(),
+            step_run_id: task.step_run_id.to_string(),
+            step_id: task.step_id.to_string(),
+            kind: task.kind.to_string(),
+            status: HumanTaskStatus::Pending.as_str().to_string(),
+            prompt: task.prompt.to_string(),
+            field: task.field.map(str::to_string),
+            details: Some(serde_json::to_string(task.details)?),
+            response: None,
+            created_at: current_timestamp(),
+            completed_at: None,
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO human_tasks (
+              id, run_id, step_run_id, step_id, kind, status, prompt, field, details, response, created_at, completed_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&record.id)
+        .bind(&record.run_id)
+        .bind(&record.step_run_id)
+        .bind(&record.step_id)
+        .bind(&record.kind)
+        .bind(&record.status)
+        .bind(&record.prompt)
+        .bind(&record.field)
+        .bind(&record.details)
+        .bind(&record.response)
+        .bind(record.created_at)
+        .bind(record.completed_at)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(record)
+    }
+
+    pub async fn get_human_task(&self, task_id: &str) -> Result<HumanTaskRecord, StorageError> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, run_id, step_run_id, step_id, kind, status, prompt, field, details, response, created_at, completed_at
+            FROM human_tasks
+            WHERE id = ?
+            "#,
+        )
+        .bind(task_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| StorageError::HumanTaskNotFound(task_id.to_string()))?;
+
+        map_human_task_row(row)
+    }
+
+    pub async fn list_pending_human_tasks(&self) -> Result<Vec<HumanTaskRecord>, StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, run_id, step_run_id, step_id, kind, status, prompt, field, details, response, created_at, completed_at
+            FROM human_tasks
+            WHERE status = ?
+            ORDER BY created_at ASC
+            "#,
+        )
+        .bind(HumanTaskStatus::Pending.as_str())
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(map_human_task_row).collect()
+    }
+
+    pub async fn resolve_human_task(
+        &self,
+        task_id: &str,
+        response: &Value,
+    ) -> Result<(), StorageError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE human_tasks
+            SET status = ?, response = ?, completed_at = ?
+            WHERE id = ? AND status = ?
+            "#,
+        )
+        .bind(HumanTaskStatus::Resolved.as_str())
+        .bind(serde_json::to_string(response)?)
+        .bind(current_timestamp())
+        .bind(task_id)
+        .bind(HumanTaskStatus::Pending.as_str())
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StorageError::HumanTaskNotFound(task_id.to_string()));
+        }
+
+        Ok(())
     }
 
     pub async fn upsert_trigger_state(
@@ -332,12 +541,18 @@ impl RunStore {
               status TEXT NOT NULL,
               started_at INTEGER NOT NULL,
               finished_at INTEGER,
-              error_message TEXT
+              error_message TEXT,
+              workflow_snapshot TEXT,
+              initial_payload TEXT,
+              state_json TEXT
             )
             "#,
         )
         .execute(&self.pool)
         .await?;
+        self.ensure_column("runs", "workflow_snapshot", "TEXT").await?;
+        self.ensure_column("runs", "initial_payload", "TEXT").await?;
+        self.ensure_column("runs", "state_json", "TEXT").await?;
 
         sqlx::query(
             r#"
@@ -353,6 +568,29 @@ impl RunStore {
               output TEXT,
               error_message TEXT,
               FOREIGN KEY(run_id) REFERENCES runs(id)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS human_tasks (
+              id TEXT PRIMARY KEY,
+              run_id TEXT NOT NULL,
+              step_run_id TEXT NOT NULL,
+              step_id TEXT NOT NULL,
+              kind TEXT NOT NULL,
+              status TEXT NOT NULL,
+              prompt TEXT NOT NULL,
+              field TEXT,
+              details TEXT,
+              response TEXT,
+              created_at INTEGER NOT NULL,
+              completed_at INTEGER,
+              FOREIGN KEY(run_id) REFERENCES runs(id),
+              FOREIGN KEY(step_run_id) REFERENCES step_runs(id)
             )
             "#,
         )
@@ -394,6 +632,12 @@ impl RunStore {
             .execute(&self.pool)
             .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_step_runs_run_id ON step_runs(run_id)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_human_tasks_run_id ON human_tasks(run_id)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_human_tasks_status ON human_tasks(status)")
             .execute(&self.pool)
             .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_logs_run_id ON logs(run_id)")
@@ -439,6 +683,27 @@ impl RunStore {
 
         Ok(())
     }
+
+    async fn ensure_column(
+        &self,
+        table: &str,
+        column: &str,
+        definition: &str,
+    ) -> Result<(), StorageError> {
+        let rows =
+            sqlx::query(&format!("PRAGMA table_info({table})")).fetch_all(&self.pool).await?;
+        let exists = rows.iter().any(|row| {
+            row.try_get::<String, _>("name").map(|name| name == column).unwrap_or(false)
+        });
+        if exists {
+            return Ok(());
+        }
+
+        sqlx::query(&format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -449,6 +714,9 @@ pub struct RunRecord {
     pub started_at: i64,
     pub finished_at: Option<i64>,
     pub error_message: Option<String>,
+    pub workflow_snapshot: Option<String>,
+    pub initial_payload: Option<String>,
+    pub state_json: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -465,9 +733,37 @@ pub struct StepRunRecord {
     pub error_message: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HumanTaskRecord {
+    pub id: String,
+    pub run_id: String,
+    pub step_run_id: String,
+    pub step_id: String,
+    pub kind: String,
+    pub status: String,
+    pub prompt: String,
+    pub field: Option<String>,
+    pub details: Option<String>,
+    pub response: Option<String>,
+    pub created_at: i64,
+    pub completed_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewHumanTask<'a> {
+    pub details: &'a Value,
+    pub field: Option<&'a str>,
+    pub kind: &'a str,
+    pub prompt: &'a str,
+    pub run_id: &'a str,
+    pub step_id: &'a str,
+    pub step_run_id: &'a str,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunStatus {
     Failed,
+    Paused,
     Running,
     Skipped,
     Success,
@@ -477,9 +773,27 @@ impl RunStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Failed => "failed",
+            Self::Paused => "paused",
             Self::Running => "running",
             Self::Skipped => "skipped",
             Self::Success => "success",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HumanTaskStatus {
+    Cancelled,
+    Pending,
+    Resolved,
+}
+
+impl HumanTaskStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cancelled => "cancelled",
+            Self::Pending => "pending",
+            Self::Resolved => "resolved",
         }
     }
 }
@@ -504,6 +818,8 @@ pub enum StorageError {
     InvalidPath(String),
     #[error("run not found: {0}")]
     RunNotFound(String),
+    #[error("human task not found: {0}")]
+    HumanTaskNotFound(String),
     #[error("data integrity error: {0}")]
     DataIntegrity(String),
 }
@@ -523,6 +839,9 @@ fn map_run_row(row: sqlx::sqlite::SqliteRow) -> Result<RunRecord, StorageError> 
         started_at: row.try_get("started_at")?,
         finished_at: row.try_get("finished_at")?,
         error_message: row.try_get("error_message")?,
+        workflow_snapshot: row.try_get("workflow_snapshot")?,
+        initial_payload: row.try_get("initial_payload")?,
+        state_json: row.try_get("state_json")?,
     })
 }
 
@@ -545,5 +864,22 @@ fn map_step_run_row(row: sqlx::sqlite::SqliteRow) -> Result<StepRunRecord, Stora
         input: row.try_get("input")?,
         output: row.try_get("output")?,
         error_message: row.try_get("error_message")?,
+    })
+}
+
+fn map_human_task_row(row: sqlx::sqlite::SqliteRow) -> Result<HumanTaskRecord, StorageError> {
+    Ok(HumanTaskRecord {
+        id: row.try_get("id")?,
+        run_id: row.try_get("run_id")?,
+        step_run_id: row.try_get("step_run_id")?,
+        step_id: row.try_get("step_id")?,
+        kind: row.try_get("kind")?,
+        status: row.try_get("status")?,
+        prompt: row.try_get("prompt")?,
+        field: row.try_get("field")?,
+        details: row.try_get("details")?,
+        response: row.try_get("response")?,
+        created_at: row.try_get("created_at")?,
+        completed_at: row.try_get("completed_at")?,
     })
 }

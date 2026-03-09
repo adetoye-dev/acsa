@@ -4,10 +4,10 @@ Last updated: 2026-03-09
 
 ## Current Status
 
-- Project stage: Built-in nodes and trigger runtime implemented
-- Current phase: Phase 4 complete, Phase 5 pending review gate
-- Coding status: Trigger runtime, built-in node families, trigger persistence, and Phase 4 samples/docs are in place
-- Approval status: Waiting for user review before starting Phase 5
+- Project stage: Human-task persistence and connector runtime implemented
+- Current phase: Phase 5 complete, Phase 6 pending review gate
+- Coding status: Persisted pause/resume, connector SDK/runtime, connector tooling, and refreshed samples/docs are in place
+- Approval status: Waiting for user review before starting Phase 6
 
 ## Completed This Session
 
@@ -56,6 +56,13 @@ Last updated: 2026-03-09
 - Implemented a trigger runtime that schedules cron workflows and serves authenticated webhook routes
 - Added Phase 4 workflow samples and refreshed docs for trigger/runtime usage
 - Ran Rust formatting, tests, clippy, and cargo audit for the Phase 4 implementation
+- Implemented persisted async pause/resume for `approval` and `manual_input` flows
+- Added SQLite-backed human task storage plus HTTP endpoints for listing and resolving pending tasks
+- Added connector manifest parsing, dynamic connector registration, subprocess execution, and Extism-backed WASM execution
+- Added connector CLI tooling for scaffold generation and local manifest testing
+- Added connector examples for process and WASM development plus an approval workflow sample
+- Ran end-to-end smoke checks for webhook execution, human-task resolution, connector scaffolding, and connector testing
+- Re-ran Rust formatting, tests, clippy, and cargo audit after the Phase 5 connector work
 
 ## Current Repository Baseline
 
@@ -66,17 +73,20 @@ Last updated: 2026-03-09
 - `workflows/manual-demo.yaml` is the baseline executable DAG sample used by the engine CLI
 - `workflows/conditional-demo.yaml` is the Phase 4 branching sample for manual execution
 - `workflows/webhook-demo.yaml` is the Phase 4 authenticated webhook sample for the trigger server
+- `workflows/approval-demo.yaml` is the persisted pause/resume sample for human approval flows
+- `examples/process-connector/` is the subprocess connector sample used by `connector-test`
+- `examples/wasm-plugin/` is the starter Extism/WASM connector template
 - Phase 2 CI workflow is present under `.github/workflows/ci.yml`
 
 ## Next Action
 
-If the user approves, begin Phase 5 only:
+If the user approves, begin Phase 6 only:
 
-1. Design the connector SDK surface for manifest loading and runtime contracts
-2. Implement subprocess connector execution with strict input and timeout boundaries
-3. Introduce the WASM connector runtime via Extism
-4. Add connector examples, test harnesses, and security guardrails
-5. Stop and ask for review before Phase 6
+1. Expose engine APIs needed by the UI beyond the current trigger server surface
+2. Connect the React Flow editor to workflow load/save/run endpoints
+3. Surface pending human tasks and connector-backed nodes in the UI
+4. Keep the UX minimal, local-first, and aligned with the YAML source of truth
+5. Stop and ask for review before Phase 7
 
 ## Non-Negotiable Execution Rules
 
@@ -155,8 +165,13 @@ If a phase introduces material risk without a corresponding validation or mitiga
 
 ## Known Follow-On Hardening
 
-- Approval and manual-input nodes currently operate as synchronous gate primitives driven by explicit parameters.
-- Persisted asynchronous pause and resume flows are still a follow-on hardening item and should be revisited before relying on human-in-the-loop workflows in production.
+- `cargo audit` currently reports 3 upstream Wasmtime advisories through `extism 1.13.0`:
+  - **RUSTSEC-2026-0020** (CVSS 6.9 Medium): Guest-controlled resource exhaustion in WASI implementations
+  - **RUSTSEC-2026-0021** (CVSS 6.9 Medium): Panic adding excessive fields to `wasi:http/types.fields`
+  - **RUSTSEC-2026-0006** (CVSS 4.1 Medium): Wasmtime segfault or unused out-of-sandbox load with `f64.copysign` on x86-64
+  - **Assessment**: Safe to proceed to Phase 6 with runtime mitigations. All advisories are Medium severity and affect guest-controlled edge cases. WASM connectors are sandboxed and the workflow engine terminates on timeout.
+  - **Immediate measures**: (1) Document the advisories in acceptance criteria, (2) Pin Wasmtime >=41.0.4 when extism updates, (3) Enforce strict timeout/memory limits in connector manifests, (4) Mark subprocess memory-caps as required follow-up for Phase 7 hardening.
+- Subprocess connectors enforce timeout and JSON validation today, but OS-level memory caps remain a follow-on hardening task because the current implementation avoids unsafe/platform-specific limit code.
 
 ## Resume Protocol For Future Sessions
 

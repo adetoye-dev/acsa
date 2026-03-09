@@ -226,7 +226,7 @@ impl Node for FileReadNode {
             .and_then(Value::as_str)
             .ok_or(NodeError::MissingParameter { parameter: "path" })?;
         let resolved = ensure_relative_path(&self.data_dir, path)?;
-        
+
         // Check file size before reading
         const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB limit
         let metadata = tokio::fs::metadata(&resolved).await.map_err(|error| {
@@ -241,7 +241,7 @@ impl Node for FileReadNode {
                 ),
             });
         }
-        
+
         let contents = tokio::fs::read_to_string(&resolved).await.map_err(|error| {
             NodeError::Message { message: format!("failed to read file: {error}") }
         })?;
@@ -438,7 +438,10 @@ fn is_read_query(query: &str) -> bool {
         || trimmed.starts_with("explain")
         || trimmed.starts_with("show")
         || trimmed.starts_with("describe")
-        || (trimmed.contains("returning") && (trimmed.starts_with("insert") || trimmed.starts_with("update") || trimmed.starts_with("delete")))
+        || (trimmed.contains("returning")
+            && (trimmed.starts_with("insert")
+                || trimmed.starts_with("update")
+                || trimmed.starts_with("delete")))
 }
 
 fn bind_sqlite_query<'q>(

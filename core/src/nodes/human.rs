@@ -17,7 +17,7 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use super::{lookup_required, Node, NodeError};
+use super::{lookup_required, paused_output, Node, NodeError, NodePause, NodePauseKind};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ApprovalNode;
@@ -33,21 +33,23 @@ impl Node for ApprovalNode {
             .get("prompt")
             .and_then(Value::as_str)
             .ok_or(NodeError::MissingParameter { parameter: "prompt" })?;
-        let approved = params
-            .get("approved")
-            .and_then(Value::as_bool)
-            .or_else(|| {
-                params
-                    .get("approved_path")
-                    .and_then(Value::as_str)
-                    .and_then(|path| lookup_required(inputs, path).ok())
-                    .and_then(Value::as_bool)
-            })
-            .ok_or(NodeError::Message {
-                message: "approval decision missing; provide approved or approved_path".to_string(),
-            })?;
+        let approved = params.get("approved").and_then(Value::as_bool).or_else(|| {
+            params
+                .get("approved_path")
+                .and_then(Value::as_str)
+                .and_then(|path| lookup_required(inputs, path).ok())
+                .and_then(Value::as_bool)
+        });
+        if let Some(approved) = approved {
+            return Ok(json!({ "approved": approved, "prompt": prompt }));
+        }
 
-        Ok(json!({ "approved": approved, "prompt": prompt }))
+        paused_output(NodePause {
+            details: params.get("details").cloned().unwrap_or_else(|| json!({})),
+            field: None,
+            kind: NodePauseKind::Approval,
+            prompt: prompt.to_string(),
+        })
     }
 }
 
@@ -61,24 +63,30 @@ impl Node for ManualInputNode {
     }
 
     async fn execute(&self, inputs: &Value, params: &Value) -> Result<Value, NodeError> {
+        let prompt = params
+            .get("prompt")
+            .and_then(Value::as_str)
+            .ok_or(NodeError::MissingParameter { parameter: "prompt" })?;
         let field = params
             .get("field")
             .and_then(Value::as_str)
             .ok_or(NodeError::MissingParameter { parameter: "field" })?;
-        let value = params
-            .get("value")
-            .cloned()
-            .or_else(|| {
-                params
-                    .get("value_path")
-                    .and_then(Value::as_str)
-                    .and_then(|path| lookup_required(inputs, path).ok())
-                    .cloned()
-            })
-            .ok_or(NodeError::Message {
-                message: "manual input value missing; provide value or value_path".to_string(),
-            })?;
+        let value = params.get("value").cloned().or_else(|| {
+            params
+                .get("value_path")
+                .and_then(Value::as_str)
+                .and_then(|path| lookup_required(inputs, path).ok())
+                .cloned()
+        });
+        if let Some(value) = value {
+            return Ok(json!({ "field": field, "prompt": prompt, "value": value }));
+        }
 
-        Ok(json!({ "field": field, "value": value }))
+        paused_output(NodePause {
+            details: params.get("details").cloned().unwrap_or_else(|| json!({})),
+            field: Some(field.to_string()),
+            kind: NodePauseKind::ManualInput,
+            prompt: prompt.to_string(),
+        })
     }
 }

@@ -1,0 +1,16 @@
+{
+  "name": "Echo Wasm",
+  "type": "echo_wasm",
+  "runtime": "wasm",
+  "entry": "dist/connector.wasm",
+  "inputs": ["message"],
+  "outputs": ["echoed"],
+  "limits": {
+    "memory": 64,
+    "timeout": 10000
+  },
+  "_comments": {
+    "memory": "Memory limit in MB (megabytes)",
+    "timeout": "Timeout in milliseconds"
+  }
+}

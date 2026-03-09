@@ -43,12 +43,13 @@ Rust is required to build and run the engine.
 cargo run -p acsa-core -- validate workflows/hello.yaml
 cargo run -p acsa-core -- list workflows
 cargo run -p acsa-core -- run workflows/manual-demo.yaml --db ./acsa.db
-ACsa_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
+ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
+cargo run -p acsa-core -- connector-test examples/process-connector/manifest.json --inputs examples/process-connector/sample-input.json
 ```
 
 **Note:** Generate a strong secret for production with `openssl rand -hex 32` and set it in the `ACSA_WEBHOOK_SECRET` environment variable.
 
-The current CLI can validate workflows, list workflow files, manually execute DAG workflows, and serve cron plus webhook triggers while persisting run and trigger state to SQLite.
+The current CLI can validate workflows, list workflow files, manually execute DAG workflows, serve cron plus webhook triggers, persist and resume human review tasks, scaffold connectors, and test connector manifests locally.
 
 ### UI
 
@@ -78,15 +79,17 @@ The Phase 2 UI is a minimal editor shell designed to evolve into the React Flow 
 - retry-aware step execution with timeout control
 - SQLite-backed run and step-attempt persistence
 - SQLite-backed trigger state persistence
+- persisted human task state with resumable approval and manual-input steps
 - manual, cron, and webhook trigger dispatch
 - logic nodes for `condition`, `switch`, `loop`, and `parallel`
 - integration nodes for HTTP, database, and file access
 - AI primitives for completion, classification, extraction, embedding, and retrieval
-- synchronous approval and manual-input gate nodes
+- process and WASM connector loading from `connectors/`
+- connector scaffolding and local manifest testing commands
 
 ## Next Milestones
 
-1. Introduce richer connector runtime support for subprocess and WASM extensions
-2. Expose engine APIs for UI-driven execution and history
-3. Add observability, packaging, and release collateral
-4. Harden the human-in-the-loop path with persisted pause and resume APIs
+1. Expose engine APIs for UI-driven execution and history
+2. Add observability, packaging, and release collateral
+3. Track upstream Extism/Wasmtime security fixes and tighten connector isolation as patched versions land
+4. Expand the visual editor to understand pending human tasks and connector nodes

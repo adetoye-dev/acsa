@@ -25,6 +25,17 @@ pub struct Cli {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+    ConnectorNew {
+        connectors_dir: PathBuf,
+        name: String,
+        runtime: String,
+        type_id: String,
+    },
+    ConnectorTest {
+        inputs_path: Option<PathBuf>,
+        manifest_path: PathBuf,
+        params_path: Option<PathBuf>,
+    },
     List {
         workflows_dir: PathBuf,
     },
@@ -54,6 +65,8 @@ impl Cli {
             }),
             [flag] if flag == "--help" || flag == "-h" => Err(CliError::HelpRequested),
             [command, rest @ ..] => match command.as_str() {
+                "connector-new" => Ok(Self { command: parse_connector_new(rest)? }),
+                "connector-test" => Ok(Self { command: parse_connector_test(rest)? }),
                 "list" => Ok(Self { command: parse_list(rest)? }),
                 "run" => Ok(Self { command: parse_run(rest)? }),
                 "serve" => Ok(Self { command: parse_serve(rest)? }),
@@ -64,7 +77,7 @@ impl Cli {
     }
 
     pub const fn usage() -> &'static str {
-        "Usage:\n  acsa-core validate [workflow-file]\n  acsa-core list [workflows-dir]\n  acsa-core run [workflow-file] [--db path] [--max-concurrency N]\n  acsa-core serve [workflows-dir] [--db path] [--host HOST] [--port PORT] [--max-concurrency N]"
+        "Usage:\n  acsa-core validate [workflow-file]\n  acsa-core list [workflows-dir]\n  acsa-core run [workflow-file] [--db path] [--max-concurrency N]\n  acsa-core serve [workflows-dir] [--db path] [--host HOST] [--port PORT] [--max-concurrency N]\n  acsa-core connector-new NAME --type TYPE --runtime process|wasm [--dir connectors]\n  acsa-core connector-test [manifest-file] [--inputs path] [--params path]"
     }
 }
 
@@ -136,6 +149,93 @@ fn parse_validate(args: &[String]) -> Result<Command, CliError> {
         [path] => Ok(Command::Validate { workflow_path: PathBuf::from(path) }),
         [unexpected, ..] => Err(CliError::UnexpectedArgument { argument: unexpected.clone() }),
     }
+}
+
+fn parse_connector_new(args: &[String]) -> Result<Command, CliError> {
+    let mut connectors_dir = PathBuf::from("connectors");
+    let mut name = None;
+    let mut runtime = None;
+    let mut type_id = None;
+    let mut index = 0usize;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--dir" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| CliError::MissingFlagValue { flag: "--dir".to_string() })?;
+                connectors_dir = PathBuf::from(value);
+                index += 2;
+            }
+            "--runtime" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| CliError::MissingFlagValue { flag: "--runtime".to_string() })?;
+                runtime = Some(value.clone());
+                index += 2;
+            }
+            "--type" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| CliError::MissingFlagValue { flag: "--type".to_string() })?;
+                type_id = Some(value.clone());
+                index += 2;
+            }
+            argument => {
+                if name.is_some() {
+                    return Err(CliError::UnexpectedArgument { argument: argument.to_string() });
+                }
+                name = Some(argument.to_string());
+                index += 1;
+            }
+        }
+    }
+
+    Ok(Command::ConnectorNew {
+        connectors_dir,
+        name: name.ok_or_else(|| CliError::MissingFlagValue { flag: "NAME".to_string() })?,
+        runtime: runtime
+            .ok_or_else(|| CliError::MissingFlagValue { flag: "--runtime".to_string() })?,
+        type_id: type_id
+            .ok_or_else(|| CliError::MissingFlagValue { flag: "--type".to_string() })?,
+    })
+}
+
+fn parse_connector_test(args: &[String]) -> Result<Command, CliError> {
+    let mut manifest_path = PathBuf::from("connectors/manifest.yaml");
+    let mut inputs_path = None;
+    let mut params_path = None;
+    let mut path_assigned = false;
+    let mut index = 0usize;
+
+    while index < args.len() {
+        match args[index].as_str() {
+            "--inputs" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| CliError::MissingFlagValue { flag: "--inputs".to_string() })?;
+                inputs_path = Some(PathBuf::from(value));
+                index += 2;
+            }
+            "--params" => {
+                let value = args
+                    .get(index + 1)
+                    .ok_or_else(|| CliError::MissingFlagValue { flag: "--params".to_string() })?;
+                params_path = Some(PathBuf::from(value));
+                index += 2;
+            }
+            argument => {
+                if path_assigned {
+                    return Err(CliError::UnexpectedArgument { argument: argument.to_string() });
+                }
+                manifest_path = PathBuf::from(argument);
+                path_assigned = true;
+                index += 1;
+            }
+        }
+    }
+
+    Ok(Command::ConnectorTest { inputs_path, manifest_path, params_path })
 }
 
 fn parse_serve(args: &[String]) -> Result<Command, CliError> {

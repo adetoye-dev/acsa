@@ -1,10 +1,8 @@
 # Examples
 
-This directory will hold:
+This directory now includes:
 
-- example workflows
-- connector templates
-- WASM plugin starters
-- subprocess connector samples
+- `process-connector/`: a subprocess connector sample that can be exercised with `acsa-core connector-test`
+- `wasm-plugin/`: a starter Extism/WASM connector template
 
-Phase 2 only establishes the directory and documentation baseline.
+Use these alongside the workflow samples in `workflows/` and the `connector-new` command when building new integrations.

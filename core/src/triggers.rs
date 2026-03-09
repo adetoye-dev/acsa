@@ -25,7 +25,7 @@ use std::{
 
 use axum::{
     body::Bytes,
-    extract::{OriginalUri, State},
+    extract::{OriginalUri, Path, State},
     http::{header::HeaderName, HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -100,6 +100,8 @@ pub async fn serve(
 
     let app = Router::new()
         .route("/healthz", get(health))
+        .route("/human-tasks", get(list_pending_human_tasks))
+        .route("/human-tasks/{task_id}/resolve", post(resolve_human_task))
         .route("/{*hook}", post(handle_webhook))
         .with_state(AppState { engine, webhook_workflows: Arc::new(webhook_workflows) });
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
@@ -189,8 +191,12 @@ async fn handle_webhook(
         Ok(summary) => (
             StatusCode::ACCEPTED,
             Json(json!({
+                "pending_tasks": summary.pending_tasks,
                 "run_id": summary.run_id,
-                "status": "accepted",
+                "status": match summary.status {
+                    crate::engine::ExecutionStatus::Paused => "paused",
+                    crate::engine::ExecutionStatus::Success => "accepted"
+                },
                 "workflow_name": summary.workflow_name
             })),
         ),
@@ -200,13 +206,64 @@ async fn handle_webhook(
     }
 }
 
+async fn list_pending_human_tasks(State(state): State<AppState>) -> impl IntoResponse {
+    match state.engine.store().list_pending_human_tasks().await {
+        Ok(tasks) => (
+            StatusCode::OK,
+            Json(json!({
+                "tasks": tasks
+            })),
+        ),
+        Err(error) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+        }
+    }
+}
+
+async fn resolve_human_task(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    body: Bytes,
+) -> impl IntoResponse {
+    let payload = if body.is_empty() {
+        json!({})
+    } else {
+        match serde_json::from_slice::<Value>(&body) {
+            Ok(value) => value,
+            Err(error) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": format!("invalid JSON payload: {error}") })),
+                );
+            }
+        }
+    };
+
+    match state.engine.resume_human_task(&task_id, payload).await {
+        Ok(summary) => (
+            StatusCode::OK,
+            Json(json!({
+                "completed_steps": summary.completed_steps,
+                "pending_tasks": summary.pending_tasks,
+                "run_id": summary.run_id,
+                "status": match summary.status {
+                    crate::engine::ExecutionStatus::Paused => "paused",
+                    crate::engine::ExecutionStatus::Success => "success"
+                },
+                "workflow_name": summary.workflow_name
+            })),
+        ),
+        Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error.to_string() }))),
+    }
+}
+
 fn authenticate_webhook(workflow: &WebhookWorkflow, headers: &HeaderMap) -> Result<(), String> {
     let token = headers
         .get(&workflow.header_name)
         .ok_or_else(|| format!("missing webhook header {}", workflow.header_name.as_str()))?;
     let token_bytes = token.as_bytes();
     let expected_bytes = workflow.secret.as_bytes();
-    
+
     // Use constant-time comparison to prevent timing attacks
     if bool::from(token_bytes.ct_eq(expected_bytes)) {
         Ok(())

@@ -45,10 +45,12 @@ use self::{
 type RegistryMap = Arc<RwLock<HashMap<String, Arc<dyn Node>>>>;
 
 const CONTROL_FIELD: &str = "__acsa";
+const PAUSE_FIELD: &str = "__acsa_pause";
+const WRAPPED_FIELD: &str = "__acsa_wrapped";
 
 #[async_trait]
 pub trait Node: Send + Sync {
-    fn type_name(&self) -> &'static str;
+    fn type_name(&self) -> &str;
 
     async fn execute(&self, inputs: &Value, params: &Value) -> Result<Value, NodeError>;
 }
@@ -130,9 +132,36 @@ pub struct NodeControl {
     pub next: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NodePauseKind {
+    Approval,
+    ManualInput,
+}
+
+impl NodePauseKind {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Approval => "approval",
+            Self::ManualInput => "manual_input",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct NodePause {
+    #[serde(default)]
+    pub details: Value,
+    #[serde(default)]
+    pub field: Option<String>,
+    pub kind: NodePauseKind,
+    pub prompt: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct NodeOutcome {
     pub control: NodeControl,
+    pub pause: Option<NodePause>,
     pub payload: Value,
 }
 
@@ -148,20 +177,41 @@ pub fn controlled_output(payload: Value, control: NodeControl) -> Result<Value, 
     match payload {
         Value::Object(mut object) => {
             object.insert(CONTROL_FIELD.to_string(), control_value);
-            object.insert("__acsa_wrapped".to_string(), Value::Bool(true));
+            object.insert(WRAPPED_FIELD.to_string(), Value::Bool(true));
             Ok(Value::Object(object))
         }
         other => Ok(json!({
             CONTROL_FIELD: control_value,
-            "__acsa_wrapped": true,
+            WRAPPED_FIELD: true,
             "payload": other
         })),
     }
 }
 
+pub fn paused_output(pause: NodePause) -> Result<Value, NodeError> {
+    let pause_value = serde_json::to_value(&pause).map_err(|error| NodeError::Message {
+        message: format!("failed to encode pause metadata: {error}"),
+    })?;
+
+    Ok(json!({
+        PAUSE_FIELD: pause_value,
+        WRAPPED_FIELD: true,
+        "payload": Value::Null
+    }))
+}
+
 pub fn split_control(output: Value) -> Result<NodeOutcome, NodeError> {
     match output {
         Value::Object(mut object) => {
+            let was_wrapped =
+                object.remove(WRAPPED_FIELD).and_then(|value| value.as_bool()).unwrap_or(false);
+            if !was_wrapped {
+                return Ok(NodeOutcome {
+                    control: NodeControl::default(),
+                    pause: None,
+                    payload: Value::Object(object),
+                });
+            };
             let control = object
                 .remove(CONTROL_FIELD)
                 .map(|value| {
@@ -173,26 +223,26 @@ pub fn split_control(output: Value) -> Result<NodeOutcome, NodeError> {
                 })
                 .transpose()?
                 .unwrap_or_default();
-
-            // Check for the sentinel to know if payload was wrapped
-            let was_wrapped = object.remove("__acsa_wrapped").and_then(|v| v.as_bool()).unwrap_or(false);
-
-            let payload = if was_wrapped {
-                match object.remove("payload") {
-                    Some(payload) if object.is_empty() => payload,
-                    Some(payload) => {
-                        object.insert("payload".to_string(), payload);
-                        Value::Object(object)
-                    }
-                    None => Value::Object(object),
+            let pause = object
+                .remove(PAUSE_FIELD)
+                .map(|value| {
+                    serde_json::from_value::<NodePause>(value).map_err(|error| NodeError::Message {
+                        message: format!("failed to decode pause metadata: {error}"),
+                    })
+                })
+                .transpose()?;
+            let payload = match object.remove("payload") {
+                Some(payload) if object.is_empty() => payload,
+                Some(payload) => {
+                    object.insert("payload".to_string(), payload);
+                    Value::Object(object)
                 }
-            } else {
-                Value::Object(object)
+                None => Value::Object(object),
             };
 
-            Ok(NodeOutcome { control, payload })
+            Ok(NodeOutcome { control, pause, payload })
         }
-        other => Ok(NodeOutcome { control: NodeControl::default(), payload: other }),
+        other => Ok(NodeOutcome { control: NodeControl::default(), pause: None, payload: other }),
     }
 }
 

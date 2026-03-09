@@ -27,27 +27,30 @@ use petgraph::{
     graph::{DiGraph, NodeIndex},
     Direction,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
 use tokio::{sync::Semaphore, task::JoinSet, time::timeout};
 
 use crate::{
+    connectors::load_connectors_into,
     models::{Step, Trigger, Workflow},
-    nodes::{split_control, BuiltInNodeConfig, NodeError, NodeOutcome, NodeRegistry},
-    storage::{RunStore, StorageError},
+    nodes::{split_control, BuiltInNodeConfig, NodeError, NodeOutcome, NodePause, NodeRegistry},
+    storage::{HumanTaskRecord, NewHumanTask, RunStore, StorageError},
 };
 
 const SUPPORTED_WORKFLOW_VERSION: &str = "v1";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionConfig {
     pub default_timeout_ms: u64,
     pub max_concurrency: usize,
+    pub connector_path: Option<std::path::PathBuf>,
 }
 
 impl Default for ExecutionConfig {
     fn default() -> Self {
-        Self { default_timeout_ms: 30_000, max_concurrency: 4 }
+        Self { default_timeout_ms: 30_000, max_concurrency: 4, connector_path: None }
     }
 }
 
@@ -55,8 +58,44 @@ impl Default for ExecutionConfig {
 pub struct ExecutionSummary {
     pub completed_steps: usize,
     pub outputs: HashMap<String, Value>,
+    pub pending_tasks: Vec<PendingHumanTask>,
     pub run_id: String,
+    pub status: ExecutionStatus,
     pub workflow_name: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionStatus {
+    Paused,
+    Success,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PendingHumanTask {
+    pub field: Option<String>,
+    pub id: String,
+    pub kind: String,
+    pub prompt: String,
+    pub step_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct PersistedRunState {
+    activation_votes: HashMap<String, usize>,
+    outputs: HashMap<String, Value>,
+    ready_steps: Vec<String>,
+    remaining_dependencies: HashMap<String, usize>,
+}
+
+impl PersistedRunState {
+    fn fresh(plan: &WorkflowPlan) -> Self {
+        Self {
+            activation_votes: plan.steps.keys().map(|step_id| (step_id.clone(), 0usize)).collect(),
+            outputs: HashMap::new(),
+            ready_steps: plan.root_steps(),
+            remaining_dependencies: plan.remaining_dependencies(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -72,7 +111,11 @@ impl WorkflowEngine {
         config: ExecutionConfig,
     ) -> Result<Self, EngineError> {
         let store = RunStore::connect(database_path).await?;
-        Ok(Self { config, registry: NodeRegistry::built_in(BuiltInNodeConfig::default()), store })
+        let registry = NodeRegistry::built_in(BuiltInNodeConfig::default());
+        let connector_path = config.connector_path.as_deref().unwrap_or(Path::new("connectors"));
+        load_connectors_into(&registry, connector_path)
+            .map_err(|error| EngineError::ConnectorLoad(error.to_string()))?;
+        Ok(Self { config, registry, store })
     }
 
     pub fn with_registry(store: RunStore, registry: NodeRegistry, config: ExecutionConfig) -> Self {
@@ -98,16 +141,78 @@ impl WorkflowEngine {
         plan: &WorkflowPlan,
         initial_payload: Value,
     ) -> Result<ExecutionSummary, EngineError> {
-        let run = self.store.start_run(&plan.workflow.name).await?;
+        let workflow_snapshot = serde_json::to_string(&plan.workflow)?;
+        let run =
+            self.store.start_run(&plan.workflow.name, &workflow_snapshot, &initial_payload).await?;
+        self.execute_run_state(plan, &run.id, initial_payload, PersistedRunState::fresh(plan)).await
+    }
+
+    pub async fn resume_human_task(
+        &self,
+        task_id: &str,
+        response: Value,
+    ) -> Result<ExecutionSummary, EngineError> {
+        let task = self.store.get_human_task(task_id).await?;
+        if task.status != "pending" {
+            return Err(EngineError::HumanTaskNotPending { task_id: task_id.to_string() });
+        }
+
+        let run = self.store.get_run(&task.run_id).await?;
+        if run.status != "paused" {
+            return Err(EngineError::RunNotPaused { run_id: run.id });
+        }
+
+        let workflow_snapshot = run
+            .workflow_snapshot
+            .ok_or_else(|| EngineError::MissingRunSnapshot { run_id: run.id.clone() })?;
+        let initial_payload = run
+            .initial_payload
+            .ok_or_else(|| EngineError::MissingRunInitialPayload { run_id: run.id.clone() })?;
+        let state_json = run
+            .state_json
+            .ok_or_else(|| EngineError::MissingRunState { run_id: run.id.clone() })?;
+        let workflow = serde_json::from_str::<Workflow>(&workflow_snapshot)?;
+        let plan = compile_workflow(workflow)?;
+        let initial_payload = serde_json::from_str::<Value>(&initial_payload)?;
+        let mut state = serde_json::from_str::<PersistedRunState>(&state_json)?;
+        let outcome = human_task_outcome(&task, &response)?;
+        let selected_successors = resolve_selected_successors(&plan, &task.step_id, &outcome)?;
+
+        self.store.resolve_human_task(task_id, &response).await?;
+        self.store.complete_step_success(&task.step_run_id, &persisted_outcome(&outcome)).await?;
+        state.outputs.insert(task.step_id.clone(), outcome.payload.clone());
+        let mut ready_steps = VecDeque::from(std::mem::take(&mut state.ready_steps));
+        {
+            let mut scheduler = SchedulerState {
+                activation_votes: &mut state.activation_votes,
+                initial_payload: &initial_payload,
+                outputs: &mut state.outputs,
+                plan: &plan,
+                ready_steps: &mut ready_steps,
+                remaining_dependencies: &mut state.remaining_dependencies,
+                run_id: &run.id,
+                store: &self.store,
+            };
+            scheduler.advance_successors(&task.step_id, &selected_successors).await?;
+        }
+        state.ready_steps = ready_steps.into_iter().collect();
+
+        self.store.mark_run_running(&run.id, &serde_json::to_string(&state)?).await?;
+        self.execute_run_state(&plan, &run.id, initial_payload, state).await
+    }
+
+    async fn execute_run_state(
+        &self,
+        plan: &WorkflowPlan,
+        run_id: &str,
+        initial_payload: Value,
+        mut state: PersistedRunState,
+    ) -> Result<ExecutionSummary, EngineError> {
         let semaphore = Arc::new(Semaphore::new(self.config.max_concurrency.max(1)));
-        let mut remaining_dependencies = plan.remaining_dependencies();
-        let mut activation_votes =
-            plan.steps.keys().map(|step_id| (step_id.clone(), 0usize)).collect();
-        let mut ready_steps = VecDeque::from(plan.root_steps());
-        let mut outputs = HashMap::new();
+        let mut ready_steps = VecDeque::from(std::mem::take(&mut state.ready_steps));
         let mut join_set = JoinSet::new();
-        let mut completed_steps = 0usize;
         let mut failure: Option<StepExecutionFailure> = None;
+        let mut pending_tasks = Vec::new();
 
         while !ready_steps.is_empty() || !join_set.is_empty() {
             while failure.is_none() {
@@ -117,7 +222,7 @@ impl WorkflowEngine {
                 let step = plan.step(&step_id).cloned().ok_or_else(|| {
                     EngineError::MissingStepDefinition { step_id: step_id.clone() }
                 })?;
-                let inputs = build_step_inputs(plan, &step_id, &outputs, &initial_payload)?;
+                let inputs = build_step_inputs(plan, &step_id, &state.outputs, &initial_payload)?;
                 let permit = semaphore
                     .clone()
                     .acquire_owned()
@@ -125,7 +230,7 @@ impl WorkflowEngine {
                     .map_err(|_| EngineError::ConcurrencyUnavailable)?;
                 let registry = self.registry.clone();
                 let store = self.store.clone();
-                let run_id = run.id.clone();
+                let run_id = run_id.to_string();
                 let timeout_ms = step.timeout_ms.unwrap_or(self.config.default_timeout_ms);
 
                 join_set.spawn(async move {
@@ -140,28 +245,43 @@ impl WorkflowEngine {
             };
 
             match joined {
-                Ok(Ok(step_success)) => {
-                    completed_steps += 1;
+                Ok(Ok(StepExecutionResult::Success(step_success))) => {
                     let selected_successors = resolve_selected_successors(
                         plan,
                         &step_success.step_id,
                         &step_success.outcome,
                     )?;
-                    outputs
+                    state
+                        .outputs
                         .insert(step_success.step_id.clone(), step_success.outcome.payload.clone());
                     let mut scheduler = SchedulerState {
-                        activation_votes: &mut activation_votes,
+                        activation_votes: &mut state.activation_votes,
                         initial_payload: &initial_payload,
-                        outputs: &mut outputs,
+                        outputs: &mut state.outputs,
                         plan,
                         ready_steps: &mut ready_steps,
-                        remaining_dependencies: &mut remaining_dependencies,
-                        run_id: &run.id,
+                        remaining_dependencies: &mut state.remaining_dependencies,
+                        run_id,
                         store: &self.store,
                     };
                     scheduler
                         .advance_successors(&step_success.step_id, &selected_successors)
                         .await?;
+                }
+                Ok(Ok(StepExecutionResult::Paused(step_paused))) => {
+                    let task = self
+                        .store
+                        .create_human_task(NewHumanTask {
+                            details: &step_paused.pause.details,
+                            field: step_paused.pause.field.as_deref(),
+                            kind: step_paused.pause.kind.as_str(),
+                            prompt: &step_paused.pause.prompt,
+                            run_id,
+                            step_id: &step_paused.step_id,
+                            step_run_id: &step_paused.step_run_id,
+                        })
+                        .await?;
+                    pending_tasks.push(task);
                 }
                 Ok(Err(step_failure)) => {
                     failure = Some(step_failure);
@@ -170,27 +290,78 @@ impl WorkflowEngine {
                 }
                 Err(source) => {
                     let message = format!("step task failed to join: {source}");
-                    self.store.complete_run_failure(&run.id, &message).await?;
+                    self.store.complete_run_failure(run_id, &message).await?;
                     return Err(EngineError::StepJoin { source });
                 }
             }
         }
 
         if let Some(step_failure) = failure {
-            self.store.complete_run_failure(&run.id, &step_failure.error).await?;
+            self.store.complete_run_failure(run_id, &step_failure.error).await?;
             return Err(EngineError::WorkflowRunFailed {
                 error: step_failure.error,
-                run_id: run.id,
+                run_id: run_id.to_string(),
                 step_id: step_failure.step_id,
             });
         }
 
-        self.store.complete_run_success(&run.id).await?;
+        state.ready_steps = ready_steps.into_iter().collect();
+        if !pending_tasks.is_empty() {
+            self.store.pause_run(run_id, &serde_json::to_string(&state)?).await?;
+            return self
+                .build_summary(
+                    run_id,
+                    &plan.workflow.name,
+                    state.outputs,
+                    ExecutionStatus::Paused,
+                    pending_tasks,
+                )
+                .await;
+        }
+
+        self.store.complete_run_success(run_id).await?;
+        self.build_summary(
+            run_id,
+            &plan.workflow.name,
+            state.outputs,
+            ExecutionStatus::Success,
+            Vec::new(),
+        )
+        .await
+    }
+
+    async fn build_summary(
+        &self,
+        run_id: &str,
+        workflow_name: &str,
+        outputs: HashMap<String, Value>,
+        status: ExecutionStatus,
+        pending_tasks: Vec<HumanTaskRecord>,
+    ) -> Result<ExecutionSummary, EngineError> {
+        let completed_steps = self
+            .store
+            .list_step_runs(run_id)
+            .await?
+            .into_iter()
+            .filter(|record| record.status == "success")
+            .count();
+
         Ok(ExecutionSummary {
             completed_steps,
             outputs,
-            run_id: run.id,
-            workflow_name: plan.workflow.name.clone(),
+            pending_tasks: pending_tasks
+                .into_iter()
+                .map(|task| PendingHumanTask {
+                    field: task.field,
+                    id: task.id,
+                    kind: task.kind,
+                    prompt: task.prompt,
+                    step_id: task.step_id,
+                })
+                .collect(),
+            run_id: run_id.to_string(),
+            status,
+            workflow_name: workflow_name.to_string(),
         })
     }
 }
@@ -399,6 +570,8 @@ pub enum EngineError {
         #[source]
         source: std::io::Error,
     },
+    #[error("failed to load connectors: {0}")]
+    ConnectorLoad(String),
     #[error("unsupported workflow version {version}; expected v1")]
     UnsupportedWorkflowVersion { version: String },
     #[error("workflow name must not be empty")]
@@ -440,6 +613,20 @@ pub enum EngineError {
     },
     #[error("step {step_id} is missing upstream output from {upstream_step}")]
     MissingUpstreamOutput { step_id: String, upstream_step: String },
+    #[error("run {run_id} is missing its initial payload snapshot")]
+    MissingRunInitialPayload { run_id: String },
+    #[error("run {run_id} is missing its persisted scheduler state")]
+    MissingRunState { run_id: String },
+    #[error("run {run_id} is missing its workflow snapshot")]
+    MissingRunSnapshot { run_id: String },
+    #[error("human task {task_id} is no longer pending")]
+    HumanTaskNotPending { task_id: String },
+    #[error("run {run_id} is not paused")]
+    RunNotPaused { run_id: String },
+    #[error("human task {task_id} has unsupported kind {kind}")]
+    UnsupportedHumanTaskKind { kind: String, task_id: String },
+    #[error("human task {task_id} has invalid response: {message}")]
+    InvalidHumanTaskResponse { message: String, task_id: String },
     #[error("workflow run {run_id} failed in step {step_id}: {error}")]
     WorkflowRunFailed { error: String, run_id: String, step_id: String },
     #[error("workflow engine storage error: {0}")]
@@ -455,9 +642,22 @@ struct StepExecutionFailure {
 }
 
 #[derive(Debug)]
+struct StepExecutionPaused {
+    pause: NodePause,
+    step_id: String,
+    step_run_id: String,
+}
+
+#[derive(Debug)]
 struct StepExecutionSuccess {
     outcome: NodeOutcome,
     step_id: String,
+}
+
+#[derive(Debug)]
+enum StepExecutionResult {
+    Paused(StepExecutionPaused),
+    Success(StepExecutionSuccess),
 }
 
 fn backoff_for_attempt(base_backoff_ms: u64, attempt: u32) -> u64 {
@@ -594,7 +794,7 @@ async fn execute_step_with_retries(
     step: &Step,
     inputs: Value,
     timeout_ms: u64,
-) -> Result<StepExecutionSuccess, StepExecutionFailure> {
+) -> Result<StepExecutionResult, StepExecutionFailure> {
     let params = serde_json::to_value(&step.params).map_err(|error| StepExecutionFailure {
         step_id: step.id.clone(),
         error: format!("failed to convert params to json: {error}"),
@@ -620,6 +820,19 @@ async fn execute_step_with_retries(
                     step_id: step.id.clone(),
                     error: error_message(&error),
                 })?;
+                if let Some(pause) = outcome.pause.clone() {
+                    store.complete_step_paused(&step_run.id, &pause.prompt).await.map_err(
+                        |error| StepExecutionFailure {
+                            step_id: step.id.clone(),
+                            error: error.to_string(),
+                        },
+                    )?;
+                    return Ok(StepExecutionResult::Paused(StepExecutionPaused {
+                        pause,
+                        step_id: step.id.clone(),
+                        step_run_id: step_run.id,
+                    }));
+                }
                 let stored_output = persisted_outcome(&outcome);
                 store.complete_step_success(&step_run.id, &stored_output).await.map_err(
                     |error| StepExecutionFailure {
@@ -627,7 +840,10 @@ async fn execute_step_with_retries(
                         error: error.to_string(),
                     },
                 )?;
-                return Ok(StepExecutionSuccess { outcome, step_id: step.id.clone() });
+                return Ok(StepExecutionResult::Success(StepExecutionSuccess {
+                    outcome,
+                    step_id: step.id.clone(),
+                }));
             }
             Ok(Err(error)) => {
                 let message = error_message(&error);
@@ -712,6 +928,47 @@ fn resolve_selected_successors(
     }
 
     Ok(selected)
+}
+
+fn human_task_outcome(
+    task: &HumanTaskRecord,
+    response: &Value,
+) -> Result<NodeOutcome, EngineError> {
+    let payload = match task.kind.as_str() {
+        "approval" => {
+            let approved = response.get("approved").and_then(Value::as_bool).ok_or_else(|| {
+                EngineError::InvalidHumanTaskResponse {
+                    message: "approval responses must contain a boolean approved field".to_string(),
+                    task_id: task.id.clone(),
+                }
+            })?;
+            serde_json::json!({
+                "approved": approved,
+                "prompt": task.prompt
+            })
+        }
+        "manual_input" => {
+            let value = response.get("value").cloned().ok_or_else(|| {
+                EngineError::InvalidHumanTaskResponse {
+                    message: "manual input responses must contain a value field".to_string(),
+                    task_id: task.id.clone(),
+                }
+            })?;
+            serde_json::json!({
+                "field": task.field,
+                "prompt": task.prompt,
+                "value": value
+            })
+        }
+        other => {
+            return Err(EngineError::UnsupportedHumanTaskKind {
+                kind: other.to_string(),
+                task_id: task.id.clone(),
+            });
+        }
+    };
+
+    Ok(NodeOutcome { control: Default::default(), pause: None, payload })
 }
 
 fn validate_trigger(trigger: &Trigger) -> Result<(), EngineError> {
@@ -1030,6 +1287,67 @@ steps:
         assert!(step_runs
             .iter()
             .any(|record| record.step_id == "low" && record.status == "skipped"));
+
+        cleanup_file(temp_db);
+    }
+
+    #[tokio::test]
+    async fn approval_steps_pause_and_resume_runs() {
+        let workflow = Workflow {
+            version: "v1".to_string(),
+            name: "approval-flow".to_string(),
+            trigger: Trigger { r#type: "manual".to_string(), details: Default::default() },
+            steps: vec![
+                step(
+                    "seed",
+                    "constant",
+                    json!({ "value": { "request_id": "REQ-1" } }),
+                    vec!["approve"],
+                ),
+                Step {
+                    id: "approve".to_string(),
+                    r#type: "approval".to_string(),
+                    params: serde_yaml::to_value(json!({ "prompt": "Approve this request?" }))
+                        .expect("json should convert to yaml"),
+                    next: vec!["finish".to_string()],
+                    retry: None,
+                    timeout_ms: Some(1_000),
+                },
+                step("finish", "echo", json!({}), vec![]),
+            ],
+        };
+        let plan = compile_workflow(workflow).expect("workflow should plan");
+        let temp_db = temp_db_path("approval");
+        let store = RunStore::connect(&temp_db).await.expect("sqlite should initialize");
+
+        let registry = NodeRegistry::built_in(BuiltInNodeConfig::default());
+        registry.register(EchoNode);
+
+        let engine =
+            WorkflowEngine::with_registry(store.clone(), registry, ExecutionConfig::default());
+        let paused = engine
+            .execute_plan(&plan, json!({ "trigger": "manual" }))
+            .await
+            .expect("workflow should pause on approval");
+
+        assert_eq!(paused.status, super::ExecutionStatus::Paused);
+        assert_eq!(paused.pending_tasks.len(), 1);
+
+        let resumed = engine
+            .resume_human_task(&paused.pending_tasks[0].id, json!({ "approved": true }))
+            .await
+            .expect("workflow should resume");
+        let runs = store.list_runs().await.expect("runs should be queryable");
+        let pending_tasks = store
+            .list_pending_human_tasks()
+            .await
+            .expect("pending human tasks should be queryable");
+
+        assert_eq!(resumed.status, super::ExecutionStatus::Success);
+        assert_eq!(resumed.completed_steps, 3);
+        assert!(pending_tasks.is_empty());
+        assert_eq!(runs[0].status, "success");
+        assert_eq!(resumed.outputs["approve"]["approved"], json!(true));
 
         cleanup_file(temp_db);
     }

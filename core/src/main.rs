@@ -14,10 +14,13 @@
 
 #![deny(warnings)]
 
+use std::fs;
+
 use serde_json::json;
 
 use acsa_core::{
     cli::{Cli, CliError, Command},
+    connectors::{run_manifest_path, scaffold_connector, ConnectorRuntime},
     engine::{
         compile_workflow, load_workflow_from_path, load_workflows_from_dir, ExecutionConfig,
         WorkflowEngine,
@@ -39,6 +42,27 @@ async fn main() -> Result<(), MainError> {
     };
 
     match cli.command {
+        Command::ConnectorNew { connectors_dir, name, runtime, type_id } => {
+            let runtime = parse_connector_runtime(&runtime)?;
+            let connector_dir = scaffold_connector(&connectors_dir, &name, &type_id, runtime)
+                .map_err(|error| -> MainError { Box::new(error) })?;
+            println!(
+                "Scaffolded connector '{}' ({}) in {}",
+                type_id,
+                runtime_name(runtime),
+                connector_dir.display()
+            );
+        }
+        Command::ConnectorTest { inputs_path, manifest_path, params_path } => {
+            let inputs = load_json_file(inputs_path.as_deref())
+                .map_err(|error| -> MainError { Box::new(error) })?;
+            let params = load_json_file(params_path.as_deref())
+                .map_err(|error| -> MainError { Box::new(error) })?;
+            let output = run_manifest_path(&manifest_path, inputs, params)
+                .await
+                .map_err(|error| -> MainError { Box::new(error) })?;
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
         Command::List { workflows_dir } => {
             let workflows = load_workflows_from_dir(&workflows_dir)
                 .map_err(|error| -> MainError { Box::new(error) })?;
@@ -68,10 +92,24 @@ async fn main() -> Result<(), MainError> {
                 .await
                 .map_err(|error| -> MainError { Box::new(error) })?;
 
-            println!(
-                "Run {} completed for '{}' with {} step(s)",
-                summary.run_id, summary.workflow_name, summary.completed_steps
-            );
+            match summary.status {
+                acsa_core::engine::ExecutionStatus::Success => {
+                    println!(
+                        "Run {} completed for '{}' with {} step(s)",
+                        summary.run_id, summary.workflow_name, summary.completed_steps
+                    );
+                }
+                acsa_core::engine::ExecutionStatus::Paused => {
+                    println!(
+                        "Run {} paused for '{}' after {} completed step(s)",
+                        summary.run_id, summary.workflow_name, summary.completed_steps
+                    );
+                    println!(
+                        "Pending human tasks: {}",
+                        serde_json::to_string_pretty(&summary.pending_tasks)?
+                    );
+                }
+            }
             println!("SQLite state written to {}", database_path.display());
         }
         Command::Serve { database_path, host, max_concurrency, port, workflows_dir } => {
@@ -107,4 +145,30 @@ async fn main() -> Result<(), MainError> {
     }
 
     Ok(())
+}
+
+fn load_json_file(path: Option<&std::path::Path>) -> Result<serde_json::Value, std::io::Error> {
+    match path {
+        Some(path) => {
+            let raw = fs::read_to_string(path)?;
+            let parsed = serde_json::from_str(&raw).map_err(std::io::Error::other)?;
+            Ok(parsed)
+        }
+        None => Ok(json!({})),
+    }
+}
+
+fn parse_connector_runtime(runtime: &str) -> Result<ConnectorRuntime, MainError> {
+    match runtime {
+        "process" => Ok(ConnectorRuntime::Process),
+        "wasm" => Ok(ConnectorRuntime::Wasm),
+        other => Err(format!("unsupported connector runtime {other}").into()),
+    }
+}
+
+const fn runtime_name(runtime: ConnectorRuntime) -> &'static str {
+    match runtime {
+        ConnectorRuntime::Process => "process",
+        ConnectorRuntime::Wasm => "wasm",
+    }
 }

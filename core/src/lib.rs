@@ -15,6 +15,7 @@
 #![deny(warnings)]
 
 pub mod cli;
+pub mod connectors;
 pub mod engine;
 pub mod models;
 pub mod nodes;

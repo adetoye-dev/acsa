@@ -74,6 +74,7 @@ steps:
   - Built-in integration: `http_request`, `database_query`, `file_read`, `file_write`
   - Built-in AI: `llm_completion`, `classification`, `extraction`, `embedding`, `retrieval`
   - Built-in human gate nodes: `approval`, `manual_input`
+  - Connector-defined types are loaded from `connectors/*/manifest.json`
 - `steps[].params`: arbitrary parameter object for the step runtime.
 - `steps[].next`: downstream step IDs used to build the DAG. Logic nodes may choose a subset at runtime.
 - `steps[].retry`: optional retry policy with `attempts` and `backoff_ms`.
@@ -85,4 +86,5 @@ steps:
 - The engine validates trigger configuration before execution and compiles the steps into a DAG.
 - Condition and switch nodes can route to specific downstream steps; non-selected branches are recorded as skipped.
 - Cron triggers persist their next-run timestamps in SQLite; webhook triggers require an environment-managed shared secret.
-- Approval and manual-input nodes are available as parameter-driven gates today; a persisted asynchronous resume API is still a follow-on hardening task.
+- Approval and manual-input nodes persist pending human tasks in SQLite and can be resumed through the HTTP API.
+- External connector nodes are discovered from manifest files and executed either as subprocesses or Extism-backed WASM plugins.
