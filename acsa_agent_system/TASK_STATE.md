@@ -1,13 +1,13 @@
 # Acsa Task State
 
-Last updated: 2026-03-07
+Last updated: 2026-03-09
 
 ## Current Status
 
-- Project stage: Core engine complete
-- Current phase: Phase 3 complete, Phase 4 pending review gate
-- Coding status: Repository foundation, workflow engine, SQLite persistence, and manual CLI execution are in place
-- Approval status: Waiting for user approval before starting Phase 4
+- Project stage: Built-in nodes and trigger runtime implemented
+- Current phase: Phase 4 complete, Phase 5 pending review gate
+- Coding status: Trigger runtime, built-in node families, trigger persistence, and Phase 4 samples/docs are in place
+- Approval status: Waiting for user review before starting Phase 5
 
 ## Completed This Session
 
@@ -45,6 +45,17 @@ Last updated: 2026-03-07
 - Extended the CLI with `validate`, `list`, and `run` commands
 - Added an executable sample DAG workflow at `workflows/manual-demo.yaml`
 - Ran Rust tests, clippy, CLI execution checks, and a clean Cargo audit for the Phase 3 engine
+- Added built-in logic nodes for `condition`, `switch`, `loop`, and `parallel`
+- Added integration nodes for HTTP requests, database queries, and file read/write under a restricted data directory
+- Added AI primitives for completion, classification, extraction, embedding, and retrieval
+- Added approval and manual-input gate nodes for parameter-driven human steps
+- Updated the DAG scheduler to honor control-flow outputs and persist skipped branches
+- Added trigger validation for `manual`, `cron`, and `webhook` workflows
+- Added SQLite-backed trigger state tracking
+- Extended the CLI with a `serve` command for cron and webhook triggers
+- Implemented a trigger runtime that schedules cron workflows and serves authenticated webhook routes
+- Added Phase 4 workflow samples and refreshed docs for trigger/runtime usage
+- Ran Rust formatting, tests, clippy, and cargo audit for the Phase 4 implementation
 
 ## Current Repository Baseline
 
@@ -53,17 +64,19 @@ Last updated: 2026-03-07
 - Rust workspace and UI dependency lockfiles have been generated
 - `workflows/hello.yaml` is the baseline sample workflow used by the CLI
 - `workflows/manual-demo.yaml` is the baseline executable DAG sample used by the engine CLI
+- `workflows/conditional-demo.yaml` is the Phase 4 branching sample for manual execution
+- `workflows/webhook-demo.yaml` is the Phase 4 authenticated webhook sample for the trigger server
 - Phase 2 CI workflow is present under `.github/workflows/ci.yml`
 
 ## Next Action
 
-If the user approves, begin Phase 4 only:
+If the user approves, begin Phase 5 only:
 
-1. Add built-in trigger implementations for cron, webhook, and manual dispatch
-2. Implement logic and integration nodes such as `if`, `switch`, `parallel`, and `http_request`
-3. Add the first AI primitives behind safe provider abstractions
-4. Extend parameter validation and secret-redaction behavior per node family
-5. Stop and ask for review before Phase 5
+1. Design the connector SDK surface for manifest loading and runtime contracts
+2. Implement subprocess connector execution with strict input and timeout boundaries
+3. Introduce the WASM connector runtime via Extism
+4. Add connector examples, test harnesses, and security guardrails
+5. Stop and ask for review before Phase 6
 
 ## Non-Negotiable Execution Rules
 
@@ -139,6 +152,11 @@ If the user approves, begin Phase 4 only:
 ## Phase Gate Rule
 
 If a phase introduces material risk without a corresponding validation or mitigation control, that phase is not complete and should not be advanced.
+
+## Known Follow-On Hardening
+
+- Approval and manual-input nodes currently operate as synchronous gate primitives driven by explicit parameters.
+- Persisted asynchronous pause and resume flows are still a follow-on hardening item and should be revisited before relying on human-in-the-loop workflows in production.
 
 ## Resume Protocol For Future Sessions
 

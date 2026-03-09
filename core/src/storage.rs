@@ -225,6 +225,48 @@ impl RunStore {
         Ok(())
     }
 
+    pub async fn record_step_skipped(
+        &self,
+        run_id: &str,
+        step_id: &str,
+        input: &Value,
+    ) -> Result<StepRunRecord, StorageError> {
+        let timestamp = current_timestamp();
+        let record = StepRunRecord {
+            id: Uuid::new_v4().to_string(),
+            run_id: run_id.to_string(),
+            step_id: step_id.to_string(),
+            status: RunStatus::Skipped.as_str().to_string(),
+            started_at: timestamp,
+            finished_at: Some(timestamp),
+            attempt: 0,
+            input: Some(serde_json::to_string(input)?),
+            output: Some(serde_json::to_string(&Value::Null)?),
+            error_message: None,
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO step_runs (id, run_id, step_id, status, started_at, finished_at, attempt, input, output, error_message)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(&record.id)
+        .bind(&record.run_id)
+        .bind(&record.step_id)
+        .bind(&record.status)
+        .bind(record.started_at)
+        .bind(record.finished_at)
+        .bind(record.attempt)
+        .bind(&record.input)
+        .bind(&record.output)
+        .bind(&record.error_message)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(record)
+    }
+
     pub async fn list_runs(&self) -> Result<Vec<RunRecord>, StorageError> {
         let rows = sqlx::query(
             r#"
@@ -253,6 +295,32 @@ impl RunStore {
         .await?;
 
         rows.into_iter().map(map_step_run_row).collect()
+    }
+
+    pub async fn upsert_trigger_state(
+        &self,
+        workflow_name: &str,
+        trigger_type: &str,
+        next_run_at: Option<i64>,
+    ) -> Result<(), StorageError> {
+        sqlx::query(
+            r#"
+            INSERT INTO trigger_state (workflow_name, trigger_type, next_run_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(workflow_name) DO UPDATE SET
+              trigger_type = excluded.trigger_type,
+              next_run_at = excluded.next_run_at,
+              updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(workflow_name)
+        .bind(trigger_type)
+        .bind(next_run_at)
+        .bind(current_timestamp())
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
     }
 
     async fn initialize(&self) -> Result<(), StorageError> {
@@ -306,6 +374,19 @@ impl RunStore {
         .execute(&self.pool)
         .await?;
 
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS trigger_state (
+              workflow_name TEXT PRIMARY KEY,
+              trigger_type TEXT NOT NULL,
+              next_run_at INTEGER,
+              updated_at INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_runs_workflow_name ON runs(workflow_name)")
             .execute(&self.pool)
             .await?;
@@ -316,6 +397,9 @@ impl RunStore {
             .execute(&self.pool)
             .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_logs_run_id ON logs(run_id)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_trigger_state_next_run_at ON trigger_state(next_run_at)")
             .execute(&self.pool)
             .await?;
 
@@ -385,6 +469,7 @@ pub struct StepRunRecord {
 pub enum RunStatus {
     Failed,
     Running,
+    Skipped,
     Success,
 }
 
@@ -393,6 +478,7 @@ impl RunStatus {
         match self {
             Self::Failed => "failed",
             Self::Running => "running",
+            Self::Skipped => "skipped",
             Self::Success => "success",
         }
     }
@@ -443,7 +529,9 @@ fn map_run_row(row: sqlx::sqlite::SqliteRow) -> Result<RunRecord, StorageError> 
 fn map_step_run_row(row: sqlx::sqlite::SqliteRow) -> Result<StepRunRecord, StorageError> {
     let attempt_i64 = row.try_get::<i64, _>("attempt")?;
     let attempt = u32::try_from(attempt_i64).map_err(|_| {
-        StorageError::DataIntegrity(format!("step_runs.attempt out of range for u32: {attempt_i64}"))
+        StorageError::DataIntegrity(format!(
+            "step_runs.attempt out of range for u32: {attempt_i64}"
+        ))
     })?;
 
     Ok(StepRunRecord {

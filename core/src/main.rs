@@ -22,6 +22,7 @@ use acsa_core::{
         compile_workflow, load_workflow_from_path, load_workflows_from_dir, ExecutionConfig,
         WorkflowEngine,
     },
+    triggers::{serve, TriggerServerConfig},
 };
 
 type MainError = Box<dyn std::error::Error>;
@@ -72,6 +73,22 @@ async fn main() -> Result<(), MainError> {
                 summary.run_id, summary.workflow_name, summary.completed_steps
             );
             println!("SQLite state written to {}", database_path.display());
+        }
+        Command::Serve { database_path, host, max_concurrency, port, workflows_dir } => {
+            let config = ExecutionConfig { max_concurrency, ..ExecutionConfig::default() };
+            let bind_addr = format!("{host}:{port}")
+                .parse()
+                .map_err(|error| -> MainError { Box::new(error) })?;
+            let engine = WorkflowEngine::new(&database_path, config)
+                .await
+                .map_err(|error| -> MainError { Box::new(error) })?;
+
+            println!("Serving workflows from {} on http://{}", workflows_dir.display(), bind_addr);
+            println!("SQLite state written to {}", database_path.display());
+
+            serve(engine, TriggerServerConfig { bind_addr, workflows_dir })
+                .await
+                .map_err(|error| -> MainError { Box::new(error) })?;
         }
         Command::Validate { workflow_path } => {
             let workflow = load_workflow_from_path(&workflow_path)

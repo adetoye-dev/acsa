@@ -32,8 +32,8 @@ use thiserror::Error;
 use tokio::{sync::Semaphore, task::JoinSet, time::timeout};
 
 use crate::{
-    models::{Step, Workflow},
-    nodes::{NodeError, NodeRegistry},
+    models::{Step, Trigger, Workflow},
+    nodes::{split_control, BuiltInNodeConfig, NodeError, NodeOutcome, NodeRegistry},
     storage::{RunStore, StorageError},
 };
 
@@ -72,7 +72,7 @@ impl WorkflowEngine {
         config: ExecutionConfig,
     ) -> Result<Self, EngineError> {
         let store = RunStore::connect(database_path).await?;
-        Ok(Self { config, registry: NodeRegistry::built_in(), store })
+        Ok(Self { config, registry: NodeRegistry::built_in(BuiltInNodeConfig::default()), store })
     }
 
     pub fn with_registry(store: RunStore, registry: NodeRegistry, config: ExecutionConfig) -> Self {
@@ -101,6 +101,8 @@ impl WorkflowEngine {
         let run = self.store.start_run(&plan.workflow.name).await?;
         let semaphore = Arc::new(Semaphore::new(self.config.max_concurrency.max(1)));
         let mut remaining_dependencies = plan.remaining_dependencies();
+        let mut activation_votes =
+            plan.steps.keys().map(|step_id| (step_id.clone(), 0usize)).collect();
         let mut ready_steps = VecDeque::from(plan.root_steps());
         let mut outputs = HashMap::new();
         let mut join_set = JoinSet::new();
@@ -140,15 +142,26 @@ impl WorkflowEngine {
             match joined {
                 Ok(Ok(step_success)) => {
                     completed_steps += 1;
-                    outputs.insert(step_success.step_id.clone(), step_success.output);
-                    for successor in plan.successors(&step_success.step_id) {
-                        if let Some(remaining) = remaining_dependencies.get_mut(successor) {
-                            *remaining = remaining.saturating_sub(1);
-                            if *remaining == 0 {
-                                ready_steps.push_back(successor.clone());
-                            }
-                        }
-                    }
+                    let selected_successors = resolve_selected_successors(
+                        plan,
+                        &step_success.step_id,
+                        &step_success.outcome,
+                    )?;
+                    outputs
+                        .insert(step_success.step_id.clone(), step_success.outcome.payload.clone());
+                    let mut scheduler = SchedulerState {
+                        activation_votes: &mut activation_votes,
+                        initial_payload: &initial_payload,
+                        outputs: &mut outputs,
+                        plan,
+                        ready_steps: &mut ready_steps,
+                        remaining_dependencies: &mut remaining_dependencies,
+                        run_id: &run.id,
+                        store: &self.store,
+                    };
+                    scheduler
+                        .advance_successors(&step_success.step_id, &selected_successors)
+                        .await?;
                 }
                 Ok(Err(step_failure)) => {
                     failure = Some(step_failure);
@@ -324,6 +337,8 @@ pub fn validate_workflow(workflow: &Workflow) -> Result<(), EngineError> {
         return Err(EngineError::EmptyTriggerType);
     }
 
+    validate_trigger(&workflow.trigger)?;
+
     if workflow.steps.is_empty() {
         return Err(EngineError::WorkflowHasNoSteps);
     }
@@ -390,6 +405,16 @@ pub enum EngineError {
     EmptyWorkflowName,
     #[error("workflow trigger type must not be empty")]
     EmptyTriggerType,
+    #[error("unsupported workflow trigger type {trigger_type}")]
+    UnsupportedTriggerType { trigger_type: String },
+    #[error("trigger {trigger_type} is missing required field {detail}")]
+    MissingTriggerDetail { detail: &'static str, trigger_type: &'static str },
+    #[error("trigger {trigger_type} has invalid field {detail}: {message}")]
+    InvalidTriggerDetail { detail: String, message: String, trigger_type: String },
+    #[error("cron schedule {schedule} is invalid: {message}")]
+    InvalidCronSchedule { schedule: String, message: String },
+    #[error("step {step_id} selected non-adjacent control target {target}")]
+    InvalidControlTarget { step_id: String, target: String },
     #[error("workflow must contain at least one step")]
     WorkflowHasNoSteps,
     #[error("workflow contains a step with an empty id")]
@@ -431,7 +456,7 @@ struct StepExecutionFailure {
 
 #[derive(Debug)]
 struct StepExecutionSuccess {
-    output: Value,
+    outcome: NodeOutcome,
     step_id: String,
 }
 
@@ -460,6 +485,82 @@ fn build_neighbour_map(
             (step_id.clone(), neighbours)
         })
         .collect()
+}
+
+struct SchedulerState<'a> {
+    activation_votes: &'a mut HashMap<String, usize>,
+    initial_payload: &'a Value,
+    outputs: &'a mut HashMap<String, Value>,
+    plan: &'a WorkflowPlan,
+    ready_steps: &'a mut VecDeque<String>,
+    remaining_dependencies: &'a mut HashMap<String, usize>,
+    run_id: &'a str,
+    store: &'a RunStore,
+}
+
+impl SchedulerState<'_> {
+    async fn advance_successors(
+        &mut self,
+        step_id: &str,
+        selected_successors: &HashSet<String>,
+    ) -> Result<(), EngineError> {
+        for successor in self.plan.successors(step_id) {
+            if let Some(remaining) = self.remaining_dependencies.get_mut(successor) {
+                *remaining = remaining.saturating_sub(1);
+            }
+            if selected_successors.contains(successor) {
+                *self.activation_votes.entry(successor.clone()).or_default() += 1;
+            }
+        }
+
+        let mut skipped_roots = Vec::new();
+        for successor in self.plan.successors(step_id) {
+            if self.remaining_dependencies.get(successor).copied().unwrap_or_default() == 0 {
+                if self.activation_votes.get(successor).copied().unwrap_or_default() > 0 {
+                    self.ready_steps.push_back(successor.clone());
+                } else {
+                    skipped_roots.push(successor.clone());
+                }
+            }
+        }
+
+        self.mark_skipped_steps(skipped_roots).await
+    }
+
+    async fn mark_skipped_steps(&mut self, skipped_roots: Vec<String>) -> Result<(), EngineError> {
+        let mut queue = VecDeque::from(skipped_roots);
+
+        while let Some(step_id) = queue.pop_front() {
+            if self.outputs.contains_key(&step_id) {
+                continue;
+            }
+
+            let inputs =
+                build_step_inputs(self.plan, &step_id, self.outputs, self.initial_payload)?;
+            self.store.record_step_skipped(self.run_id, &step_id, &inputs).await?;
+            self.outputs.insert(step_id.clone(), Value::Null);
+
+            for successor in self.plan.successors(&step_id) {
+                if let Some(remaining) = self.remaining_dependencies.get_mut(successor) {
+                    *remaining = remaining.saturating_sub(1);
+                }
+            }
+
+            for successor in self.plan.successors(&step_id) {
+                if self.remaining_dependencies.get(successor).copied().unwrap_or_default() != 0 {
+                    continue;
+                }
+
+                if self.activation_votes.get(successor).copied().unwrap_or_default() > 0 {
+                    self.ready_steps.push_back(successor.clone());
+                } else {
+                    queue.push_back(successor.clone());
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 fn build_step_inputs(
@@ -515,10 +616,18 @@ async fn execute_step_with_retries(
             timeout(Duration::from_millis(timeout_ms), node.execute(&inputs, &params)).await;
         match outcome {
             Ok(Ok(output)) => {
-                store.complete_step_success(&step_run.id, &output).await.map_err(|error| {
-                    StepExecutionFailure { step_id: step.id.clone(), error: error.to_string() }
+                let outcome = split_control(output).map_err(|error| StepExecutionFailure {
+                    step_id: step.id.clone(),
+                    error: error_message(&error),
                 })?;
-                return Ok(StepExecutionSuccess { output, step_id: step.id.clone() });
+                let stored_output = persisted_outcome(&outcome);
+                store.complete_step_success(&step_run.id, &stored_output).await.map_err(
+                    |error| StepExecutionFailure {
+                        step_id: step.id.clone(),
+                        error: error.to_string(),
+                    },
+                )?;
+                return Ok(StepExecutionSuccess { outcome, step_id: step.id.clone() });
             }
             Ok(Err(error)) => {
                 let message = error_message(&error);
@@ -567,6 +676,102 @@ fn error_message(error: &NodeError) -> String {
     }
 }
 
+fn persisted_outcome(outcome: &NodeOutcome) -> Value {
+    if outcome.control.next.is_empty() {
+        return outcome.payload.clone();
+    }
+
+    serde_json::json!({
+        "payload": outcome.payload,
+        "control": {
+            "next": outcome.control.next
+        }
+    })
+}
+
+fn resolve_selected_successors(
+    plan: &WorkflowPlan,
+    step_id: &str,
+    outcome: &NodeOutcome,
+) -> Result<HashSet<String>, EngineError> {
+    let direct_successors = plan.successors(step_id);
+    if outcome.control.next.is_empty() {
+        return Ok(direct_successors.iter().cloned().collect());
+    }
+
+    let direct_lookup = direct_successors.iter().map(String::as_str).collect::<HashSet<_>>();
+    let mut selected = HashSet::with_capacity(outcome.control.next.len());
+    for target in &outcome.control.next {
+        if !direct_lookup.contains(target.as_str()) {
+            return Err(EngineError::InvalidControlTarget {
+                step_id: step_id.to_string(),
+                target: target.clone(),
+            });
+        }
+        selected.insert(target.clone());
+    }
+
+    Ok(selected)
+}
+
+fn validate_trigger(trigger: &Trigger) -> Result<(), EngineError> {
+    match trigger.r#type.as_str() {
+        "manual" => Ok(()),
+        "cron" => {
+            let schedule = trigger
+                .details
+                .get("schedule")
+                .or_else(|| trigger.details.get("expression"))
+                .ok_or(EngineError::MissingTriggerDetail {
+                    detail: "schedule",
+                    trigger_type: "cron",
+                })?;
+            let schedule = yaml_string(schedule, "schedule", "cron")?;
+            schedule.parse::<cron::Schedule>().map_err(|error| {
+                EngineError::InvalidCronSchedule {
+                    schedule: schedule.to_string(),
+                    message: error.to_string(),
+                }
+            })?;
+            Ok(())
+        }
+        "webhook" => {
+            let _ = trigger
+                .details
+                .get("secret_env")
+                .or_else(|| trigger.details.get("token_env"))
+                .ok_or(EngineError::MissingTriggerDetail {
+                    detail: "secret_env",
+                    trigger_type: "webhook",
+                })?;
+            if let Some(path) = trigger.details.get("path") {
+                let path = yaml_string(path, "path", "webhook")?;
+                if !path.starts_with('/') {
+                    return Err(EngineError::InvalidTriggerDetail {
+                        detail: "path".to_string(),
+                        message: "webhook path must start with '/'".to_string(),
+                        trigger_type: "webhook".to_string(),
+                    });
+                }
+            }
+            Ok(())
+        }
+        other => Err(EngineError::UnsupportedTriggerType { trigger_type: other.to_string() }),
+    }
+}
+
+fn yaml_string<'a>(
+    value: &'a serde_yaml::Value,
+    detail: &str,
+    trigger_type: &str,
+) -> Result<&'a str, EngineError> {
+    value.as_str().ok_or(EngineError::InvalidTriggerDetail {
+        detail: detail.to_string(),
+        message: "expected a string".to_string(),
+        trigger_type: trigger_type.to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
@@ -588,7 +793,7 @@ mod tests {
     };
     use crate::{
         models::{RetryPolicy, Step, Trigger, Workflow},
-        nodes::{Node, NodeError, NodeRegistry},
+        nodes::{BuiltInNodeConfig, Node, NodeError, NodeRegistry},
         storage::RunStore,
     };
 
@@ -679,6 +884,31 @@ steps:
     }
 
     #[test]
+    fn rejects_webhook_triggers_without_secret_env() {
+        let workflow = Workflow {
+            version: "v1".to_string(),
+            name: "missing-secret".to_string(),
+            trigger: Trigger { r#type: "webhook".to_string(), details: Default::default() },
+            steps: vec![Step {
+                id: "start".to_string(),
+                r#type: "constant".to_string(),
+                params: serde_yaml::to_value(json!({ "value": true }))
+                    .expect("json should convert to yaml"),
+                next: vec![],
+                retry: None,
+                timeout_ms: None,
+            }],
+        };
+
+        let error = validate_workflow(&workflow).expect_err("webhook trigger should be rejected");
+
+        assert!(matches!(
+            error,
+            EngineError::MissingTriggerDetail { trigger_type: "webhook", detail: "secret_env" }
+        ));
+    }
+
+    #[test]
     fn rejects_cycles_during_planning() {
         let workflow = Workflow {
             version: "v1".to_string(),
@@ -731,7 +961,7 @@ steps:
         let temp_db = temp_db_path("branching");
         let store = RunStore::connect(&temp_db).await.expect("sqlite should initialize");
 
-        let mut registry = NodeRegistry::built_in();
+        let registry = NodeRegistry::built_in(BuiltInNodeConfig::default());
         registry.register(EchoNode);
 
         let engine =
@@ -749,6 +979,57 @@ steps:
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].status, "success");
         assert_eq!(step_runs.len(), 4);
+
+        cleanup_file(temp_db);
+    }
+
+    #[tokio::test]
+    async fn condition_nodes_skip_unselected_branches_and_record_them() {
+        let workflow = Workflow {
+            version: "v1".to_string(),
+            name: "conditional-branch".to_string(),
+            trigger: Trigger { r#type: "manual".to_string(), details: Default::default() },
+            steps: vec![
+                step("seed", "constant", json!({ "value": { "amount": 250 } }), vec!["decide"]),
+                step(
+                    "decide",
+                    "condition",
+                    json!({
+                        "path": "seed.amount",
+                        "operator": "gt",
+                        "value": 100,
+                        "when_true": "high",
+                        "when_false": "low"
+                    }),
+                    vec!["high", "low"],
+                ),
+                step("high", "echo", json!({ "branch": "high" }), vec!["join"]),
+                step("low", "echo", json!({ "branch": "low" }), vec!["join"]),
+                step("join", "echo", json!({}), vec![]),
+            ],
+        };
+        let plan = compile_workflow(workflow).expect("workflow should plan");
+        let temp_db = temp_db_path("conditional");
+        let store = RunStore::connect(&temp_db).await.expect("sqlite should initialize");
+
+        let registry = NodeRegistry::built_in(BuiltInNodeConfig::default());
+        registry.register(EchoNode);
+
+        let engine =
+            WorkflowEngine::with_registry(store.clone(), registry, ExecutionConfig::default());
+        let summary = engine
+            .execute_plan(&plan, json!({ "trigger": "manual" }))
+            .await
+            .expect("workflow should execute");
+        let step_runs =
+            store.list_step_runs(&summary.run_id).await.expect("step runs should be queryable");
+
+        assert_eq!(summary.completed_steps, 4);
+        assert_eq!(summary.outputs["high"]["params"]["branch"], json!("high"));
+        assert_eq!(summary.outputs["low"], Value::Null);
+        assert!(step_runs
+            .iter()
+            .any(|record| record.step_id == "low" && record.status == "skipped"));
 
         cleanup_file(temp_db);
     }
@@ -773,7 +1054,7 @@ steps:
         let temp_db = temp_db_path("retries");
         let store = RunStore::connect(&temp_db).await.expect("sqlite should initialize");
 
-        let mut registry = NodeRegistry::new();
+        let registry = NodeRegistry::new();
         registry.register(FlakyNode::new(1));
 
         let engine =

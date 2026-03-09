@@ -1,0 +1,45 @@
+version: v1
+name: conditional-demo
+trigger:
+  type: manual
+steps:
+  - id: seed
+    type: constant
+    params:
+      value:
+        amount: 250
+        customer: northwind
+    next: [decide]
+    timeout_ms: 1000
+  - id: decide
+    type: condition
+    params:
+      path: seed.amount
+      operator: gt
+      value: 100
+      when_true: high_value
+      when_false: standard_value
+    next: [high_value, standard_value]
+    timeout_ms: 1000
+  - id: high_value
+    type: constant
+    params:
+      value:
+        lane: manual-review
+        discount_eligible: false
+    next: [finish]
+    timeout_ms: 1000
+  - id: standard_value
+    type: constant
+    params:
+      value:
+        lane: auto-approve
+        discount_eligible: true
+    next: [finish]
+    timeout_ms: 1000
+  - id: finish
+    type: noop
+    params:
+      label: decision recorded
+    next: []
+    timeout_ms: 1000

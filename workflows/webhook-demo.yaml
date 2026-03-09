@@ -1,0 +1,39 @@
+version: v1
+name: incoming-review
+trigger:
+  type: webhook
+  path: /hooks/incoming-review
+  secret_env: ACSA_WEBHOOK_SECRET
+steps:
+  - id: classify_priority
+    type: condition
+    params:
+      path: body.priority
+      operator: eq
+      value: urgent
+      when_true: urgent_lane
+      when_false: standard_lane
+    next: [urgent_lane, standard_lane]
+    timeout_ms: 1000
+  - id: urgent_lane
+    type: constant
+    params:
+      value:
+        queue: escalations
+        severity: high
+    next: [finish]
+    timeout_ms: 1000
+  - id: standard_lane
+    type: constant
+    params:
+      value:
+        queue: triage
+        severity: normal
+    next: [finish]
+    timeout_ms: 1000
+  - id: finish
+    type: noop
+    params:
+      label: webhook processed
+    next: []
+    timeout_ms: 1000
