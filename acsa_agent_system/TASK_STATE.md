@@ -4,10 +4,10 @@ Last updated: 2026-03-07
 
 ## Current Status
 
-- Project stage: Foundation complete
-- Current phase: Phase 2 complete, Phase 3 pending review gate
-- Coding status: Repository foundation, Rust CLI, and UI scaffold are in place
-- Approval status: Waiting for user approval before starting Phase 3
+- Project stage: Core engine complete
+- Current phase: Phase 3 complete, Phase 4 pending review gate
+- Coding status: Repository foundation, workflow engine, SQLite persistence, and manual CLI execution are in place
+- Approval status: Waiting for user approval before starting Phase 4
 
 ## Completed This Session
 
@@ -38,6 +38,13 @@ Last updated: 2026-03-07
 - Installed local dependencies needed to verify Phase 2
 - Removed unused vulnerable `sqlx` and `extism` dependencies from the Phase 2 crate manifest and deferred them to the execution/plugin phases
 - Ran formatting, tests, lint, build, and audit checks for the completed foundation
+- Reintroduced `sqlx` with SQLite-only features for Phase 3 persistence
+- Implemented workflow directory loading, DAG planning, cycle detection, and execution orchestration
+- Added bounded concurrent execution, retry handling, and per-step timeout control
+- Added SQLite-backed `runs`, `step_runs`, and `logs` tables with restart cleanup
+- Extended the CLI with `validate`, `list`, and `run` commands
+- Added an executable sample DAG workflow at `workflows/manual-demo.yaml`
+- Ran Rust tests, clippy, CLI execution checks, and a clean Cargo audit for the Phase 3 engine
 
 ## Current Repository Baseline
 
@@ -45,18 +52,18 @@ Last updated: 2026-03-07
 - Top-level implementation directories now exist: `core/`, `ui/`, `connectors/`, `workflows/`, `docs/`, and `examples/`
 - Rust workspace and UI dependency lockfiles have been generated
 - `workflows/hello.yaml` is the baseline sample workflow used by the CLI
+- `workflows/manual-demo.yaml` is the baseline executable DAG sample used by the engine CLI
 - Phase 2 CI workflow is present under `.github/workflows/ci.yml`
 
 ## Next Action
 
-If the user approves, begin Phase 3 only:
+If the user approves, begin Phase 4 only:
 
-1. Implement workflow loading beyond the single-file CLI path
-2. Build DAG construction and cycle detection
-3. Add execution orchestration with bounded concurrency and retries
-4. Introduce SQLite run and step-run persistence
-5. Add the minimal API surface needed for triggers and future UI integration
-6. Stop and ask for review before Phase 4
+1. Add built-in trigger implementations for cron, webhook, and manual dispatch
+2. Implement logic and integration nodes such as `if`, `switch`, `parallel`, and `http_request`
+3. Add the first AI primitives behind safe provider abstractions
+4. Extend parameter validation and secret-redaction behavior per node family
+5. Stop and ask for review before Phase 5
 
 ## Non-Negotiable Execution Rules
 

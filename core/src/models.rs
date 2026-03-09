@@ -47,6 +47,8 @@ pub struct Step {
     pub next: Vec<String>,
     #[serde(default)]
     pub retry: Option<RetryPolicy>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

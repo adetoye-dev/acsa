@@ -40,10 +40,12 @@ acsa/
 Rust is required to build and run the engine.
 
 ```bash
-cargo run -p acsa-core -- workflows/hello.yaml
+cargo run -p acsa-core -- validate workflows/hello.yaml
+cargo run -p acsa-core -- list workflows
+cargo run -p acsa-core -- run workflows/manual-demo.yaml --db ./acsa.db
 ```
 
-The Phase 2 CLI loads a workflow YAML file, validates the baseline schema, and prints a summary.
+The Phase 3 CLI can validate workflows, list workflow files in a directory, and manually execute DAG workflows while persisting run state to SQLite.
 
 ### UI
 
@@ -65,9 +67,18 @@ The Phase 2 UI is a minimal editor shell designed to evolve into the React Flow 
 - Plugins must be sandboxed and resource-limited in later phases
 - Unsafe Rust is avoided by default
 
+## Current Engine Scope
+
+- workflow directory loading and schema validation
+- DAG planning with cycle detection
+- bounded concurrent step execution
+- retry-aware step execution with timeout control
+- SQLite-backed run and step-attempt persistence
+- manual execution via CLI
+
 ## Next Milestones
 
-1. Implement the DAG execution engine and persistence layer
-2. Add built-in workflow nodes and triggers
-3. Add connector runtime support for subprocess and WASM extensions
+1. Add built-in trigger and integration nodes
+2. Introduce richer connector runtime support for subprocess and WASM extensions
+3. Expose engine APIs for UI-driven execution and history
 4. Add observability, packaging, and release collateral

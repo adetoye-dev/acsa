@@ -14,17 +14,87 @@
 
 #![deny(warnings)]
 
-pub fn built_in_node_types() -> &'static [&'static str] {
-    &[
-        "approval",
-        "condition",
-        "database_query",
-        "embedding",
-        "extraction",
-        "http_request",
-        "llm_completion",
-        "manual_trigger",
-        "switch",
-        "webhook_trigger",
-    ]
+use std::{collections::HashMap, sync::Arc};
+
+use async_trait::async_trait;
+use serde_json::{json, Value};
+use thiserror::Error;
+
+#[async_trait]
+pub trait Node: Send + Sync {
+    fn type_name(&self) -> &'static str;
+
+    async fn execute(&self, inputs: &Value, params: &Value) -> Result<Value, NodeError>;
+}
+
+#[derive(Clone, Default)]
+pub struct NodeRegistry {
+    nodes: HashMap<String, Arc<dyn Node>>,
+}
+
+impl NodeRegistry {
+    pub fn new() -> Self {
+        Self { nodes: HashMap::new() }
+    }
+
+    pub fn built_in() -> Self {
+        let mut registry = Self::new();
+        registry.register(ConstantNode);
+        registry.register(NoopNode);
+        registry
+    }
+
+    pub fn register<N>(&mut self, node: N)
+    where
+        N: Node + 'static,
+    {
+        self.nodes.insert(node.type_name().to_string(), Arc::new(node));
+    }
+
+    pub fn get(&self, type_name: &str) -> Option<Arc<dyn Node>> {
+        self.nodes.get(type_name).cloned()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoopNode;
+
+#[async_trait]
+impl Node for NoopNode {
+    fn type_name(&self) -> &'static str {
+        "noop"
+    }
+
+    async fn execute(&self, inputs: &Value, params: &Value) -> Result<Value, NodeError> {
+        Ok(json!({
+            "inputs": inputs,
+            "params": params,
+            "status": "noop"
+        }))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ConstantNode;
+
+#[async_trait]
+impl Node for ConstantNode {
+    fn type_name(&self) -> &'static str {
+        "constant"
+    }
+
+    async fn execute(&self, _inputs: &Value, params: &Value) -> Result<Value, NodeError> {
+        match params.get("value") {
+            Some(value) => Ok(value.clone()),
+            None => Err(NodeError::MissingParameter { parameter: "value" }),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum NodeError {
+    #[error("missing required parameter {parameter}")]
+    MissingParameter { parameter: &'static str },
+    #[error("{message}")]
+    Message { message: String },
 }

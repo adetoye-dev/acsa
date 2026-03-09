@@ -1,0 +1,34 @@
+version: v1
+name: manual-demo
+trigger:
+  type: manual
+steps:
+  - id: seed
+    type: constant
+    params:
+      value:
+        message: Hello from Acsa
+        stage: phase-3
+    next: [fanout_left, fanout_right]
+    timeout_ms: 1000
+  - id: fanout_left
+    type: noop
+    params:
+      label: left branch
+    next: [join]
+    retry:
+      attempts: 2
+      backoff_ms: 25
+    timeout_ms: 1000
+  - id: fanout_right
+    type: noop
+    params:
+      label: right branch
+    next: [join]
+    timeout_ms: 1000
+  - id: join
+    type: noop
+    params:
+      label: merge point
+    next: []
+    timeout_ms: 1000
