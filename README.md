@@ -2,15 +2,17 @@
 
 Acsa is a production-grade, open-source workflow automation engine from Achsah Systems. It is being built as a local-first platform for YAML workflow-as-code, DAG execution, plugin-based extensibility, observability, and security-first automation.
 
-## Phase 4 Status
+## Phase 6 Status
 
 This repository now contains:
 
 - a Rust execution engine in `core/`
-- a Next.js visual builder in `ui/`
+- a Next.js visual editor in `ui/`
 - workflow definitions in `workflows/`
 - documentation in `docs/`
-- built-in trigger, logic, integration, and AI node primitives
+- built-in trigger, logic, integration, AI, and human gate primitives
+- workflow CRUD and manual run APIs for the editor
+- a React Flow editor wired to real YAML load/save/run flows
 
 ## Product Goals
 
@@ -56,12 +58,13 @@ The current CLI can validate workflows, list workflow files, manually execute DA
 Node.js 22+ is recommended for the UI.
 
 ```bash
+ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
 cd ui
 npm install
 npm run dev
 ```
 
-The Phase 2 UI is a minimal editor shell designed to evolve into the React Flow builder described in the blueprint.
+The Phase 6 UI now loads workflows from the engine API, edits YAML-backed workflow state, saves validated changes, starts manual runs, and resolves persisted human tasks from the editor inbox. By default the Next.js app proxies `/engine/*` to `http://127.0.0.1:3001/*`; override that with `ACSA_ENGINE_URL` if your engine runs elsewhere.
 
 ## Security Baseline
 
@@ -81,15 +84,17 @@ The Phase 2 UI is a minimal editor shell designed to evolve into the React Flow 
 - SQLite-backed trigger state persistence
 - persisted human task state with resumable approval and manual-input steps
 - manual, cron, and webhook trigger dispatch
+- workflow inventory, read, write, duplicate, delete, run, and node-catalog APIs for the UI
 - logic nodes for `condition`, `switch`, `loop`, and `parallel`
 - integration nodes for HTTP, database, and file access
 - AI primitives for completion, classification, extraction, embedding, and retrieval
 - process and WASM connector loading from `connectors/`
 - connector scaffolding and local manifest testing commands
+- a React Flow editor with workflow explorer, node inspector, YAML preview, and human-task inbox
 
 ## Next Milestones
 
-1. Expose engine APIs for UI-driven execution and history
-2. Add observability, packaging, and release collateral
-3. Track upstream Extism/Wasmtime security fixes and tighten connector isolation as patched versions land
-4. Expand the visual editor to understand pending human tasks and connector nodes
+1. Add observability, run history, and execution views for the editor
+2. Build distribution and packaging assets
+3. Complete release collateral and community-facing documentation
+4. Track upstream Extism/Wasmtime security fixes and tighten connector isolation as patched versions land

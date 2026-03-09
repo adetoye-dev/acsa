@@ -16,7 +16,7 @@
 cargo run -p acsa-core -- validate workflows/hello.yaml
 cargo run -p acsa-core -- list workflows
 cargo run -p acsa-core -- run workflows/conditional-demo.yaml --db ./acsa.db
-ACSA_WEBHOOK_SECRET=change-me cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
+ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
 cargo run -p acsa-core -- connector-test examples/process-connector/manifest.json --inputs examples/process-connector/sample-input.json
 ```
 
@@ -27,17 +27,34 @@ Expected behavior:
 - manually executes DAG workflows and writes run history to SQLite
 - serves cron and webhook triggers over HTTP while recording next-run state
 - exposes `/human-tasks` and `/human-tasks/{task_id}/resolve` for pending human-review steps
+- exposes `/api/workflows` and `/api/node-catalog` for the visual editor
 - runs connector manifests locally for subprocess and WASM development
 
-## Run the Phase 2 UI
+## Run the Phase 6 UI
 
 ```bash
+ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
 cd ui
 npm install
 npm run dev
 ```
 
-The current UI is a foundation shell for the visual builder. It includes a workflow explorer, a React Flow canvas, a node inspector, and top-bar actions that will later connect to the engine APIs.
+The current editor is live against the engine API. It includes:
+
+- workflow inventory, create, duplicate, delete, and load flows
+- a React Flow canvas backed by the workflow YAML object in memory
+- a node inspector for trigger settings, step ids, types, retry/timeout metadata, and YAML parameters
+- save and manual run actions
+- a human-task inbox for resolving persisted approval and manual-input gates
+
+The Next.js app proxies `/engine/*` to `http://127.0.0.1:3001/*` by default. If the engine runs on a different address, set `ACSA_ENGINE_URL` before `npm run dev`.
+
+Example:
+
+```bash
+cd ui
+ACSA_ENGINE_URL=http://127.0.0.1:3010 npm run dev
+```
 
 ## Workflow samples
 
@@ -53,7 +70,7 @@ The current UI is a foundation shell for the visual builder. It includes a workf
 curl \
   -X POST http://127.0.0.1:3001/hooks/incoming-review \
   -H "content-type: application/json" \
-  -H "x-acsa-webhook-token: change-me" \
+  -H "x-acsa-webhook-token: YOUR_SECRET_HERE" \
   -d '{"priority":"urgent","ticket_id":"INC-1024"}'
 ```
 
@@ -61,7 +78,7 @@ curl \
 
 ```bash
 # Terminal 1: Start the HTTP server
-ACsa_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
+ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
 
 # Terminal 2: Run the workflow
 cargo run -p acsa-core -- run workflows/approval-demo.yaml --db ./acsa.db
@@ -86,5 +103,6 @@ cargo run -p acsa-core -- connector-test ./tmp-connectors/sample-echo/manifest.j
 
 - keep secrets out of workflow files
 - use environment variables or secret managers
+- the workflow API rejects inline values for secret-like fields such as `secret`, `token`, and `password`; use `*_env` or `secrets_env` references instead
 - do not commit local `.env` files
 - treat logs as potentially sensitive and redact before persistence

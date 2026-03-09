@@ -105,32 +105,22 @@ pub fn load_connectors_into(
     registry: &NodeRegistry,
     connectors_dir: &Path,
 ) -> Result<Vec<String>, ConnectorError> {
-    if !connectors_dir.exists() {
-        return Ok(Vec::new());
-    }
-
     let mut loaded = Vec::new();
-    let mut entries = fs::read_dir(connectors_dir)?.collect::<Result<Vec<_>, _>>()?;
-    entries.sort_by_key(|entry| entry.path());
 
-    for entry in entries {
-        let connector_dir = fs::canonicalize(entry.path())?;
-        if !connector_dir.is_dir() {
-            continue;
-        }
-        let manifest_path = connector_dir.join("manifest.json");
-        if !manifest_path.exists() {
-            continue;
-        }
-
-        let manifest = load_manifest(&manifest_path)?;
-        validate_manifest(&manifest, &connector_dir)?;
+    for (connector_dir, manifest) in discover_connectors(connectors_dir)? {
         let type_id = manifest.type_id.clone();
         registry.register(ConnectorNode { connector_dir, manifest });
         loaded.push(type_id);
     }
 
     Ok(loaded)
+}
+
+pub fn discover_connector_manifests(
+    connectors_dir: &Path,
+) -> Result<Vec<ConnectorManifest>, ConnectorError> {
+    discover_connectors(connectors_dir)
+        .map(|connectors| connectors.into_iter().map(|(_, manifest)| manifest).collect())
 }
 
 pub fn load_manifest(path: &Path) -> Result<ConnectorManifest, ConnectorError> {
@@ -145,11 +135,11 @@ pub async fn run_manifest_path(
     params: Value,
 ) -> Result<Value, ConnectorError> {
     let manifest = load_manifest(manifest_path)?;
-    let connector_dir = fs::canonicalize(
-        manifest_path.parent().ok_or_else(|| ConnectorError::InvalidManifest {
+    let connector_dir = fs::canonicalize(manifest_path.parent().ok_or_else(|| {
+        ConnectorError::InvalidManifest {
             message: format!("manifest path {} has no parent directory", manifest_path.display()),
-        })?,
-    )?;
+        }
+    })?)?;
     validate_manifest(&manifest, &connector_dir)?;
     let node = ConnectorNode { connector_dir: connector_dir.to_path_buf(), manifest };
     node.execute(&inputs, &params)
@@ -262,12 +252,42 @@ fn connector_timeout(manifest: &ConnectorManifest) -> std::time::Duration {
     std::time::Duration::from_millis(timeout_ms(manifest))
 }
 
+fn discover_connectors(
+    connectors_dir: &Path,
+) -> Result<Vec<(PathBuf, ConnectorManifest)>, ConnectorError> {
+    if !connectors_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut discovered = Vec::new();
+    let mut entries = fs::read_dir(connectors_dir)?.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let connector_dir = fs::canonicalize(entry.path())?;
+        if !connector_dir.is_dir() {
+            continue;
+        }
+        let manifest_path = connector_dir.join("manifest.json");
+        if !manifest_path.exists() {
+            continue;
+        }
+
+        let manifest = load_manifest(&manifest_path)?;
+        validate_manifest(&manifest, &connector_dir)?;
+        discovered.push((connector_dir, manifest));
+    }
+
+    Ok(discovered)
+}
+
 fn load_process_argument(connector_dir: &Path, argument: &str) -> OsString {
     let candidate = connector_dir.join(argument);
     if !Path::new(argument).is_absolute() && candidate.exists() {
         // Prevent path traversal by verifying candidate is within connector_dir
-        if let (Ok(canonical_dir), Ok(canonical_candidate)) = 
-            (fs::canonicalize(connector_dir), fs::canonicalize(&candidate)) {
+        if let (Ok(canonical_dir), Ok(canonical_candidate)) =
+            (fs::canonicalize(connector_dir), fs::canonicalize(&candidate))
+        {
             if canonical_candidate.starts_with(&canonical_dir) {
                 return candidate.into_os_string();
             }

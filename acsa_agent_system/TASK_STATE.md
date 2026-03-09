@@ -4,10 +4,10 @@ Last updated: 2026-03-09
 
 ## Current Status
 
-- Project stage: Human-task persistence and connector runtime implemented
-- Current phase: Phase 5 complete, Phase 6 pending review gate
-- Coding status: Persisted pause/resume, connector SDK/runtime, connector tooling, and refreshed samples/docs are in place
-- Approval status: Waiting for user review before starting Phase 6
+- Project stage: UI workflow APIs and visual editor integration implemented
+- Current phase: Phase 6 complete, Phase 7 pending review gate
+- Coding status: Persisted pause/resume, connector SDK/runtime, workflow UI APIs, and the live visual editor are in place
+- Approval status: Waiting for user review before starting Phase 7
 
 ## Completed This Session
 
@@ -63,6 +63,13 @@ Last updated: 2026-03-09
 - Added connector examples for process and WASM development plus an approval workflow sample
 - Ran end-to-end smoke checks for webhook execution, human-task resolution, connector scaffolding, and connector testing
 - Re-ran Rust formatting, tests, clippy, and cargo audit after the Phase 5 connector work
+- Added Phase 6 workflow APIs for list/read/write/duplicate/delete/run plus node catalog metadata
+- Added server-side workflow id validation and inline-secret rejection for UI-originated workflow saves
+- Replaced the mock React Flow shell with a live editor backed by workflow YAML objects and engine APIs
+- Added create/duplicate/delete workflow flows, save/run actions, step creation, and inspector-based editing for trigger and step state
+- Added a human-task inbox in the UI for persisted approval and manual-input resolution
+- Added a Next.js engine proxy via `ACSA_ENGINE_URL` for local-first UI development
+- Verified the new workflow APIs, manual run flow, and human-task resume path against a live Phase 6 server session
 
 ## Current Repository Baseline
 
@@ -80,13 +87,13 @@ Last updated: 2026-03-09
 
 ## Next Action
 
-If the user approves, begin Phase 6 only:
+If the user approves, begin Phase 7 only:
 
-1. Expose engine APIs needed by the UI beyond the current trigger server surface
-2. Connect the React Flow editor to workflow load/save/run endpoints
-3. Surface pending human tasks and connector-backed nodes in the UI
-4. Keep the UX minimal, local-first, and aligned with the YAML source of truth
-5. Stop and ask for review before Phase 7
+1. Add structured logs, metrics, run history APIs, and retention controls
+2. Expose execution history and summary data to the UI
+3. Expand observability docs and validation for redaction and retention behavior
+4. Keep the observability surface aligned with the existing SQLite-backed run model
+5. Stop and ask for review before Phase 8
 
 ## Non-Negotiable Execution Rules
 

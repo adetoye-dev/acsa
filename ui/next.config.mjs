@@ -18,9 +18,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const workspaceRoot = path.dirname(fileURLToPath(import.meta.url));
+const engineUrl = process.env.ACSA_ENGINE_URL ?? "http://127.0.0.1:3001";
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  async rewrites() {
+    return [
+      {
+        source: "/engine/:path*",
+        destination: `${engineUrl}/:path*`
+      }
+    ];
+  },
   reactStrictMode: true,
   outputFileTracingRoot: workspaceRoot
 };

@@ -1,45 +1,55 @@
-// Copyright 2026 Achsah Systems
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+/*
+ * Copyright 2026 Achsah Systems
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
-type WorkflowSummary = {
-  description: string;
-  id: string;
-  name: string;
-};
+import type {
+  InvalidWorkflowFile,
+  WorkflowSummary
+} from "../lib/workflow-editor";
 
 type WorkflowExplorerProps = {
-  activeWorkflowId: string;
+  activeWorkflowId: string | null;
+  invalidFiles: InvalidWorkflowFile[];
+  isBusy: boolean;
   onCreateWorkflow: () => void;
+  onDeleteWorkflow: (workflowId: string) => void;
+  onDuplicateWorkflow: (workflowId: string) => void;
   onSelectWorkflow: (workflowId: string) => void;
   workflows: WorkflowSummary[];
 };
 
 export function WorkflowExplorer({
   activeWorkflowId,
+  invalidFiles,
+  isBusy,
   onCreateWorkflow,
+  onDeleteWorkflow,
+  onDuplicateWorkflow,
   onSelectWorkflow,
   workflows
 }: WorkflowExplorerProps) {
   return (
     <aside className="panel-surface p-5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <div>
           <p className="section-kicker">Workflow explorer</p>
-          <h2 className="section-title mt-2">Local definitions</h2>
+          <h2 className="section-title mt-2">YAML definitions</h2>
         </div>
         <button
-          className="rounded-full bg-tide px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-[#0d5b61]"
+          className="rounded-full bg-tide px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-[#0d5b61] disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={isBusy}
           onClick={onCreateWorkflow}
           type="button"
         >
@@ -52,31 +62,76 @@ export function WorkflowExplorer({
           const isActive = workflow.id === activeWorkflowId;
 
           return (
-            <button
+            <article
               key={workflow.id}
-              className={`w-full rounded-3xl border px-4 py-4 text-left transition ${
+              className={`rounded-3xl border px-4 py-4 transition ${
                 isActive
                   ? "border-tide/40 bg-tide/10 shadow-panel"
                   : "border-black/10 bg-white/70 hover:border-black/20 hover:bg-white"
               }`}
-              onClick={() => onSelectWorkflow(workflow.id)}
-              type="button"
             >
-              <div className="flex items-center justify-between">
-                <span className="font-display text-lg font-semibold text-ink">
-                  {workflow.name}
-                </span>
-                <span className="rounded-full bg-sand px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-ember">
-                  YAML
-                </span>
+              <button
+                className="w-full text-left"
+                onClick={() => onSelectWorkflow(workflow.id)}
+                type="button"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-display text-lg font-semibold text-ink">
+                    {workflow.name}
+                  </span>
+                  <span className="rounded-full bg-sand px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-ember">
+                    {workflow.trigger_type}
+                  </span>
+                </div>
+                <p className="mt-2 text-sm leading-6 text-slate">
+                  {workflow.description}
+                </p>
+                <div className="mt-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/65">
+                  <span>{workflow.file_name}</span>
+                  {workflow.has_connector_steps ? (
+                    <span className="rounded-full bg-ember/10 px-2 py-1 text-ember">
+                      Connector step
+                    </span>
+                  ) : null}
+                </div>
+              </button>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  className="rounded-full border border-black/10 px-3 py-2 text-xs font-semibold text-ink transition hover:border-black/20 hover:bg-white"
+                  disabled={isBusy}
+                  onClick={() => onDuplicateWorkflow(workflow.id)}
+                  type="button"
+                >
+                  Duplicate
+                </button>
+                <button
+                  className="rounded-full border border-ember/20 px-3 py-2 text-xs font-semibold text-ember transition hover:border-ember/40 hover:bg-ember/5"
+                  disabled={isBusy}
+                  onClick={() => onDeleteWorkflow(workflow.id)}
+                  type="button"
+                >
+                  Delete
+                </button>
               </div>
-              <p className="mt-2 text-sm leading-6 text-slate">
-                {workflow.description}
-              </p>
-            </button>
+            </article>
           );
         })}
       </div>
+
+      {invalidFiles.length > 0 ? (
+        <div className="mt-6 rounded-3xl border border-ember/20 bg-ember/5 p-4">
+          <p className="section-kicker text-ember">Needs attention</p>
+          <div className="mt-3 space-y-3">
+            {invalidFiles.map((file) => (
+              <div key={file.id} className="rounded-2xl border border-ember/15 bg-white/80 p-3">
+                <div className="text-sm font-semibold text-ink">{file.file_name}</div>
+                <p className="mt-1 text-sm leading-6 text-slate">{file.error}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </aside>
   );
 }

@@ -67,7 +67,7 @@ steps:
 - `trigger.*`: trigger-specific properties.
   - `manual`: no additional required fields.
   - `cron`: requires `schedule` or `expression`.
-  - `webhook`: requires `secret_env` and optionally `path` plus `header`.
+  - `webhook`: canonical field is `secret_env`; the workflow API also accepts `secrets_env` and `token_env` for compatibility. `path` and `header` are optional.
 - `steps[].id`: stable step identifier.
 - `steps[].type`: node or connector type.
   - Built-in logic: `constant`, `noop`, `condition`, `switch`, `loop`, `parallel`
@@ -88,3 +88,5 @@ steps:
 - Cron triggers persist their next-run timestamps in SQLite; webhook triggers require an environment-managed shared secret.
 - Approval and manual-input nodes persist pending human tasks in SQLite and can be resumed through the HTTP API.
 - External connector nodes are discovered from manifest files and executed either as subprocesses or Extism-backed WASM plugins.
+- The visual editor loads, saves, duplicates, deletes, and manually runs workflows through the engine API under `/api/workflows`.
+- Workflow API validation rejects inline secrets for secret-like field names (`secret`, `token`, `password`, `api_key`, `access_key`, `private_key`) and for string values matching common credential patterns (for example `token=...`, `key=...`, `Bearer ...`) or long base64-like/high-entropy tokens (typically 24+ characters). Use environment references (`secret_env`, plus accepted aliases `secrets_env` and `token_env`) instead.
