@@ -440,9 +440,7 @@ async fn get_run_detail(
                 StorageError::RunNotFound(_) | StorageError::HumanTaskNotFound(_) => {
                     (StatusCode::NOT_FOUND, error.to_string())
                 }
-                _ => {
-                    (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
-                }
+                _ => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string()),
             };
             (status, Json(json!({ "error": message }))).into_response()
         }

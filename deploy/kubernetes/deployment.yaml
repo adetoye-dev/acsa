@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: acsa
+  labels:
+    app: acsa
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: acsa
+  template:
+    metadata:
+      labels:
+        app: acsa
+    spec:
+      containers:
+        - name: acsa
+          image: ghcr.io/achsah-systems/acsa:latest
+          imagePullPolicy: Always
+          env:
+            - name: ACSA_DB_PATH
+              value: /app/data/acsa.db
+            - name: ACSA_WORKFLOWS_DIR
+              value: /app/workflows
+            - name: PORT
+              value: "3000"
+            - name: ACSA_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: acsa-secrets
+                  key: webhook-secret
+          ports:
+            - containerPort: 3000
+              name: http
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: workflows
+              mountPath: /app/workflows
+              readOnly: true
+            - name: data
+              mountPath: /app/data
+      volumes:
+        - name: workflows
+          configMap:
+            name: acsa-workflows
+        - name: data
+          persistentVolumeClaim:
+            claimName: acsa-data

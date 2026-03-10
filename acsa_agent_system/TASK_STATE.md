@@ -1,13 +1,13 @@
 # Acsa Task State
 
-Last updated: 2026-03-09
+Last updated: 2026-03-10
 
 ## Current Status
 
-- Project stage: Observability, run history, metrics, and execution views implemented
-- Current phase: Phase 7 complete, Phase 8 pending review gate
-- Coding status: Structured logging, run history APIs, metrics export, retention controls, and the UI execution history view are in place
-- Approval status: Waiting for user review before starting Phase 8
+- Project stage: Distribution, self-hosting, and release packaging assets implemented
+- Current phase: Phase 8 complete, Phase 9 pending review gate
+- Coding status: Release metadata, Docker and Kubernetes packaging, install scripts, and release manifests are in place
+- Approval status: Waiting for user review before starting Phase 9
 
 ## Completed This Session
 
@@ -77,6 +77,15 @@ Last updated: 2026-03-09
 - Added the UI run-history panel with metrics cards, run filtering, step timelines, and log search
 - Added observability documentation for metrics, log redaction, retention, and UI execution views
 - Verified the observability endpoints and UI-facing run history APIs against a live Phase 7 server session
+- Added release-profile tuning at the workspace level plus embedded binary version metadata
+- Added a `version` command and `--version` flag to the CLI
+- Configured the Next.js app for standalone production output
+- Added Docker packaging, Docker Compose, and Kubernetes deployment assets under `deploy/`
+- Added installer and local release-packaging scripts under `scripts/`
+- Added Homebrew and Scoop release manifests under `packaging/`
+- Added a tagged release workflow for binary artifacts, checksums, UI bundles, and container publishing
+- Added self-hosting documentation for binary, Docker, and Kubernetes deployment paths
+- Narrowed the `reqwest` feature set and updated `quinn-proto` to `0.11.14` to clear the new HTTP-stack RustSec advisory
 
 ## Current Repository Baseline
 
@@ -93,16 +102,18 @@ Last updated: 2026-03-09
 - Phase 2 CI workflow is present under `.github/workflows/ci.yml`
 - Phase 7 observability endpoints are live under `/metrics` and `/api/runs`
 - The UI now includes a run-history panel backed by the engine observability APIs
+- Phase 8 deployment assets now live under `deploy/`
+- Phase 8 release/install manifests now live under `scripts/`, `packaging/`, and `.github/workflows/release.yml`
 
 ## Next Action
 
-If the user approves, begin Phase 8 only:
+If the user approves, begin Phase 9 only:
 
-1. Build distribution assets for the Rust engine and Next.js UI
-2. Add Docker packaging and release-oriented install paths
-3. Document local deployment and packaging workflows
-4. Keep the packaging path aligned with the existing local-first architecture
-5. Stop and ask for review before Phase 9
+1. Complete community-facing docs and release collateral
+2. Add contribution guides, templates, and public project metadata
+3. Tighten release notes and upgrade documentation
+4. Keep the scope aligned to documentation and release-readiness only
+5. Stop and ask for review before Phase 10
 
 ## Non-Negotiable Execution Rules
 
@@ -185,7 +196,7 @@ If a phase introduces material risk without a corresponding validation or mitiga
   - **RUSTSEC-2026-0020** (CVSS 6.9 Medium): Guest-controlled resource exhaustion in WASI implementations
   - **RUSTSEC-2026-0021** (CVSS 6.9 Medium): Panic adding excessive fields to `wasi:http/types.fields`
   - **RUSTSEC-2026-0006** (CVSS 4.1 Medium): Wasmtime segfault or unused out-of-sandbox load with `f64.copysign` on x86-64
-  - **Assessment**: Safe to proceed to Phase 8 with runtime mitigations. All advisories are Medium severity and affect guest-controlled edge cases. WASM connectors are sandboxed and the workflow engine terminates on timeout.
+  - **Assessment**: Safe to proceed to Phase 9 with runtime mitigations. All advisories are Medium severity and affect guest-controlled edge cases. WASM connectors are sandboxed and the workflow engine terminates on timeout.
   - **Immediate measures**: (1) Document the advisories in acceptance criteria, (2) Pin Wasmtime >=41.0.4 when extism updates, (3) Enforce strict timeout/memory limits in connector manifests, (4) Keep subprocess memory caps and WASM dependency upgrades on the Phase 10 hardening track.
 - Subprocess connectors enforce timeout and JSON validation today, but OS-level memory caps remain a follow-on hardening task because the current implementation avoids unsafe/platform-specific limit code.
 

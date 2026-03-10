@@ -1,0 +1,23 @@
+{
+  "version": "0.1.0",
+  "description": "Local-first workflow automation engine from Achsah Systems",
+  "homepage": "https://github.com/achsah-systems/acsa",
+  "license": "Apache-2.0",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/achsah-systems/acsa/releases/download/v0.1.0/acsa-core-windows-x86_64.zip",
+      "hash": "REPLACE_ON_RELEASE"
+    }
+  },
+  "bin": "acsa-core.exe",
+  "checkver": {
+    "github": "https://github.com/achsah-systems/acsa"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/achsah-systems/acsa/releases/download/v$version/acsa-core-windows-x86_64.zip"
+      }
+    }
+  }
+}

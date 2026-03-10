@@ -1,0 +1,17 @@
+.DS_Store
+.env
+.env.*
+.git
+.github
+.next
+target
+node_modules
+ui/.next
+ui/node_modules
+coverage
+dist
+logs
+tmp
+*.db
+*.db-shm
+*.db-wal

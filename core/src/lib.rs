@@ -22,3 +22,4 @@ pub mod nodes;
 pub mod observability;
 pub mod storage;
 pub mod triggers;
+pub mod version;

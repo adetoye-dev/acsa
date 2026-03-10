@@ -230,12 +230,7 @@ pub fn redact_text(text: &str) -> String {
     truncate_message(text)
 }
 
-fn append_file_log(
-    level: LogLevel,
-    run_id: Option<&str>,
-    step_id: Option<&str>,
-    message: &str,
-) {
+fn append_file_log(level: LogLevel, run_id: Option<&str>, step_id: Option<&str>, message: &str) {
     let path = FILE_LOG_PATH
         .get_or_init(|| env::var("ACSA_LOG_FILE_PATH").ok().map(PathBuf::from))
         .clone();

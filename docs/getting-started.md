@@ -15,6 +15,7 @@
 ```bash
 cargo run -p acsa-core -- validate workflows/hello.yaml
 cargo run -p acsa-core -- list workflows
+cargo run -p acsa-core -- --version
 cargo run -p acsa-core -- run workflows/conditional-demo.yaml --db ./acsa.db
 ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
 cargo run -p acsa-core -- connector-test examples/process-connector/manifest.json --inputs examples/process-connector/sample-input.json
@@ -30,7 +31,20 @@ Expected behavior:
 - exposes `/api/workflows` and `/api/node-catalog` for the visual editor
 - runs connector manifests locally for subprocess and WASM development
 
-## Run the Phase 7 UI
+## Install a packaged binary
+
+```bash
+./scripts/install.sh
+acsa-core --version
+```
+
+For local packaging instead of downloading a release:
+
+```bash
+./scripts/package-release.sh
+```
+
+## Run the Phase 8 UI
 
 ```bash
 ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
@@ -123,6 +137,14 @@ cargo run -p acsa-core -- connector-new sample-echo --type sample_echo --runtime
 cargo run -p acsa-core -- connector-test ./tmp-connectors/sample-echo/manifest.json --inputs ./tmp-connectors/sample-echo/sample-input.json
 ```
 
+## Container Example
+
+```bash
+docker compose -f deploy/docker-compose.yml up --build
+```
+
+For Kubernetes and release packaging details, see `docs/self-hosting.md`.
+
 ## Security reminders
 
 - keep secrets out of workflow files
@@ -131,3 +153,4 @@ cargo run -p acsa-core -- connector-test ./tmp-connectors/sample-echo/manifest.j
 - do not commit local `.env` files
 - treat logs as potentially sensitive and redact before persistence
 - disable payload visibility with `ACSA_LOG_PAYLOADS=0` when log data should stay minimal
+- replace placeholder checksums in `packaging/homebrew/acsa.rb` and `packaging/scoop/acsa.json` when publishing releases

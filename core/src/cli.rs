@@ -54,6 +54,7 @@ pub enum Command {
     Validate {
         workflow_path: PathBuf,
     },
+    Version,
 }
 
 impl Cli {
@@ -64,6 +65,7 @@ impl Cli {
                 command: Command::Validate { workflow_path: PathBuf::from("workflows/hello.yaml") },
             }),
             [flag] if flag == "--help" || flag == "-h" => Err(CliError::HelpRequested),
+            [flag] if flag == "--version" || flag == "-V" => Ok(Self { command: Command::Version }),
             [command, rest @ ..] => match command.as_str() {
                 "connector-new" => Ok(Self { command: parse_connector_new(rest)? }),
                 "connector-test" => Ok(Self { command: parse_connector_test(rest)? }),
@@ -71,13 +73,14 @@ impl Cli {
                 "run" => Ok(Self { command: parse_run(rest)? }),
                 "serve" => Ok(Self { command: parse_serve(rest)? }),
                 "validate" => Ok(Self { command: parse_validate(rest)? }),
+                "version" => Ok(Self { command: Command::Version }),
                 other => Err(CliError::UnknownCommand { command: other.to_string() }),
             },
         }
     }
 
     pub const fn usage() -> &'static str {
-        "Usage:\n  acsa-core validate [workflow-file]\n  acsa-core list [workflows-dir]\n  acsa-core run [workflow-file] [--db path] [--max-concurrency N]\n  acsa-core serve [workflows-dir] [--db path] [--host HOST] [--port PORT] [--max-concurrency N]\n  acsa-core connector-new NAME --type TYPE --runtime process|wasm [--dir connectors]\n  acsa-core connector-test [manifest-file] [--inputs path] [--params path]"
+        "Usage:\n  acsa-core validate [workflow-file]\n  acsa-core list [workflows-dir]\n  acsa-core run [workflow-file] [--db path] [--max-concurrency N]\n  acsa-core serve [workflows-dir] [--db path] [--host HOST] [--port PORT] [--max-concurrency N]\n  acsa-core connector-new NAME --type TYPE --runtime process|wasm [--dir connectors]\n  acsa-core connector-test [manifest-file] [--inputs path] [--params path]\n  acsa-core version\n  acsa-core --version"
     }
 }
 

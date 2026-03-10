@@ -27,6 +27,7 @@ use acsa_core::{
     },
     observability::init_tracing,
     triggers::{serve, TriggerServerConfig},
+    version,
 };
 
 type MainError = Box<dyn std::error::Error>;
@@ -143,6 +144,10 @@ async fn main() -> Result<(), MainError> {
                 plan.order(),
                 workflow_path.display()
             );
+        }
+        Command::Version => {
+            println!("{}", version::release_string());
+            println!("git={}", version::GIT_SHA);
         }
     }
 

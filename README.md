@@ -2,7 +2,7 @@
 
 Acsa is a production-grade, open-source workflow automation engine from Achsah Systems. It is being built as a local-first platform for YAML workflow-as-code, DAG execution, plugin-based extensibility, observability, and security-first automation.
 
-## Phase 7 Status
+## Phase 8 Status
 
 This repository now contains:
 
@@ -14,6 +14,7 @@ This repository now contains:
 - workflow CRUD and manual run APIs for the editor
 - a React Flow editor wired to real YAML load/save/run flows
 - run history, log search, and metrics endpoints plus an execution view in the UI
+- release-oriented build metadata, Docker packaging, install scripts, and self-hosting assets
 
 ## Product Goals
 
@@ -30,6 +31,9 @@ This repository now contains:
 acsa/
 ├─ core/
 ├─ ui/
+├─ deploy/
+├─ packaging/
+├─ scripts/
 ├─ connectors/
 ├─ workflows/
 ├─ docs/
@@ -45,6 +49,7 @@ Rust is required to build and run the engine.
 ```bash
 cargo run -p acsa-core -- validate workflows/hello.yaml
 cargo run -p acsa-core -- list workflows
+cargo run -p acsa-core -- --version
 cargo run -p acsa-core -- run workflows/manual-demo.yaml --db ./acsa.db
 ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
 cargo run -p acsa-core -- connector-test examples/process-connector/manifest.json --inputs examples/process-connector/sample-input.json
@@ -52,7 +57,7 @@ cargo run -p acsa-core -- connector-test examples/process-connector/manifest.jso
 
 **Note:** Generate a strong secret for production with `openssl rand -hex 32` and set it in the `ACSA_WEBHOOK_SECRET` environment variable.
 
-The current CLI can validate workflows, list workflow files, manually execute DAG workflows, serve cron plus webhook triggers, persist and resume human review tasks, scaffold connectors, and test connector manifests locally.
+The current CLI can validate workflows, list workflow files, print build metadata, manually execute DAG workflows, serve cron plus webhook triggers, persist and resume human review tasks, scaffold connectors, and test connector manifests locally.
 
 The HTTP server now also exposes:
 
@@ -60,6 +65,17 @@ The HTTP server now also exposes:
 - `/api/runs` for paginated run history
 - `/api/runs/{run_id}` for run, step, and human-task detail
 - `/api/runs/{run_id}/logs` for filtered execution logs
+
+### Distribution
+
+Phase 8 adds:
+
+- `scripts/install.sh` for GitHub release installs with checksum verification
+- `scripts/package-release.sh` for local artifact packaging
+- `deploy/docker/Dockerfile` and `deploy/docker-compose.yml` for containerized self-hosting
+- `deploy/kubernetes/` manifests for cluster deployment
+- `packaging/homebrew/acsa.rb` and `packaging/scoop/acsa.json` release manifests
+- `.github/workflows/release.yml` for tagged release artifacts and checksums
 
 ### UI
 
@@ -72,7 +88,9 @@ npm install
 npm run dev
 ```
 
-The Phase 7 UI now loads workflows from the engine API, edits YAML-backed workflow state, saves validated changes, starts manual runs, resolves persisted human tasks from the editor inbox, and shows run history, step timelines, log search, and execution metrics. By default the Next.js app proxies `/engine/*` to `http://127.0.0.1:3001/*`; override that with `ACSA_ENGINE_URL` if your engine runs elsewhere.
+The Phase 8 UI now loads workflows from the engine API, edits YAML-backed workflow state, saves validated changes, starts manual runs, resolves persisted human tasks from the editor inbox, and shows run history, step timelines, log search, and execution metrics. By default the Next.js app proxies `/engine/*` to `http://127.0.0.1:3001/*`; override that with `ACSA_ENGINE_URL` if your engine runs elsewhere.
+
+The production UI is configured for Next.js standalone output so it can ship inside the Acsa container image or a packaged bundle.
 
 ## Security Baseline
 
@@ -102,6 +120,8 @@ The Phase 7 UI now loads workflows from the engine API, edits YAML-backed workfl
 - process and WASM connector loading from `connectors/`
 - connector scaffolding and local manifest testing commands
 - a React Flow editor with workflow explorer, node inspector, YAML preview, human-task inbox, and run history panel
+- release profile tuning, embedded version metadata, and a `--version` CLI surface
+- standalone UI packaging plus Docker Compose, Kubernetes, installer, and release workflow assets
 
 ## Observability Controls
 
@@ -112,9 +132,10 @@ The Phase 7 UI now loads workflows from the engine API, edits YAML-backed workfl
 
 Sensitive keys and common credential patterns are redacted before log persistence. See [docs/observability.md](docs/observability.md) for the full endpoint and retention reference.
 
+See [docs/self-hosting.md](docs/self-hosting.md) for binary installs, Docker, Kubernetes, and release packaging commands.
+
 ## Next Milestones
 
-1. Build distribution and packaging assets
-2. Complete release collateral and community-facing documentation
-3. Harden connector isolation and release processes
-4. Track upstream Extism/Wasmtime security fixes as patched versions land
+1. Complete release collateral and community-facing documentation
+2. Harden connector isolation and release processes
+3. Track upstream Extism/Wasmtime security fixes as patched versions land

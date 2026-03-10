@@ -708,14 +708,48 @@ impl RunStore {
         }
 
         let run_buckets = vec![
-            HistogramBucket { le: 1.0, count: run_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) as u64 },
-            HistogramBucket { le: 5.0, count: (run_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_1_5s").unwrap_or(0)) as u64 },
-            HistogramBucket { le: 10.0, count: (run_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_1_5s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_5_10s").unwrap_or(0)) as u64 },
-            HistogramBucket { le: 30.0, count: (run_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_1_5s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_5_10s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_10_30s").unwrap_or(0)) as u64 },
-            HistogramBucket { le: 60.0, count: (run_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_1_5s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_5_10s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_10_30s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_30_60s").unwrap_or(0)) as u64 },
-            HistogramBucket { le: f64::INFINITY, count: run_metrics.try_get::<i64, _>("count").unwrap_or(0) as u64 },
+            HistogramBucket {
+                le: 1.0,
+                count: run_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) as u64,
+            },
+            HistogramBucket {
+                le: 5.0,
+                count: (run_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0)
+                    + run_metrics.try_get::<i64, _>("bucket_1_5s").unwrap_or(0))
+                    as u64,
+            },
+            HistogramBucket {
+                le: 10.0,
+                count: (run_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0)
+                    + run_metrics.try_get::<i64, _>("bucket_1_5s").unwrap_or(0)
+                    + run_metrics.try_get::<i64, _>("bucket_5_10s").unwrap_or(0))
+                    as u64,
+            },
+            HistogramBucket {
+                le: 30.0,
+                count: (run_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0)
+                    + run_metrics.try_get::<i64, _>("bucket_1_5s").unwrap_or(0)
+                    + run_metrics.try_get::<i64, _>("bucket_5_10s").unwrap_or(0)
+                    + run_metrics.try_get::<i64, _>("bucket_10_30s").unwrap_or(0))
+                    as u64,
+            },
+            HistogramBucket {
+                le: 60.0,
+                count: (run_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0)
+                    + run_metrics.try_get::<i64, _>("bucket_1_5s").unwrap_or(0)
+                    + run_metrics.try_get::<i64, _>("bucket_5_10s").unwrap_or(0)
+                    + run_metrics.try_get::<i64, _>("bucket_10_30s").unwrap_or(0)
+                    + run_metrics.try_get::<i64, _>("bucket_30_60s").unwrap_or(0))
+                    as u64,
+            },
+            HistogramBucket {
+                le: f64::INFINITY,
+                count: run_metrics.try_get::<i64, _>("count").unwrap_or(0) as u64,
+            },
         ];
-        let run_sum = run_metrics.try_get::<Option<f64>, _>("avg_duration").unwrap_or(None).unwrap_or(0.0) * (run_metrics.try_get::<i64, _>("count").unwrap_or(0) as f64);
+        let run_sum =
+            run_metrics.try_get::<Option<f64>, _>("avg_duration").unwrap_or(None).unwrap_or(0.0)
+                * (run_metrics.try_get::<i64, _>("count").unwrap_or(0) as f64);
         snapshot.workflow_duration_histogram = HistogramSnapshot {
             buckets: run_buckets,
             count: run_metrics.try_get::<i64, _>("count").unwrap_or(0) as u64,
@@ -723,13 +757,39 @@ impl RunStore {
         };
 
         let step_buckets = vec![
-            HistogramBucket { le: 1.0, count: step_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) as u64 },
-            HistogramBucket { le: 2.0, count: (step_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) + step_metrics.try_get::<i64, _>("bucket_1_2s").unwrap_or(0)) as u64 },
-            HistogramBucket { le: 5.0, count: (step_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) + step_metrics.try_get::<i64, _>("bucket_1_2s").unwrap_or(0) + step_metrics.try_get::<i64, _>("bucket_2_5s").unwrap_or(0)) as u64 },
-            HistogramBucket { le: 10.0, count: (step_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) + step_metrics.try_get::<i64, _>("bucket_1_2s").unwrap_or(0) + step_metrics.try_get::<i64, _>("bucket_2_5s").unwrap_or(0) + step_metrics.try_get::<i64, _>("bucket_5_10s").unwrap_or(0)) as u64 },
-            HistogramBucket { le: f64::INFINITY, count: step_metrics.try_get::<i64, _>("count").unwrap_or(0) as u64 },
+            HistogramBucket {
+                le: 1.0,
+                count: step_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) as u64,
+            },
+            HistogramBucket {
+                le: 2.0,
+                count: (step_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0)
+                    + step_metrics.try_get::<i64, _>("bucket_1_2s").unwrap_or(0))
+                    as u64,
+            },
+            HistogramBucket {
+                le: 5.0,
+                count: (step_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0)
+                    + step_metrics.try_get::<i64, _>("bucket_1_2s").unwrap_or(0)
+                    + step_metrics.try_get::<i64, _>("bucket_2_5s").unwrap_or(0))
+                    as u64,
+            },
+            HistogramBucket {
+                le: 10.0,
+                count: (step_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0)
+                    + step_metrics.try_get::<i64, _>("bucket_1_2s").unwrap_or(0)
+                    + step_metrics.try_get::<i64, _>("bucket_2_5s").unwrap_or(0)
+                    + step_metrics.try_get::<i64, _>("bucket_5_10s").unwrap_or(0))
+                    as u64,
+            },
+            HistogramBucket {
+                le: f64::INFINITY,
+                count: step_metrics.try_get::<i64, _>("count").unwrap_or(0) as u64,
+            },
         ];
-        let step_sum = step_metrics.try_get::<Option<f64>, _>("avg_duration").unwrap_or(None).unwrap_or(0.0) * (step_metrics.try_get::<i64, _>("count").unwrap_or(0) as f64);
+        let step_sum =
+            step_metrics.try_get::<Option<f64>, _>("avg_duration").unwrap_or(None).unwrap_or(0.0)
+                * (step_metrics.try_get::<i64, _>("count").unwrap_or(0) as f64);
         snapshot.step_duration_histogram = HistogramSnapshot {
             buckets: step_buckets,
             count: step_metrics.try_get::<i64, _>("count").unwrap_or(0) as u64,
@@ -762,10 +822,8 @@ impl RunStore {
             .fetch_all(&mut *tx)
             .await?;
 
-            let run_ids: Vec<String> = rows
-                .into_iter()
-                .filter_map(|row| row.try_get::<String, _>("id").ok())
-                .collect();
+            let run_ids: Vec<String> =
+                rows.into_iter().filter_map(|row| row.try_get::<String, _>("id").ok()).collect();
 
             if !run_ids.is_empty() {
                 const BATCH_SIZE: usize = 500;
@@ -779,14 +837,16 @@ impl RunStore {
                     }
                     summary.purged_logs += log_query.execute(&mut *tx).await?.rows_affected();
 
-                    let task_sql = format!("DELETE FROM human_tasks WHERE run_id IN ({})", placeholders);
+                    let task_sql =
+                        format!("DELETE FROM human_tasks WHERE run_id IN ({})", placeholders);
                     let mut task_query = sqlx::query(&task_sql);
                     for id in chunk {
                         task_query = task_query.bind(id);
                     }
                     task_query.execute(&mut *tx).await?;
 
-                    let step_sql = format!("DELETE FROM step_runs WHERE run_id IN ({})", placeholders);
+                    let step_sql =
+                        format!("DELETE FROM step_runs WHERE run_id IN ({})", placeholders);
                     let mut step_query = sqlx::query(&step_sql);
                     for id in chunk {
                         step_query = step_query.bind(id);
@@ -1159,10 +1219,7 @@ fn current_timestamp() -> i64 {
 }
 
 fn escape_like_pattern(input: &str) -> String {
-    input
-        .replace("\\\\", "\\\\\\\\")
-        .replace('%', "\\\\%")
-        .replace('_', "\\\\_")
+    input.replace("\\\\", "\\\\\\\\").replace('%', "\\\\%").replace('_', "\\\\_")
 }
 
 fn apply_log_filters(builder: &mut QueryBuilder<'_, Sqlite>, query: &LogQuery) {

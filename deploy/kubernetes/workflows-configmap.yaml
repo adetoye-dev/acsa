@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: acsa-workflows
+  labels:
+    app: acsa
+data:
+  README: |
+    Replace this ConfigMap with your workflow YAML files or mount a dedicated volume.
+    The container expects workflows under /app/workflows.
