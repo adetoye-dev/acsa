@@ -4,10 +4,10 @@ Last updated: 2026-03-09
 
 ## Current Status
 
-- Project stage: UI workflow APIs and visual editor integration implemented
-- Current phase: Phase 6 complete, Phase 7 pending review gate
-- Coding status: Persisted pause/resume, connector SDK/runtime, workflow UI APIs, and the live visual editor are in place
-- Approval status: Waiting for user review before starting Phase 7
+- Project stage: Observability, run history, metrics, and execution views implemented
+- Current phase: Phase 7 complete, Phase 8 pending review gate
+- Coding status: Structured logging, run history APIs, metrics export, retention controls, and the UI execution history view are in place
+- Approval status: Waiting for user review before starting Phase 8
 
 ## Completed This Session
 
@@ -70,6 +70,13 @@ Last updated: 2026-03-09
 - Added a human-task inbox in the UI for persisted approval and manual-input resolution
 - Added a Next.js engine proxy via `ACSA_ENGINE_URL` for local-first UI development
 - Verified the new workflow APIs, manual run flow, and human-task resume path against a live Phase 6 server session
+- Added the observability module for tracing, redaction, metrics export, and retention policy handling
+- Added paginated run-history, run-detail, and filtered log queries on top of the SQLite run store
+- Added Prometheus-style metrics export at `/metrics`
+- Added background retention cleanup driven by `ACSA_LOG_RETENTION_DAYS` and `ACSA_RUN_RETENTION_DAYS`
+- Added the UI run-history panel with metrics cards, run filtering, step timelines, and log search
+- Added observability documentation for metrics, log redaction, retention, and UI execution views
+- Verified the observability endpoints and UI-facing run history APIs against a live Phase 7 server session
 
 ## Current Repository Baseline
 
@@ -84,16 +91,18 @@ Last updated: 2026-03-09
 - `examples/process-connector/` is the subprocess connector sample used by `connector-test`
 - `examples/wasm-plugin/` is the starter Extism/WASM connector template
 - Phase 2 CI workflow is present under `.github/workflows/ci.yml`
+- Phase 7 observability endpoints are live under `/metrics` and `/api/runs`
+- The UI now includes a run-history panel backed by the engine observability APIs
 
 ## Next Action
 
-If the user approves, begin Phase 7 only:
+If the user approves, begin Phase 8 only:
 
-1. Add structured logs, metrics, run history APIs, and retention controls
-2. Expose execution history and summary data to the UI
-3. Expand observability docs and validation for redaction and retention behavior
-4. Keep the observability surface aligned with the existing SQLite-backed run model
-5. Stop and ask for review before Phase 8
+1. Build distribution assets for the Rust engine and Next.js UI
+2. Add Docker packaging and release-oriented install paths
+3. Document local deployment and packaging workflows
+4. Keep the packaging path aligned with the existing local-first architecture
+5. Stop and ask for review before Phase 9
 
 ## Non-Negotiable Execution Rules
 
@@ -176,8 +185,8 @@ If a phase introduces material risk without a corresponding validation or mitiga
   - **RUSTSEC-2026-0020** (CVSS 6.9 Medium): Guest-controlled resource exhaustion in WASI implementations
   - **RUSTSEC-2026-0021** (CVSS 6.9 Medium): Panic adding excessive fields to `wasi:http/types.fields`
   - **RUSTSEC-2026-0006** (CVSS 4.1 Medium): Wasmtime segfault or unused out-of-sandbox load with `f64.copysign` on x86-64
-  - **Assessment**: Safe to proceed to Phase 6 with runtime mitigations. All advisories are Medium severity and affect guest-controlled edge cases. WASM connectors are sandboxed and the workflow engine terminates on timeout.
-  - **Immediate measures**: (1) Document the advisories in acceptance criteria, (2) Pin Wasmtime >=41.0.4 when extism updates, (3) Enforce strict timeout/memory limits in connector manifests, (4) Mark subprocess memory-caps as required follow-up for Phase 7 hardening.
+  - **Assessment**: Safe to proceed to Phase 8 with runtime mitigations. All advisories are Medium severity and affect guest-controlled edge cases. WASM connectors are sandboxed and the workflow engine terminates on timeout.
+  - **Immediate measures**: (1) Document the advisories in acceptance criteria, (2) Pin Wasmtime >=41.0.4 when extism updates, (3) Enforce strict timeout/memory limits in connector manifests, (4) Keep subprocess memory caps and WASM dependency upgrades on the Phase 10 hardening track.
 - Subprocess connectors enforce timeout and JSON validation today, but OS-level memory caps remain a follow-on hardening task because the current implementation avoids unsafe/platform-specific limit code.
 
 ## Resume Protocol For Future Sessions

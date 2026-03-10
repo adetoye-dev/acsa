@@ -36,6 +36,7 @@ use crate::{
     connectors::load_connectors_into,
     models::{Step, Trigger, Workflow},
     nodes::{split_control, BuiltInNodeConfig, NodeError, NodeOutcome, NodePause, NodeRegistry},
+    observability::{record_log, LogLevel},
     storage::{HumanTaskRecord, NewHumanTask, RunStore, StorageError},
 };
 
@@ -144,6 +145,14 @@ impl WorkflowEngine {
         let workflow_snapshot = serde_json::to_string(&plan.workflow)?;
         let run =
             self.store.start_run(&plan.workflow.name, &workflow_snapshot, &initial_payload).await?;
+        record_log(
+            &self.store,
+            LogLevel::Info,
+            Some(&run.id),
+            None,
+            format!("workflow '{}' execution started", plan.workflow.name),
+        )
+        .await?;
         self.execute_run_state(plan, &run.id, initial_payload, PersistedRunState::fresh(plan)).await
     }
 
@@ -180,6 +189,14 @@ impl WorkflowEngine {
 
         self.store.resolve_human_task(task_id, &response).await?;
         self.store.complete_step_success(&task.step_run_id, &persisted_outcome(&outcome)).await?;
+        record_log(
+            &self.store,
+            LogLevel::Info,
+            Some(&run.id),
+            Some(&task.step_id),
+            format!("human task '{task_id}' resolved and workflow run resumed"),
+        )
+        .await?;
         state.outputs.insert(task.step_id.clone(), outcome.payload.clone());
         let mut ready_steps = VecDeque::from(std::mem::take(&mut state.ready_steps));
         {
@@ -281,6 +298,14 @@ impl WorkflowEngine {
                             step_run_id: &step_paused.step_run_id,
                         })
                         .await?;
+                    record_log(
+                        &self.store,
+                        LogLevel::Warn,
+                        Some(run_id),
+                        Some(&step_paused.step_id),
+                        format!("step paused for human task '{}' ({})", task.id, task.kind),
+                    )
+                    .await?;
                     pending_tasks.push(task);
                 }
                 Ok(Err(step_failure)) => {
@@ -290,6 +315,7 @@ impl WorkflowEngine {
                 }
                 Err(source) => {
                     let message = format!("step task failed to join: {source}");
+                    record_log(&self.store, LogLevel::Error, Some(run_id), None, &message).await?;
                     self.store.complete_run_failure(run_id, &message).await?;
                     return Err(EngineError::StepJoin { source });
                 }
@@ -297,6 +323,14 @@ impl WorkflowEngine {
         }
 
         if let Some(step_failure) = failure {
+            record_log(
+                &self.store,
+                LogLevel::Error,
+                Some(run_id),
+                Some(&step_failure.step_id),
+                format!("workflow execution failed: {}", step_failure.error),
+            )
+            .await?;
             self.store.complete_run_failure(run_id, &step_failure.error).await?;
             return Err(EngineError::WorkflowRunFailed {
                 error: step_failure.error,
@@ -308,6 +342,18 @@ impl WorkflowEngine {
         state.ready_steps = ready_steps.into_iter().collect();
         if !pending_tasks.is_empty() {
             self.store.pause_run(run_id, &serde_json::to_string(&state)?).await?;
+            record_log(
+                &self.store,
+                LogLevel::Warn,
+                Some(run_id),
+                None,
+                format!(
+                    "workflow '{}' paused with {} pending human task(s)",
+                    plan.workflow.name,
+                    pending_tasks.len()
+                ),
+            )
+            .await?;
             return self
                 .build_summary(
                     run_id,
@@ -320,6 +366,14 @@ impl WorkflowEngine {
         }
 
         self.store.complete_run_success(run_id).await?;
+        record_log(
+            &self.store,
+            LogLevel::Info,
+            Some(run_id),
+            None,
+            format!("workflow '{}' completed successfully", plan.workflow.name),
+        )
+        .await?;
         self.build_summary(
             run_id,
             &plan.workflow.name,
@@ -738,6 +792,14 @@ impl SchedulerState<'_> {
             let inputs =
                 build_step_inputs(self.plan, &step_id, self.outputs, self.initial_payload)?;
             self.store.record_step_skipped(self.run_id, &step_id, &inputs).await?;
+            record_log(
+                self.store,
+                LogLevel::Info,
+                Some(self.run_id),
+                Some(&step_id),
+                "step skipped because its branch was not activated",
+            )
+            .await?;
             self.outputs.insert(step_id.clone(), Value::Null);
 
             for successor in self.plan.successors(&step_id) {
@@ -811,6 +873,18 @@ async fn execute_step_with_retries(
         let step_run = store.start_step_attempt(run_id, &step.id, attempt, &inputs).await.map_err(
             |error| StepExecutionFailure { step_id: step.id.clone(), error: error.to_string() },
         )?;
+        record_log(
+            store,
+            LogLevel::Info,
+            Some(run_id),
+            Some(&step.id),
+            format!("step attempt {attempt} started"),
+        )
+        .await
+        .map_err(|error| StepExecutionFailure {
+            step_id: step.id.clone(),
+            error: error.to_string(),
+        })?;
 
         let outcome =
             timeout(Duration::from_millis(timeout_ms), node.execute(&inputs, &params)).await;
@@ -827,6 +901,22 @@ async fn execute_step_with_retries(
                             error: error.to_string(),
                         },
                     )?;
+                    if let Err(log_error) = record_log(
+                        store,
+                        LogLevel::Warn,
+                        Some(run_id),
+                        Some(&step.id),
+                        format!("step paused waiting for human input on attempt {attempt}"),
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            run_id = run_id,
+                            step_id = %step.id,
+                            error = %log_error,
+                            "failed to record pause log"
+                        );
+                    }
                     return Ok(StepExecutionResult::Paused(StepExecutionPaused {
                         pause,
                         step_id: step.id.clone(),
@@ -840,6 +930,22 @@ async fn execute_step_with_retries(
                         error: error.to_string(),
                     },
                 )?;
+                if let Err(log_error) = record_log(
+                    store,
+                    LogLevel::Info,
+                    Some(run_id),
+                    Some(&step.id),
+                    format!("step attempt {attempt} completed successfully"),
+                )
+                .await
+                {
+                    tracing::error!(
+                        run_id = run_id,
+                        step_id = %step.id,
+                        error = %log_error,
+                        "failed to record success log"
+                    );
+                }
                 return Ok(StepExecutionResult::Success(StepExecutionSuccess {
                     outcome,
                     step_id: step.id.clone(),
@@ -853,6 +959,18 @@ async fn execute_step_with_retries(
                         error: storage_error.to_string(),
                     },
                 )?;
+                record_log(
+                    store,
+                    LogLevel::Warn,
+                    Some(run_id),
+                    Some(&step.id),
+                    format!("step attempt {attempt} failed: {message}"),
+                )
+                .await
+                .map_err(|error| StepExecutionFailure {
+                    step_id: step.id.clone(),
+                    error: error.to_string(),
+                })?;
 
                 if attempt == attempts {
                     return Err(StepExecutionFailure { step_id: step.id.clone(), error: message });
@@ -866,6 +984,18 @@ async fn execute_step_with_retries(
                         error: storage_error.to_string(),
                     },
                 )?;
+                record_log(
+                    store,
+                    LogLevel::Warn,
+                    Some(run_id),
+                    Some(&step.id),
+                    format!("step attempt {attempt} timed out after {timeout_ms}ms"),
+                )
+                .await
+                .map_err(|error| StepExecutionFailure {
+                    step_id: step.id.clone(),
+                    error: error.to_string(),
+                })?;
 
                 if attempt == attempts {
                     return Err(StepExecutionFailure { step_id: step.id.clone(), error: message });
@@ -875,6 +1005,18 @@ async fn execute_step_with_retries(
 
         let sleep_ms = backoff_for_attempt(backoff_ms, attempt);
         if sleep_ms > 0 {
+            record_log(
+                store,
+                LogLevel::Info,
+                Some(run_id),
+                Some(&step.id),
+                format!("retry scheduled in {sleep_ms}ms after attempt {attempt}"),
+            )
+            .await
+            .map_err(|error| StepExecutionFailure {
+                step_id: step.id.clone(),
+                error: error.to_string(),
+            })?;
             tokio::time::sleep(Duration::from_millis(sleep_ms)).await;
         }
     }
@@ -1051,7 +1193,7 @@ mod tests {
     use crate::{
         models::{RetryPolicy, Step, Trigger, Workflow},
         nodes::{BuiltInNodeConfig, Node, NodeError, NodeRegistry},
-        storage::RunStore,
+        storage::{LogQuery, RunStore},
     };
 
     #[test]
@@ -1388,6 +1530,43 @@ steps:
         assert_eq!(step_runs.len(), 2);
         assert_eq!(step_runs[0].status, "failed");
         assert_eq!(step_runs[1].status, "success");
+
+        cleanup_file(temp_db);
+    }
+
+    #[tokio::test]
+    async fn execution_records_logs_and_metrics() {
+        let workflow = Workflow {
+            version: "v1".to_string(),
+            name: "observability".to_string(),
+            trigger: Trigger { r#type: "manual".to_string(), details: Default::default() },
+            steps: vec![step("seed", "constant", json!({ "value": { "ok": true } }), vec![])],
+        };
+        let plan = compile_workflow(workflow).expect("workflow should plan");
+        let temp_db = temp_db_path("observability");
+        let store = RunStore::connect(&temp_db).await.expect("sqlite should initialize");
+        let engine = WorkflowEngine::new(&temp_db, ExecutionConfig::default())
+            .await
+            .expect("workflow engine should initialize");
+
+        let summary = engine
+            .execute_plan(&plan, json!({ "source": "test" }))
+            .await
+            .expect("workflow should execute");
+        let logs = store
+            .list_logs(&LogQuery {
+                run_id: Some(summary.run_id.clone()),
+                limit: 50,
+                ..LogQuery::default()
+            })
+            .await
+            .expect("logs should be queryable");
+        let metrics = store.metrics_snapshot().await.expect("metrics should be queryable");
+
+        assert!(logs.total >= 3);
+        assert_eq!(metrics.workflow_runs_total, 1);
+        assert_eq!(metrics.workflow_runs_success_total, 1);
+        assert!(metrics.step_executions_total >= 1);
 
         cleanup_file(temp_db);
     }

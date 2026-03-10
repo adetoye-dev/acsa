@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 async-trait = "0.1"
-axum = { version = "0.8.6", default-features = false, features = ["http1", "json", "original-uri", "tokio"] }
+axum = { version = "0.8.6", default-features = false, features = ["http1", "json", "original-uri", "query", "tokio"] }
 chrono = { version = "0.4.42", default-features = false, features = ["clock"] }
 cron = "0.13.0"
 extism = "1.13.0"
@@ -21,6 +21,8 @@ petgraph = "0.6"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "postgres"] }
 thiserror = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1.18.1", features = ["v4"] }
 
 [lints.rust]

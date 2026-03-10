@@ -25,9 +25,12 @@ use std::{
 
 use axum::{
     body::Bytes,
-    extract::{OriginalUri, Path as AxumPath, State},
-    http::{header::HeaderName, HeaderMap, StatusCode},
-    response::IntoResponse,
+    extract::{OriginalUri, Path as AxumPath, Query, State},
+    http::{
+        header::{HeaderName, CONTENT_TYPE},
+        HeaderMap, StatusCode,
+    },
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -38,6 +41,7 @@ use serde_json::{json, Value};
 use serde_yaml::Value as YamlValue;
 use subtle::ConstantTimeEq;
 use thiserror::Error;
+use tracing::{error, info};
 
 use crate::{
     connectors::{discover_connector_manifests, ConnectorError},
@@ -46,6 +50,13 @@ use crate::{
         WorkflowEngine, WorkflowPlan,
     },
     models::{Trigger, Workflow},
+    observability::{
+        current_timestamp, metrics_text, payload_visibility_enabled, record_log,
+        redact_json_string, redact_text, LogLevel, RetentionPolicy,
+    },
+    storage::{
+        LogQuery, LogRecord, PaginatedResponse, RunQuery, RunRecord, RunStore, StepRunRecord,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -90,6 +101,22 @@ struct RunWorkflowRequest {
 #[derive(Debug, Deserialize)]
 struct SaveWorkflowRequest {
     yaml: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RunLogsQuery {
+    level: Option<String>,
+    page: Option<usize>,
+    page_size: Option<usize>,
+    search: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RunsQuery {
+    page: Option<usize>,
+    page_size: Option<usize>,
+    status: Option<String>,
+    workflow_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -140,6 +167,70 @@ struct WorkflowSummary {
     trigger_type: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct HumanTaskView {
+    completed_at: Option<i64>,
+    created_at: i64,
+    details: Option<String>,
+    field: Option<String>,
+    id: String,
+    kind: String,
+    prompt: String,
+    response: Option<String>,
+    run_id: String,
+    status: String,
+    step_id: String,
+    step_run_id: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct LogPageResponse {
+    logs: Vec<LogRecord>,
+    page: usize,
+    page_size: usize,
+    total: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RunDetailResponse {
+    human_tasks: Vec<HumanTaskView>,
+    run: RunView,
+    step_runs: Vec<StepRunView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RunPageResponse {
+    page: usize,
+    page_size: usize,
+    runs: Vec<RunView>,
+    total: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RunView {
+    duration_seconds: Option<i64>,
+    error_message: Option<String>,
+    finished_at: Option<i64>,
+    id: String,
+    started_at: i64,
+    status: String,
+    workflow_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StepRunView {
+    attempt: u32,
+    duration_seconds: Option<i64>,
+    error_message: Option<String>,
+    finished_at: Option<i64>,
+    id: String,
+    input: Option<String>,
+    output: Option<String>,
+    started_at: i64,
+    status: String,
+    step_id: String,
+}
+
 pub async fn serve(
     engine: WorkflowEngine,
     config: TriggerServerConfig,
@@ -174,9 +265,14 @@ pub async fn serve(
         }
     }
 
+    let retention_store = engine.store().clone();
     let app = Router::new()
         .route("/healthz", get(health))
+        .route("/metrics", get(export_metrics))
         .route("/api/node-catalog", get(list_node_catalog))
+        .route("/api/runs", get(list_runs))
+        .route("/api/runs/{run_id}", get(get_run_detail))
+        .route("/api/runs/{run_id}/logs", get(get_run_logs))
         .route("/api/workflows", get(list_workflows).post(create_workflow))
         .route(
             "/api/workflows/{workflow_id}",
@@ -193,6 +289,7 @@ pub async fn serve(
             webhook_workflows: Arc::new(webhook_workflows),
             workflows_dir: config.workflows_dir,
         });
+    spawn_retention_task(retention_store);
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
@@ -201,7 +298,7 @@ pub async fn serve(
 fn spawn_cron_trigger(engine: WorkflowEngine, plan: WorkflowPlan) {
     tokio::spawn(async move {
         if let Err(error) = run_cron_trigger(engine, plan).await {
-            eprintln!("acsa cron trigger error: {error}");
+            tracing::error!(error = %error, "acsa cron trigger error");
         }
     });
 }
@@ -228,14 +325,45 @@ async fn run_cron_trigger(engine: WorkflowEngine, plan: WorkflowPlan) -> Result<
             "scheduled_for": next_run.to_rfc3339(),
             "workflow_name": plan.workflow.name
         });
+        let _ = record_log(
+            engine.store(),
+            LogLevel::Info,
+            None,
+            None,
+            format!("cron trigger fired for workflow '{}'", plan.workflow.name),
+        )
+        .await;
         if let Err(error) = engine.execute_plan(&plan, payload).await {
-            eprintln!("acsa cron workflow '{}' failed: {error}", plan.workflow.name);
+            let _ = record_log(
+                engine.store(),
+                LogLevel::Error,
+                None,
+                None,
+                format!("cron workflow '{}' failed: {error}", plan.workflow.name),
+            )
+            .await;
+            tracing::error!(workflow = %plan.workflow.name, error = %error, "acsa cron workflow failed");
         }
     }
 }
 
 async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
+}
+
+async fn export_metrics(State(state): State<AppState>) -> Response {
+    match state.engine.store().metrics_snapshot().await {
+        Ok(snapshot) => (
+            StatusCode::OK,
+            [(CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+            metrics_text(&snapshot),
+        )
+            .into_response(),
+        Err(error) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+                .into_response()
+        }
+    }
 }
 
 async fn list_node_catalog(State(state): State<AppState>) -> impl IntoResponse {
@@ -258,6 +386,92 @@ async fn list_workflows(State(state): State<AppState>) -> impl IntoResponse {
         Ok(inventory) => (StatusCode::OK, Json(json!(inventory))),
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+        }
+    }
+}
+
+async fn list_runs(State(state): State<AppState>, Query(query): Query<RunsQuery>) -> Response {
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(12).clamp(1, 100);
+    let run_query = RunQuery {
+        limit: page_size,
+        offset: (page - 1) * page_size,
+        started_after: None,
+        started_before: None,
+        status: query.status,
+        workflow_name: query.workflow_name,
+    };
+
+    match state.engine.store().list_runs_page(&run_query).await {
+        Ok(result) => (
+            StatusCode::OK,
+            Json(json!(RunPageResponse {
+                page,
+                page_size,
+                runs: result.items.into_iter().map(run_view).collect(),
+                total: result.total,
+            })),
+        )
+            .into_response(),
+        Err(error) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+                .into_response()
+        }
+    }
+}
+
+async fn get_run_detail(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<String>,
+) -> Response {
+    match state.engine.store().get_run_detail(&run_id).await {
+        Ok((run, step_runs, human_tasks)) => (
+            StatusCode::OK,
+            Json(json!(RunDetailResponse {
+                human_tasks: human_tasks.into_iter().map(human_task_view).collect(),
+                run: run_view(run),
+                step_runs: step_runs.into_iter().map(step_run_view).collect(),
+            })),
+        )
+            .into_response(),
+        Err(error) => {
+            use crate::storage::StorageError;
+            let (status, message) = match &error {
+                StorageError::RunNotFound(_) | StorageError::HumanTaskNotFound(_) => {
+                    (StatusCode::NOT_FOUND, error.to_string())
+                }
+                _ => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
+                }
+            };
+            (status, Json(json!({ "error": message }))).into_response()
+        }
+    }
+}
+
+async fn get_run_logs(
+    State(state): State<AppState>,
+    AxumPath(run_id): AxumPath<String>,
+    Query(query): Query<RunLogsQuery>,
+) -> Response {
+    let page = query.page.unwrap_or(1).max(1);
+    let page_size = query.page_size.unwrap_or(50).clamp(1, 200);
+    let log_query = LogQuery {
+        level: query.level,
+        limit: page_size,
+        offset: (page - 1) * page_size,
+        run_id: Some(run_id),
+        search: query.search,
+    };
+
+    match state.engine.store().list_logs(&log_query).await {
+        Ok(PaginatedResponse { items, total }) => {
+            (StatusCode::OK, Json(json!(LogPageResponse { logs: items, page, page_size, total })))
+                .into_response()
+        }
+        Err(error) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+                .into_response()
         }
     }
 }
@@ -933,6 +1147,92 @@ fn write_workflow_file(
         summary: build_workflow_summary(workflow_id, workflow),
         yaml,
     })
+}
+
+fn human_task_view(task: crate::storage::HumanTaskRecord) -> HumanTaskView {
+    HumanTaskView {
+        completed_at: task.completed_at,
+        created_at: task.created_at,
+        details: task.details.as_deref().map(redact_json_string),
+        field: task.field,
+        id: task.id,
+        kind: task.kind,
+        prompt: redact_text(&task.prompt),
+        response: task.response.as_deref().map(redact_json_string),
+        run_id: task.run_id,
+        status: task.status,
+        step_id: task.step_id,
+        step_run_id: task.step_run_id,
+    }
+}
+
+fn run_view(run: RunRecord) -> RunView {
+    RunView {
+        duration_seconds: run
+            .finished_at
+            .map(|finished_at| finished_at.saturating_sub(run.started_at)),
+        error_message: run.error_message.map(|message| redact_text(&message)),
+        finished_at: run.finished_at,
+        id: run.id,
+        started_at: run.started_at,
+        status: run.status,
+        workflow_name: run.workflow_name,
+    }
+}
+
+fn step_run_view(step_run: StepRunRecord) -> StepRunView {
+    StepRunView {
+        attempt: step_run.attempt,
+        duration_seconds: step_run
+            .finished_at
+            .map(|finished_at| finished_at.saturating_sub(step_run.started_at)),
+        error_message: step_run.error_message.map(|message| redact_text(&message)),
+        finished_at: step_run.finished_at,
+        id: step_run.id,
+        input: if payload_visibility_enabled() {
+            step_run.input.as_deref().map(redact_json_string)
+        } else {
+            None
+        },
+        output: if payload_visibility_enabled() {
+            step_run.output.as_deref().map(redact_json_string)
+        } else {
+            None
+        },
+        started_at: step_run.started_at,
+        status: step_run.status,
+        step_id: step_run.step_id,
+    }
+}
+
+fn spawn_retention_task(store: RunStore) {
+    let Some(policy) = RetentionPolicy::from_env() else {
+        return;
+    };
+
+    tokio::spawn(async move {
+        loop {
+            let now = current_timestamp();
+            match store
+                .purge_history(policy.run_cutoff_timestamp(now), policy.log_cutoff_timestamp(now))
+                .await
+            {
+                Ok(summary) if summary.purged_logs > 0 || summary.purged_runs > 0 => {
+                    info!(
+                        purged_logs = summary.purged_logs,
+                        purged_runs = summary.purged_runs,
+                        "acsa retention cleanup removed old observability records"
+                    );
+                }
+                Ok(_) => {}
+                Err(cleanup_error) => {
+                    error!(error = %cleanup_error, "acsa retention cleanup failed");
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(60 * 60)).await;
+        }
+    });
 }
 
 fn authenticate_webhook(workflow: &WebhookWorkflow, headers: &HeaderMap) -> Result<(), String> {

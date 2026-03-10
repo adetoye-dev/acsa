@@ -25,6 +25,7 @@ use acsa_core::{
         compile_workflow, load_workflow_from_path, load_workflows_from_dir, ExecutionConfig,
         WorkflowEngine,
     },
+    observability::init_tracing,
     triggers::{serve, TriggerServerConfig},
 };
 
@@ -32,6 +33,7 @@ type MainError = Box<dyn std::error::Error>;
 
 #[tokio::main]
 async fn main() -> Result<(), MainError> {
+    init_tracing();
     let cli = match Cli::from_env() {
         Ok(cli) => cli,
         Err(CliError::HelpRequested) => {

@@ -30,7 +30,7 @@ Expected behavior:
 - exposes `/api/workflows` and `/api/node-catalog` for the visual editor
 - runs connector manifests locally for subprocess and WASM development
 
-## Run the Phase 6 UI
+## Run the Phase 7 UI
 
 ```bash
 ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
@@ -46,6 +46,7 @@ The current editor is live against the engine API. It includes:
 - a node inspector for trigger settings, step ids, types, retry/timeout metadata, and YAML parameters
 - save and manual run actions
 - a human-task inbox for resolving persisted approval and manual-input gates
+- a run history panel with metrics, run filters, step timelines, and log search
 
 The Next.js app proxies `/engine/*` to `http://127.0.0.1:3001/*` by default. If the engine runs on a different address, set `ACSA_ENGINE_URL` before `npm run dev`.
 
@@ -55,6 +56,29 @@ Example:
 cd ui
 ACSA_ENGINE_URL=http://127.0.0.1:3010 npm run dev
 ```
+
+## Observability Example
+
+```bash
+# Metrics
+curl http://127.0.0.1:3001/metrics
+
+# Run history
+curl "http://127.0.0.1:3001/api/runs?page=1&page_size=12"
+
+# Run detail
+curl http://127.0.0.1:3001/api/runs/RUN_ID
+
+# Run logs
+curl "http://127.0.0.1:3001/api/runs/RUN_ID/logs?level=error&search=timeout"
+```
+
+Useful environment variables:
+
+- `ACSA_LOG_PAYLOADS=0` hides step input/output payloads from run-detail responses
+- `ACSA_LOG_FILE_PATH=./logs/acsa.log` mirrors redacted structured logs to a file
+- `ACSA_LOG_RETENTION_DAYS=30` purges old logs
+- `ACSA_RUN_RETENTION_DAYS=14` purges finished runs, step history, and related human tasks
 
 ## Workflow samples
 
@@ -106,3 +130,4 @@ cargo run -p acsa-core -- connector-test ./tmp-connectors/sample-echo/manifest.j
 - the workflow API rejects inline values for secret-like fields such as `secret`, `token`, and `password`; use `*_env` or `secrets_env` references instead
 - do not commit local `.env` files
 - treat logs as potentially sensitive and redact before persistence
+- disable payload visibility with `ACSA_LOG_PAYLOADS=0` when log data should stay minimal

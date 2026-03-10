@@ -35,8 +35,16 @@ import {
 
 import { HumanTaskInbox } from "./human-task-inbox";
 import { NodeInspector } from "./node-inspector";
+import { RunHistoryPanel } from "./run-history-panel";
 import { TopBar } from "./top-bar";
 import { WorkflowExplorer } from "./workflow-explorer";
+import {
+  parseMetricsSummary,
+  type LogPageResponse,
+  type MetricsSummary,
+  type RunDetailResponse,
+  type RunPageResponse
+} from "../lib/observability";
 import {
   addStepToWorkflow,
   createBlankWorkflow,
@@ -101,11 +109,21 @@ export function EditorShell() {
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [inspectorError, setInspectorError] = useState<string | null>(null);
   const [isBooting, setIsBooting] = useState(true);
+  const [isRefreshingHistory, setIsRefreshingHistory] = useState(false);
   const [isLoadingWorkflow, setIsLoadingWorkflow] = useState(false);
   const [isRefreshingTasks, setIsRefreshingTasks] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [lastRun, setLastRun] = useState<RunSummary | null>(null);
+  const [metrics, setMetrics] = useState<MetricsSummary | null>(null);
+  const [runDetail, setRunDetail] = useState<RunDetailResponse | null>(null);
+  const [runLogs, setRunLogs] = useState<LogPageResponse | null>(null);
+  const [runPage, setRunPage] = useState<RunPageResponse | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [runWorkflowFilter, setRunWorkflowFilter] = useState("");
+  const [runStatusFilter, setRunStatusFilter] = useState("");
+  const [logLevelFilter, setLogLevelFilter] = useState("");
+  const [logSearch, setLogSearch] = useState("");
 
   const activeWorkflow = activeWorkflowId ? documents[activeWorkflowId] ?? null : null;
   const canvas = useMemo(
@@ -119,11 +137,24 @@ export function EditorShell() {
     selectedNodeId === null
       ? null
       : canvas.nodes.find((node) => node.id === selectedNodeId) ?? null;
-  const isBusy = isBooting || isLoadingWorkflow || isRefreshingTasks || isRunning || isSaving;
+  const isBusy =
+    isBooting ||
+    isLoadingWorkflow ||
+    isRefreshingHistory ||
+    isRefreshingTasks ||
+    isRunning ||
+    isSaving;
 
   useEffect(() => {
     void bootstrap();
   }, []);
+
+  useEffect(() => {
+    if (isBooting) {
+      return;
+    }
+    void refreshRunHistory(selectedRunId);
+  }, [runStatusFilter, runWorkflowFilter, selectedRunId]);
 
   useEffect(() => {
     if (!activeWorkflow) {
@@ -143,6 +174,17 @@ export function EditorShell() {
     }
     setInspectorError(null);
   }, [activeWorkflow, selectedNode?.data.kind, selectedNode?.id]);
+
+  useEffect(() => {
+    if (isBooting || !selectedRunId) {
+      if (!selectedRunId) {
+        setRunDetail(null);
+        setRunLogs(null);
+      }
+      return;
+    }
+    void loadRunDetail(selectedRunId);
+  }, [isBooting, logLevelFilter, logSearch, selectedRunId]);
 
   async function bootstrap() {
     setIsBooting(true);
@@ -169,6 +211,7 @@ export function EditorShell() {
       if (preferredWorkflowId) {
         await loadWorkflowDocument(preferredWorkflowId);
       }
+      await refreshRunHistory();
       setLastAction("Loaded workflow inventory, node catalog, and pending tasks");
     } catch (error) {
       setGlobalError(errorMessage(error));
@@ -217,6 +260,63 @@ export function EditorShell() {
       null;
     setActiveWorkflowId(nextWorkflowId);
     return nextWorkflowId;
+  }
+
+  async function refreshRunHistory(preferredRunId?: string | null) {
+    setIsRefreshingHistory(true);
+    try {
+      const query = new URLSearchParams();
+      if (runWorkflowFilter.trim()) {
+        query.set("workflow_name", runWorkflowFilter.trim());
+      }
+      if (runStatusFilter.trim()) {
+        query.set("status", runStatusFilter.trim());
+      }
+      query.set("page", "1");
+      query.set("page_size", "12");
+
+      const [pageResponse, metricsText] = await Promise.all([
+        fetchEngineJson<RunPageResponse>(`/api/runs?${query.toString()}`),
+        fetchEngineText("/metrics")
+      ]);
+
+      setRunPage(pageResponse);
+      setMetrics(parseMetricsSummary(metricsText));
+      const nextRunId =
+        pageResponse.runs.find((run) => run.id === preferredRunId)?.id ??
+        pageResponse.runs.find((run) => run.id === selectedRunId)?.id ??
+        pageResponse.runs[0]?.id ??
+        null;
+      setSelectedRunId(nextRunId);
+      if (!nextRunId) {
+        setRunDetail(null);
+        setRunLogs(null);
+      }
+    } catch (error) {
+      setGlobalError(errorMessage(error));
+    } finally {
+      setIsRefreshingHistory(false);
+    }
+  }
+
+  async function loadRunDetail(runId: string) {
+    try {
+      const [detailResponse, logResponse] = await Promise.all([
+        fetchEngineJson<RunDetailResponse>(`/api/runs/${runId}`),
+        fetchEngineJson<LogPageResponse>(
+          `/api/runs/${runId}/logs?${new URLSearchParams({
+            ...(logLevelFilter ? { level: logLevelFilter } : {}),
+            ...(logSearch ? { search: logSearch } : {}),
+            page: "1",
+            page_size: "80"
+          }).toString()}`
+        )
+      ]);
+      setRunDetail(detailResponse);
+      setRunLogs(logResponse);
+    } catch (error) {
+      setGlobalError(errorMessage(error));
+    }
   }
 
   function applyActiveWorkflowUpdate(
@@ -425,11 +525,12 @@ export function EditorShell() {
     try {
       const nextWorkflowId = await refreshInventory(activeWorkflowId);
       await refreshHumanTasks();
+      await refreshRunHistory(selectedRunId);
       const workflowIdToLoad = nextWorkflowId ?? activeWorkflowId;
       if (workflowIdToLoad) {
         await loadWorkflowDocument(workflowIdToLoad);
       }
-      setLastAction("Refreshed workflow inventory and pending tasks");
+      setLastAction("Refreshed workflow inventory, tasks, and run history");
       setGlobalError(null);
     } catch (error) {
       setGlobalError(errorMessage(error));
@@ -456,6 +557,7 @@ export function EditorShell() {
       setLastRun(response);
       setRunStatus(`${response.status} • ${response.run_id.slice(0, 8)}`);
       await refreshHumanTasks();
+      await refreshRunHistory(response.run_id);
       setLastAction(
         response.status === "paused"
           ? `Run paused with ${response.pending_tasks.length} pending task(s)`
@@ -766,6 +868,7 @@ export function EditorShell() {
       setLastRun(response);
       setRunStatus(`${response.status} • ${response.run_id.slice(0, 8)}`);
       await refreshHumanTasks();
+      await refreshRunHistory(response.run_id);
       setLastAction(
         response.status === "paused"
           ? `Resolved task ${taskId} and the run paused again`
@@ -926,6 +1029,25 @@ export function EditorShell() {
             />
           </div>
         </section>
+
+        <RunHistoryPanel
+          isLoading={isRefreshingHistory}
+          logLevelFilter={logLevelFilter}
+          logSearch={logSearch}
+          logs={runLogs}
+          metrics={metrics}
+          onLogLevelFilterChange={setLogLevelFilter}
+          onLogSearchChange={setLogSearch}
+          onRefresh={() => void refreshRunHistory(selectedRunId)}
+          onRunStatusFilterChange={setRunStatusFilter}
+          onRunWorkflowFilterChange={setRunWorkflowFilter}
+          onSelectRun={setSelectedRunId}
+          runDetail={runDetail}
+          runPage={runPage}
+          runStatusFilter={runStatusFilter}
+          runWorkflowFilter={runWorkflowFilter}
+          selectedRunId={selectedRunId}
+        />
       </div>
     </main>
   );
@@ -965,6 +1087,21 @@ async function fetchEngineJson<T>(
   }
 
   return parsed as T;
+}
+
+async function fetchEngineText(
+  path: string,
+  init?: RequestInit
+): Promise<string> {
+  const response = await fetch(`${ENGINE_PROXY_BASE}${path}`, {
+    cache: "no-store",
+    ...init
+  });
+  const body = await response.text();
+  if (!response.ok) {
+    throw new Error(body || `Request failed with status ${response.status}`);
+  }
+  return body;
 }
 
 async function fetchEngineNoContent(

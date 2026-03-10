@@ -24,10 +24,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
-    Row, SqlitePool,
+    QueryBuilder, Row, Sqlite, SqlitePool,
 };
 use thiserror::Error;
 use uuid::Uuid;
+
+use crate::observability::{HistogramBucket, HistogramSnapshot, MetricsSnapshot};
 
 #[derive(Debug, Clone)]
 pub struct RunStore {
@@ -372,18 +374,94 @@ impl RunStore {
         Ok(record)
     }
 
-    pub async fn list_runs(&self) -> Result<Vec<RunRecord>, StorageError> {
-        let rows = sqlx::query(
+    pub async fn append_log(
+        &self,
+        run_id: Option<&str>,
+        step_id: Option<&str>,
+        level: &str,
+        message: &str,
+    ) -> Result<LogRecord, StorageError> {
+        let record = LogRecord {
+            id: Uuid::new_v4().to_string(),
+            level: level.to_string(),
+            message: message.to_string(),
+            run_id: run_id.map(str::to_string),
+            step_id: step_id.map(str::to_string),
+            timestamp: current_timestamp(),
+        };
+
+        sqlx::query(
             r#"
-            SELECT id, workflow_name, status, started_at, finished_at, error_message, workflow_snapshot, initial_payload, state_json
-            FROM runs
-            ORDER BY started_at DESC
+            INSERT INTO logs (id, run_id, step_id, timestamp, level, message)
+            VALUES (?, ?, ?, ?, ?, ?)
             "#,
         )
-        .fetch_all(&self.pool)
+        .bind(&record.id)
+        .bind(&record.run_id)
+        .bind(&record.step_id)
+        .bind(record.timestamp)
+        .bind(&record.level)
+        .bind(&record.message)
+        .execute(&self.pool)
         .await?;
 
-        rows.into_iter().map(map_run_row).collect()
+        Ok(record)
+    }
+
+    pub async fn get_run_detail(
+        &self,
+        run_id: &str,
+    ) -> Result<(RunRecord, Vec<StepRunRecord>, Vec<HumanTaskRecord>), StorageError> {
+        let run = self.get_run(run_id).await?;
+        let step_runs = self.list_step_runs(run_id).await?;
+        let human_tasks = self.list_human_tasks_by_run(run_id).await?;
+        Ok((run, step_runs, human_tasks))
+    }
+
+    pub async fn list_logs(
+        &self,
+        query: &LogQuery,
+    ) -> Result<PaginatedResponse<LogRecord>, StorageError> {
+        let total = count_logs(self, query).await?;
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            "SELECT id, run_id, step_id, timestamp, level, message FROM logs WHERE 1 = 1",
+        );
+        apply_log_filters(&mut builder, query);
+        builder.push(" ORDER BY timestamp DESC LIMIT ");
+        builder.push_bind(query.limit.max(1) as i64);
+        builder.push(" OFFSET ");
+        builder.push_bind(query.offset as i64);
+
+        let rows = builder.build().fetch_all(&self.pool).await?;
+        Ok(PaginatedResponse {
+            items: rows.into_iter().map(map_log_row).collect::<Result<Vec<_>, _>>()?,
+            total,
+        })
+    }
+
+    pub async fn list_runs(&self) -> Result<Vec<RunRecord>, StorageError> {
+        Ok(self.list_runs_page(&RunQuery { limit: 10_000, ..RunQuery::default() }).await?.items)
+    }
+
+    pub async fn list_runs_page(
+        &self,
+        query: &RunQuery,
+    ) -> Result<PaginatedResponse<RunRecord>, StorageError> {
+        let total = count_runs(self, query).await?;
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            "SELECT id, workflow_name, status, started_at, finished_at, error_message, workflow_snapshot, initial_payload, state_json FROM runs WHERE 1 = 1",
+        );
+        apply_run_filters(&mut builder, query);
+        builder.push(" ORDER BY started_at DESC LIMIT ");
+        builder.push_bind(query.limit.max(1) as i64);
+        builder.push(" OFFSET ");
+        builder.push_bind(query.offset as i64);
+
+        let rows = builder.build().fetch_all(&self.pool).await?;
+        Ok(PaginatedResponse {
+            items: rows.into_iter().map(map_run_row).collect::<Result<Vec<_>, _>>()?,
+            total,
+        })
     }
 
     pub async fn list_step_runs(&self, run_id: &str) -> Result<Vec<StepRunRecord>, StorageError> {
@@ -400,6 +478,25 @@ impl RunStore {
         .await?;
 
         rows.into_iter().map(map_step_run_row).collect()
+    }
+
+    pub async fn list_human_tasks_by_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<HumanTaskRecord>, StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, run_id, step_run_id, step_id, kind, status, prompt, field, details, response, created_at, completed_at
+            FROM human_tasks
+            WHERE run_id = ?
+            ORDER BY created_at ASC
+            "#,
+        )
+        .bind(run_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(map_human_task_row).collect()
     }
 
     pub async fn create_human_task(
@@ -532,6 +629,192 @@ impl RunStore {
         Ok(())
     }
 
+    pub async fn metrics_snapshot(&self) -> Result<MetricsSnapshot, StorageError> {
+        let status_rows =
+            sqlx::query(r#"SELECT status, COUNT(*) AS count FROM runs GROUP BY status"#)
+                .fetch_all(&self.pool)
+                .await?;
+        let mut snapshot = MetricsSnapshot::default();
+        for row in status_rows {
+            let status = row.try_get::<String, _>("status")?;
+            let count = row.try_get::<i64, _>("count")? as u64;
+            snapshot.workflow_runs_total += count;
+            match status.as_str() {
+                "failed" => snapshot.workflow_runs_failed_total = count,
+                "paused" => snapshot.workflow_runs_paused_total = count,
+                "running" => snapshot.workflow_runs_running_total = count,
+                "success" => snapshot.workflow_runs_success_total = count,
+                _ => {}
+            }
+        }
+
+        let step_status_rows =
+            sqlx::query(r#"SELECT status, COUNT(*) AS count FROM step_runs GROUP BY status"#)
+                .fetch_all(&self.pool)
+                .await?;
+        for row in step_status_rows {
+            let status = row.try_get::<String, _>("status")?;
+            let count = row.try_get::<i64, _>("count")? as u64;
+            if status != "skipped" {
+                snapshot.step_executions_total += count;
+            }
+            if status == "failed" {
+                snapshot.step_failures_total = count;
+            }
+        }
+
+        let retry_row = sqlx::query(r#"SELECT COUNT(*) AS count FROM step_runs WHERE attempt > 1"#)
+            .fetch_one(&self.pool)
+            .await?;
+        snapshot.step_retries_total = retry_row.try_get::<i64, _>("count")? as u64;
+
+        let run_metrics = sqlx::query(
+            r#"
+            SELECT
+                COUNT(*) AS count,
+                AVG(finished_at - started_at) AS avg_duration,
+                SUM(CASE WHEN (finished_at - started_at) < 1 THEN 1 ELSE 0 END) AS bucket_0_1s,
+                SUM(CASE WHEN (finished_at - started_at) >= 1 AND (finished_at - started_at) < 5 THEN 1 ELSE 0 END) AS bucket_1_5s,
+                SUM(CASE WHEN (finished_at - started_at) >= 5 AND (finished_at - started_at) < 10 THEN 1 ELSE 0 END) AS bucket_5_10s,
+                SUM(CASE WHEN (finished_at - started_at) >= 10 AND (finished_at - started_at) < 30 THEN 1 ELSE 0 END) AS bucket_10_30s,
+                SUM(CASE WHEN (finished_at - started_at) >= 30 AND (finished_at - started_at) < 60 THEN 1 ELSE 0 END) AS bucket_30_60s,
+                SUM(CASE WHEN (finished_at - started_at) >= 60 THEN 1 ELSE 0 END) AS bucket_60s_plus
+            FROM runs
+            WHERE finished_at IS NOT NULL
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        let step_metrics = sqlx::query(
+            r#"
+            SELECT
+                COUNT(*) AS count,
+                AVG(finished_at - started_at) AS avg_duration,
+                SUM(CASE WHEN (finished_at - started_at) < 1 THEN 1 ELSE 0 END) AS bucket_0_1s,
+                SUM(CASE WHEN (finished_at - started_at) >= 1 AND (finished_at - started_at) < 2 THEN 1 ELSE 0 END) AS bucket_1_2s,
+                SUM(CASE WHEN (finished_at - started_at) >= 2 AND (finished_at - started_at) < 5 THEN 1 ELSE 0 END) AS bucket_2_5s,
+                SUM(CASE WHEN (finished_at - started_at) >= 5 AND (finished_at - started_at) < 10 THEN 1 ELSE 0 END) AS bucket_5_10s,
+                SUM(CASE WHEN (finished_at - started_at) >= 10 THEN 1 ELSE 0 END) AS bucket_10s_plus
+            FROM step_runs
+            WHERE finished_at IS NOT NULL
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        if let Ok(avg) = run_metrics.try_get::<Option<f64>, _>("avg_duration") {
+            snapshot.workflow_average_duration_seconds = avg.unwrap_or(0.0);
+        }
+
+        let run_buckets = vec![
+            HistogramBucket { le: 1.0, count: run_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) as u64 },
+            HistogramBucket { le: 5.0, count: (run_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_1_5s").unwrap_or(0)) as u64 },
+            HistogramBucket { le: 10.0, count: (run_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_1_5s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_5_10s").unwrap_or(0)) as u64 },
+            HistogramBucket { le: 30.0, count: (run_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_1_5s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_5_10s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_10_30s").unwrap_or(0)) as u64 },
+            HistogramBucket { le: 60.0, count: (run_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_1_5s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_5_10s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_10_30s").unwrap_or(0) + run_metrics.try_get::<i64, _>("bucket_30_60s").unwrap_or(0)) as u64 },
+            HistogramBucket { le: f64::INFINITY, count: run_metrics.try_get::<i64, _>("count").unwrap_or(0) as u64 },
+        ];
+        let run_sum = run_metrics.try_get::<Option<f64>, _>("avg_duration").unwrap_or(None).unwrap_or(0.0) * (run_metrics.try_get::<i64, _>("count").unwrap_or(0) as f64);
+        snapshot.workflow_duration_histogram = HistogramSnapshot {
+            buckets: run_buckets,
+            count: run_metrics.try_get::<i64, _>("count").unwrap_or(0) as u64,
+            sum: run_sum,
+        };
+
+        let step_buckets = vec![
+            HistogramBucket { le: 1.0, count: step_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) as u64 },
+            HistogramBucket { le: 2.0, count: (step_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) + step_metrics.try_get::<i64, _>("bucket_1_2s").unwrap_or(0)) as u64 },
+            HistogramBucket { le: 5.0, count: (step_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) + step_metrics.try_get::<i64, _>("bucket_1_2s").unwrap_or(0) + step_metrics.try_get::<i64, _>("bucket_2_5s").unwrap_or(0)) as u64 },
+            HistogramBucket { le: 10.0, count: (step_metrics.try_get::<i64, _>("bucket_0_1s").unwrap_or(0) + step_metrics.try_get::<i64, _>("bucket_1_2s").unwrap_or(0) + step_metrics.try_get::<i64, _>("bucket_2_5s").unwrap_or(0) + step_metrics.try_get::<i64, _>("bucket_5_10s").unwrap_or(0)) as u64 },
+            HistogramBucket { le: f64::INFINITY, count: step_metrics.try_get::<i64, _>("count").unwrap_or(0) as u64 },
+        ];
+        let step_sum = step_metrics.try_get::<Option<f64>, _>("avg_duration").unwrap_or(None).unwrap_or(0.0) * (step_metrics.try_get::<i64, _>("count").unwrap_or(0) as f64);
+        snapshot.step_duration_histogram = HistogramSnapshot {
+            buckets: step_buckets,
+            count: step_metrics.try_get::<i64, _>("count").unwrap_or(0) as u64,
+            sum: step_sum,
+        };
+
+        Ok(snapshot)
+    }
+
+    pub async fn purge_history(
+        &self,
+        run_finished_before: Option<i64>,
+        log_before: Option<i64>,
+    ) -> Result<PurgeSummary, StorageError> {
+        let mut summary = PurgeSummary::default();
+        let mut tx = self.pool.begin().await?;
+
+        if let Some(run_finished_before) = run_finished_before {
+            let rows = sqlx::query(
+                r#"
+                SELECT id
+                FROM runs
+                WHERE finished_at IS NOT NULL
+                  AND finished_at < ?
+                  AND status != ?
+                "#,
+            )
+            .bind(run_finished_before)
+            .bind(RunStatus::Running.as_str())
+            .fetch_all(&mut *tx)
+            .await?;
+
+            let run_ids: Vec<String> = rows
+                .into_iter()
+                .filter_map(|row| row.try_get::<String, _>("id").ok())
+                .collect();
+
+            if !run_ids.is_empty() {
+                const BATCH_SIZE: usize = 500;
+                for chunk in run_ids.chunks(BATCH_SIZE) {
+                    let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+
+                    let log_sql = format!("DELETE FROM logs WHERE run_id IN ({})", placeholders);
+                    let mut log_query = sqlx::query(&log_sql);
+                    for id in chunk {
+                        log_query = log_query.bind(id);
+                    }
+                    summary.purged_logs += log_query.execute(&mut *tx).await?.rows_affected();
+
+                    let task_sql = format!("DELETE FROM human_tasks WHERE run_id IN ({})", placeholders);
+                    let mut task_query = sqlx::query(&task_sql);
+                    for id in chunk {
+                        task_query = task_query.bind(id);
+                    }
+                    task_query.execute(&mut *tx).await?;
+
+                    let step_sql = format!("DELETE FROM step_runs WHERE run_id IN ({})", placeholders);
+                    let mut step_query = sqlx::query(&step_sql);
+                    for id in chunk {
+                        step_query = step_query.bind(id);
+                    }
+                    step_query.execute(&mut *tx).await?;
+
+                    let run_sql = format!("DELETE FROM runs WHERE id IN ({})", placeholders);
+                    let mut run_query = sqlx::query(&run_sql);
+                    for id in chunk {
+                        run_query = run_query.bind(id);
+                    }
+                    summary.purged_runs += run_query.execute(&mut *tx).await?.rows_affected();
+                }
+            }
+        }
+
+        if let Some(log_before) = log_before {
+            summary.purged_logs += sqlx::query("DELETE FROM logs WHERE timestamp < ?")
+                .bind(log_before)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+        }
+
+        tx.commit().await?;
+        Ok(summary)
+    }
+
     async fn initialize(&self) -> Result<(), StorageError> {
         sqlx::query(
             r#"
@@ -643,6 +926,9 @@ impl RunStore {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_logs_run_id ON logs(run_id)")
             .execute(&self.pool)
             .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_logs_timestamp ON logs(timestamp)")
+            .execute(&self.pool)
+            .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_trigger_state_next_run_at ON trigger_state(next_run_at)")
             .execute(&self.pool)
             .await?;
@@ -734,6 +1020,16 @@ pub struct StepRunRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LogRecord {
+    pub id: String,
+    pub run_id: Option<String>,
+    pub step_id: Option<String>,
+    pub timestamp: i64,
+    pub level: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HumanTaskRecord {
     pub id: String,
     pub run_id: String,
@@ -788,6 +1084,37 @@ pub enum HumanTaskStatus {
     Resolved,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LogQuery {
+    pub level: Option<String>,
+    pub limit: usize,
+    pub offset: usize,
+    pub run_id: Option<String>,
+    pub search: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunQuery {
+    pub limit: usize,
+    pub offset: usize,
+    pub started_after: Option<i64>,
+    pub started_before: Option<i64>,
+    pub status: Option<String>,
+    pub workflow_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PaginatedResponse<T> {
+    pub items: Vec<T>,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PurgeSummary {
+    pub purged_logs: u64,
+    pub purged_runs: u64,
+}
+
 impl HumanTaskStatus {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -831,6 +1158,63 @@ fn current_timestamp() -> i64 {
         .as_secs() as i64
 }
 
+fn escape_like_pattern(input: &str) -> String {
+    input
+        .replace("\\\\", "\\\\\\\\")
+        .replace('%', "\\\\%")
+        .replace('_', "\\\\_")
+}
+
+fn apply_log_filters(builder: &mut QueryBuilder<'_, Sqlite>, query: &LogQuery) {
+    if let Some(run_id) = query.run_id.as_deref() {
+        builder.push(" AND run_id = ");
+        builder.push_bind(run_id.to_string());
+    }
+    if let Some(level) = query.level.as_deref() {
+        builder.push(" AND level = ");
+        builder.push_bind(level.to_string());
+    }
+    if let Some(search) = query.search.as_deref() {
+        builder.push(" AND message LIKE ");
+        let escaped = escape_like_pattern(search);
+        builder.push_bind(format!("%{escaped}%"));
+        builder.push(" ESCAPE '\\\\'");
+    }
+}
+
+fn apply_run_filters(builder: &mut QueryBuilder<'_, Sqlite>, query: &RunQuery) {
+    if let Some(workflow_name) = query.workflow_name.as_deref() {
+        builder.push(" AND workflow_name = ");
+        builder.push_bind(workflow_name.to_string());
+    }
+    if let Some(status) = query.status.as_deref() {
+        builder.push(" AND status = ");
+        builder.push_bind(status.to_string());
+    }
+    if let Some(started_after) = query.started_after {
+        builder.push(" AND started_at >= ");
+        builder.push_bind(started_after);
+    }
+    if let Some(started_before) = query.started_before {
+        builder.push(" AND started_at <= ");
+        builder.push_bind(started_before);
+    }
+}
+
+async fn count_logs(store: &RunStore, query: &LogQuery) -> Result<u64, StorageError> {
+    let mut builder = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) AS count FROM logs WHERE 1 = 1");
+    apply_log_filters(&mut builder, query);
+    let row = builder.build().fetch_one(store.pool()).await?;
+    Ok(row.try_get::<i64, _>("count")? as u64)
+}
+
+async fn count_runs(store: &RunStore, query: &RunQuery) -> Result<u64, StorageError> {
+    let mut builder = QueryBuilder::<Sqlite>::new("SELECT COUNT(*) AS count FROM runs WHERE 1 = 1");
+    apply_run_filters(&mut builder, query);
+    let row = builder.build().fetch_one(store.pool()).await?;
+    Ok(row.try_get::<i64, _>("count")? as u64)
+}
+
 fn map_run_row(row: sqlx::sqlite::SqliteRow) -> Result<RunRecord, StorageError> {
     Ok(RunRecord {
         id: row.try_get("id")?,
@@ -864,6 +1248,17 @@ fn map_step_run_row(row: sqlx::sqlite::SqliteRow) -> Result<StepRunRecord, Stora
         input: row.try_get("input")?,
         output: row.try_get("output")?,
         error_message: row.try_get("error_message")?,
+    })
+}
+
+fn map_log_row(row: sqlx::sqlite::SqliteRow) -> Result<LogRecord, StorageError> {
+    Ok(LogRecord {
+        id: row.try_get("id")?,
+        run_id: row.try_get("run_id")?,
+        step_id: row.try_get("step_id")?,
+        timestamp: row.try_get("timestamp")?,
+        level: row.try_get("level")?,
+        message: row.try_get("message")?,
     })
 }
 

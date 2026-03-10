@@ -89,4 +89,8 @@ steps:
 - Approval and manual-input nodes persist pending human tasks in SQLite and can be resumed through the HTTP API.
 - External connector nodes are discovered from manifest files and executed either as subprocesses or Extism-backed WASM plugins.
 - The visual editor loads, saves, duplicates, deletes, and manually runs workflows through the engine API under `/api/workflows`.
+- Run history, run detail, and filtered execution logs are exposed under `/api/runs`.
+- The engine exports Prometheus-style metrics at `/metrics`.
+- Step payloads returned by the run-detail API are redacted by default and can be hidden entirely with `ACSA_LOG_PAYLOADS=0`.
+- Run and log retention can be configured with `ACSA_RUN_RETENTION_DAYS` and `ACSA_LOG_RETENTION_DAYS`.
 - Workflow API validation rejects inline secrets for secret-like field names (`secret`, `token`, `password`, `api_key`, `access_key`, `private_key`) and for string values matching common credential patterns (for example `token=...`, `key=...`, `Bearer ...`) or long base64-like/high-entropy tokens (typically 24+ characters). Use environment references (`secret_env`, plus accepted aliases `secrets_env` and `token_env`) instead.

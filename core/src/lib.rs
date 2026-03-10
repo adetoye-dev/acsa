@@ -19,5 +19,6 @@ pub mod connectors;
 pub mod engine;
 pub mod models;
 pub mod nodes;
+pub mod observability;
 pub mod storage;
 pub mod triggers;
