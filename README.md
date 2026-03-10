@@ -2,7 +2,7 @@
 
 Acsa is a production-grade, open-source workflow automation engine from Achsah Systems. It is being built as a local-first platform for YAML workflow-as-code, DAG execution, plugin-based extensibility, observability, and security-first automation.
 
-## Phase 8 Status
+## Phase 9 Status
 
 This repository now contains:
 
@@ -15,6 +15,7 @@ This repository now contains:
 - a React Flow editor wired to real YAML load/save/run flows
 - run history, log search, and metrics endpoints plus an execution view in the UI
 - release-oriented build metadata, Docker packaging, install scripts, and self-hosting assets
+- user, API, connector, UI, architecture, and community release documentation
 
 ## Product Goals
 
@@ -88,9 +89,31 @@ npm install
 npm run dev
 ```
 
-The Phase 8 UI now loads workflows from the engine API, edits YAML-backed workflow state, saves validated changes, starts manual runs, resolves persisted human tasks from the editor inbox, and shows run history, step timelines, log search, and execution metrics. By default the Next.js app proxies `/engine/*` to `http://127.0.0.1:3001/*`; override that with `ACSA_ENGINE_URL` if your engine runs elsewhere.
+The Phase 9 UI now loads workflows from the engine API, edits YAML-backed workflow state, saves validated changes, starts manual runs, resolves persisted human tasks from the editor inbox, and shows run history, step timelines, log search, and execution metrics. By default the Next.js app proxies `/engine/*` to `http://127.0.0.1:3001/*`; override that with `ACSA_ENGINE_URL` if your engine runs elsewhere.
 
 The production UI is configured for Next.js standalone output so it can ship inside the Acsa container image or a packaged bundle.
+
+## Documentation Map
+
+- Product:
+  - [docs/user-guide.md](docs/user-guide.md)
+  - [docs/api-reference.md](docs/api-reference.md)
+  - [docs/connector-development.md](docs/connector-development.md)
+  - [docs/ui-manual.md](docs/ui-manual.md)
+  - [docs/architecture.md](docs/architecture.md)
+  - [docs/workflow-schema.md](docs/workflow-schema.md)
+- Operations:
+  - [docs/getting-started.md](docs/getting-started.md)
+  - [docs/observability.md](docs/observability.md)
+  - [docs/self-hosting.md](docs/self-hosting.md)
+- Community and release:
+  - [CONTRIBUTING.md](CONTRIBUTING.md)
+  - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+  - [ROADMAP.md](ROADMAP.md)
+  - [RELEASING.md](RELEASING.md)
+  - [CHANGELOG.md](CHANGELOG.md)
+  - [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md)
+  - [TRADEMARKS.md](TRADEMARKS.md)
 
 ## Security Baseline
 
@@ -134,8 +157,15 @@ Sensitive keys and common credential patterns are redacted before log persistenc
 
 See [docs/self-hosting.md](docs/self-hosting.md) for binary installs, Docker, Kubernetes, and release packaging commands.
 
+## Community
+
+- Use issues for bugs, tracked enhancements, and connector proposals
+- Use the issue templates and PR template in `.github/`
+- Follow [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- Start with [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request
+- Track planned direction in [ROADMAP.md](ROADMAP.md)
+
 ## Next Milestones
 
-1. Complete release collateral and community-facing documentation
-2. Harden connector isolation and release processes
-3. Track upstream Extism/Wasmtime security fixes as patched versions land
+1. Harden connector isolation and release processes
+2. Track upstream Extism/Wasmtime security fixes as patched versions land

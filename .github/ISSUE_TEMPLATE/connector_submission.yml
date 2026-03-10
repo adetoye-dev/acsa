@@ -1,0 +1,38 @@
+name: Connector submission
+description: Propose or contribute a new connector
+title: "[Connector]: "
+labels:
+  - connector
+body:
+  - type: input
+    id: connector_name
+    attributes:
+      label: Connector name
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime
+    attributes:
+      label: Runtime
+      options:
+        - process
+        - wasm
+    validations:
+      required: true
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Use case
+      description: What system does this connector integrate with and why?
+    validations:
+      required: true
+  - type: textarea
+    id: manifest
+    attributes:
+      label: Manifest or schema draft
+      description: Include the proposed manifest fields, inputs, outputs, and limits
+  - type: textarea
+    id: security
+    attributes:
+      label: Security considerations
+      description: Required secrets, network access, rate limits, or sandboxing concerns

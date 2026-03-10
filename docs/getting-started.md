@@ -44,7 +44,7 @@ For local packaging instead of downloading a release:
 ./scripts/package-release.sh
 ```
 
-## Run the Phase 8 UI
+## Run the Phase 9 UI
 
 ```bash
 ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001

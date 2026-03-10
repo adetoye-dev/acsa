@@ -6,3 +6,5 @@ This directory now includes:
 - `wasm-plugin/`: a starter Extism/WASM connector template
 
 Use these alongside the workflow samples in `workflows/` and the `connector-new` command when building new integrations.
+
+For connector packaging and security guidance, see `docs/connector-development.md`.
