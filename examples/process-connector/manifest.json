@@ -2,7 +2,7 @@
   "name": "Echo Process",
   "type": "echo_process",
   "runtime": "process",
-  "entry": "/bin/sh main.sh",
+  "entry": "sh main.sh",
   "inputs": ["message"],
   "outputs": ["echoed"],
   "limits": {

@@ -36,9 +36,11 @@ use axum::{
 };
 use chrono::Utc;
 use cron::Schedule;
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use serde_yaml::Value as YamlValue;
+use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 use tracing::{error, info};
@@ -75,9 +77,22 @@ struct AppState {
 
 #[derive(Clone)]
 struct WebhookWorkflow {
-    header_name: HeaderName,
     path: String,
     plan: WorkflowPlan,
+    signature_auth: Option<WebhookSignatureAuth>,
+    token_auth: Option<WebhookTokenAuth>,
+}
+
+#[derive(Clone)]
+struct WebhookSignatureAuth {
+    header_name: HeaderName,
+    prefix: String,
+    secret: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct WebhookTokenAuth {
+    header_name: HeaderName,
     secret: String,
 }
 
@@ -577,7 +592,7 @@ async fn handle_webhook(
         return (StatusCode::NOT_FOUND, Json(json!({ "error": "webhook not found" })));
     };
 
-    match authenticate_webhook(&workflow, &headers) {
+    match authenticate_webhook(&workflow, &headers, &body) {
         Ok(()) => {}
         Err(message) => {
             return (StatusCode::UNAUTHORIZED, Json(json!({ "error": message })));
@@ -1233,19 +1248,36 @@ fn spawn_retention_task(store: RunStore) {
     });
 }
 
-fn authenticate_webhook(workflow: &WebhookWorkflow, headers: &HeaderMap) -> Result<(), String> {
-    let token = headers
-        .get(&workflow.header_name)
-        .ok_or_else(|| format!("missing webhook header {}", workflow.header_name.as_str()))?;
-    let token_bytes = token.as_bytes();
-    let expected_bytes = workflow.secret.as_bytes();
-
-    // Use constant-time comparison to prevent timing attacks
-    if bool::from(token_bytes.ct_eq(expected_bytes)) {
-        Ok(())
-    } else {
-        Err("webhook token did not match".to_string())
+fn authenticate_webhook(
+    workflow: &WebhookWorkflow,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<(), String> {
+    if let Some(token_auth) = &workflow.token_auth {
+        let token = headers
+            .get(&token_auth.header_name)
+            .ok_or_else(|| format!("missing webhook header {}", token_auth.header_name.as_str()))?;
+        if !bool::from(token.as_bytes().ct_eq(token_auth.secret.as_bytes())) {
+            return Err("webhook token did not match".to_string());
+        }
     }
+
+    if let Some(signature_auth) = &workflow.signature_auth {
+        let signature = headers.get(&signature_auth.header_name).ok_or_else(|| {
+            format!("missing webhook signature header {}", signature_auth.header_name.as_str())
+        })?;
+        let actual = signature
+            .to_str()
+            .map_err(|_| "webhook signature header must be valid ASCII".to_string())?
+            .trim()
+            .to_ascii_lowercase();
+        let expected = compute_signature(body, &signature_auth.secret, &signature_auth.prefix);
+        if !bool::from(actual.as_bytes().ct_eq(expected.as_bytes())) {
+            return Err("webhook signature did not match".to_string());
+        }
+    }
+
+    Ok(())
 }
 
 fn build_webhook_workflow(plan: WorkflowPlan) -> Result<WebhookWorkflow, TriggerError> {
@@ -1253,24 +1285,62 @@ fn build_webhook_workflow(plan: WorkflowPlan) -> Result<WebhookWorkflow, Trigger
     let path = trigger_detail(trigger, "path")
         .map(str::to_string)
         .unwrap_or_else(|| format!("/hooks/{}", slugify_workflow_name(&plan.workflow.name)));
-    let header_name = trigger_detail(trigger, "header")
-        .unwrap_or("x-acsa-webhook-token")
-        .parse::<HeaderName>()
-        .map_err(|error| TriggerError::InvalidWebhookHeader {
-            header: trigger_detail(trigger, "header").unwrap_or("x-acsa-webhook-token").to_string(),
-            message: error.to_string(),
-        })?;
-    let secret_env = trigger_detail(trigger, "secret_env")
+    let token_auth = match trigger_detail(trigger, "secret_env")
         .or_else(|| trigger_detail(trigger, "token_env"))
-        .ok_or_else(|| TriggerError::MissingWebhookSecret {
-            workflow_name: plan.workflow.name.clone(),
-        })?;
-    let secret = env::var(secret_env).map_err(|_| TriggerError::MissingWebhookSecretEnv {
-        env_name: secret_env.to_string(),
-        workflow_name: plan.workflow.name.clone(),
-    })?;
+    {
+        Some(secret_env) => {
+            let header_name = trigger_detail(trigger, "header")
+                .unwrap_or("x-acsa-webhook-token")
+                .parse::<HeaderName>()
+                .map_err(|error| TriggerError::InvalidWebhookHeader {
+                    header: trigger_detail(trigger, "header")
+                        .unwrap_or("x-acsa-webhook-token")
+                        .to_string(),
+                    message: error.to_string(),
+                })?;
+            let secret =
+                env::var(secret_env).map_err(|_| TriggerError::MissingWebhookSecretEnv {
+                    env_name: secret_env.to_string(),
+                    workflow_name: plan.workflow.name.clone(),
+                })?;
+            Some(WebhookTokenAuth { header_name, secret })
+        }
+        None => None,
+    };
+    let signature_auth = match trigger_detail(trigger, "signature_env") {
+        Some(secret_env) => {
+            let header_name = trigger_detail(trigger, "signature_header")
+                .unwrap_or("x-acsa-signature")
+                .parse::<HeaderName>()
+                .map_err(|error| TriggerError::InvalidWebhookHeader {
+                    header: trigger_detail(trigger, "signature_header")
+                        .unwrap_or("x-acsa-signature")
+                        .to_string(),
+                    message: error.to_string(),
+                })?;
+            let secret =
+                env::var(secret_env).map_err(|_| TriggerError::MissingWebhookSecretEnv {
+                    env_name: secret_env.to_string(),
+                    workflow_name: plan.workflow.name.clone(),
+                })?;
+            Some(WebhookSignatureAuth {
+                header_name,
+                prefix: trigger_detail(trigger, "signature_prefix")
+                    .unwrap_or("sha256=")
+                    .to_string(),
+                secret: secret.into_bytes(),
+            })
+        }
+        None => None,
+    };
 
-    Ok(WebhookWorkflow { header_name, path, plan, secret })
+    if token_auth.is_none() && signature_auth.is_none() {
+        return Err(TriggerError::MissingWebhookAuthentication {
+            workflow_name: plan.workflow.name.clone(),
+        });
+    }
+
+    Ok(WebhookWorkflow { path, plan, signature_auth, token_auth })
 }
 
 fn cron_schedule(trigger: &Trigger) -> Result<Schedule, TriggerError> {
@@ -1285,6 +1355,21 @@ fn cron_schedule(trigger: &Trigger) -> Result<Schedule, TriggerError> {
 
 fn trigger_detail<'a>(trigger: &'a Trigger, key: &str) -> Option<&'a str> {
     trigger.details.get(key)?.as_str()
+}
+
+fn compute_signature(body: &[u8], secret: &[u8], prefix: &str) -> String {
+    type HmacSha256 = Hmac<Sha256>;
+
+    let mut mac = HmacSha256::new_from_slice(secret).expect("hmac accepts arbitrary key sizes");
+    mac.update(body);
+    let digest = mac.finalize().into_bytes();
+    let mut rendered = String::with_capacity(prefix.len() + (digest.len() * 2));
+    rendered.push_str(prefix);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(rendered, "{byte:02x}");
+    }
+    rendered
 }
 
 fn slugify_workflow_name(name: &str) -> String {
@@ -1330,8 +1415,8 @@ pub enum TriggerError {
     EmptyCronSchedule { workflow_name: String },
     #[error("invalid cron schedule {schedule}: {message}")]
     InvalidCronSchedule { schedule: String, message: String },
-    #[error("workflow {workflow_name} is missing secret_env for its webhook trigger")]
-    MissingWebhookSecret { workflow_name: String },
+    #[error("workflow {workflow_name} must configure secret_env/token_env and/or signature_env for its webhook trigger")]
+    MissingWebhookAuthentication { workflow_name: String },
     #[error("workflow {workflow_name} references missing webhook secret env var {env_name}")]
     MissingWebhookSecretEnv { env_name: String, workflow_name: String },
     #[error("invalid webhook header {header}: {message}")]
@@ -1348,14 +1433,20 @@ pub enum TriggerError {
 mod tests {
     use std::collections::BTreeMap;
 
+    use axum::http::{HeaderMap, HeaderValue};
     use chrono::Utc;
+    use serde_json::json;
     use serde_yaml::Value as YamlValue;
 
     use super::{
-        cron_schedule, slugify_workflow_name, validate_secret_value, workflow_file_path,
-        TriggerError,
+        authenticate_webhook, compute_signature, cron_schedule, slugify_workflow_name,
+        validate_secret_value, workflow_file_path, TriggerError, WebhookSignatureAuth,
+        WebhookWorkflow,
     };
-    use crate::models::Trigger;
+    use crate::{
+        engine::compile_workflow,
+        models::{Step, Trigger, Workflow},
+    };
 
     #[test]
     fn slugifies_workflow_names_for_default_webhook_paths() {
@@ -1391,5 +1482,62 @@ mod tests {
             .expect_err("workflow id should be rejected");
 
         assert!(matches!(error, TriggerError::InvalidWorkflowId { .. }));
+    }
+
+    #[test]
+    fn authenticates_signed_webhooks() {
+        let webhook = signed_webhook("phase10-secret");
+        let body = br#"{"ok":true}"#;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-acsa-signature",
+            HeaderValue::from_str(&compute_signature(body, b"phase10-secret", "sha256="))
+                .expect("signature should be valid"),
+        );
+
+        let result = authenticate_webhook(&webhook, &headers, body);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn rejects_incorrect_webhook_signatures() {
+        let webhook = signed_webhook("phase10-secret");
+        let body = br#"{"ok":true}"#;
+        let mut headers = HeaderMap::new();
+        headers.insert("x-acsa-signature", HeaderValue::from_static("sha256=deadbeef"));
+
+        let result = authenticate_webhook(&webhook, &headers, body);
+
+        assert!(matches!(result, Err(message) if message == "webhook signature did not match"));
+    }
+
+    fn signed_webhook(secret: &str) -> WebhookWorkflow {
+        let plan = compile_workflow(Workflow {
+            version: "v1".to_string(),
+            name: "signed-webhook".to_string(),
+            trigger: Trigger { r#type: "manual".to_string(), details: BTreeMap::new() },
+            steps: vec![Step {
+                id: "start".to_string(),
+                r#type: "constant".to_string(),
+                params: serde_yaml::to_value(json!({ "value": true }))
+                    .expect("json should convert to yaml"),
+                next: vec![],
+                retry: None,
+                timeout_ms: None,
+            }],
+        })
+        .expect("workflow plan should compile");
+
+        WebhookWorkflow {
+            path: "/hooks/signed-webhook".to_string(),
+            plan,
+            signature_auth: Some(WebhookSignatureAuth {
+                header_name: "x-acsa-signature".parse().expect("header should parse"),
+                prefix: "sha256=".to_string(),
+                secret: secret.as_bytes().to_vec(),
+            }),
+            token_auth: None,
+        }
     }
 }

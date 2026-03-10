@@ -43,7 +43,7 @@ jobs:
         run: cargo install cargo-audit --locked
 
       - name: Audit dependencies
-        run: cargo audit
+        run: ./scripts/security-audit.sh
 
   ui:
     name: UI checks

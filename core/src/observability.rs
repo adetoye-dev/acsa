@@ -227,7 +227,10 @@ pub fn redact_json_string(raw: &str) -> String {
 }
 
 pub fn redact_text(text: &str) -> String {
-    truncate_message(text)
+    let redacted = redact_bearer_tokens(text);
+    let redacted = redact_key_value_patterns(&redacted);
+    let redacted = redact_postgres_dsn_passwords(&redacted);
+    truncate_message(&redacted)
 }
 
 fn append_file_log(level: LogLevel, run_id: Option<&str>, step_id: Option<&str>, message: &str) {
@@ -333,4 +336,162 @@ fn truncate_message(message: &str) -> String {
         truncated.push_str("… [truncated]");
     }
     truncated
+}
+
+fn redact_bearer_tokens(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let mut redacted = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+
+    while let Some(relative) = lower[cursor..].find("bearer ") {
+        let start = cursor + relative;
+        let value_start = start + "bearer ".len();
+        let value_end = text[value_start..]
+            .find(is_secret_delimiter)
+            .map(|offset| value_start + offset)
+            .unwrap_or(text.len());
+        redacted.push_str(&text[cursor..value_start]);
+        if value_end > value_start {
+            redacted.push_str("••••");
+        }
+        cursor = value_end;
+    }
+
+    redacted.push_str(&text[cursor..]);
+    redacted
+}
+
+fn redact_key_value_patterns(text: &str) -> String {
+    const SENSITIVE_KEYS: &[&str] =
+        &["token", "secret", "password", "credential", "api_key", "apikey", "authorization"];
+
+    let mut redacted = text.to_string();
+    for key in SENSITIVE_KEYS {
+        redacted = redact_key_assignment(&redacted, key, '=');
+        redacted = redact_key_assignment(&redacted, key, ':');
+    }
+    redacted
+}
+
+fn redact_key_assignment(text: &str, key: &str, separator: char) -> String {
+    let lower = text.to_ascii_lowercase();
+    let pattern = format!("{key}{separator}");
+    let mut redacted = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+
+    while let Some(relative) = lower[cursor..].find(&pattern) {
+        let key_start = cursor + relative;
+        if key_start > 0 {
+            let previous = text[..key_start].chars().next_back().unwrap_or(' ');
+            if previous.is_ascii_alphanumeric() || previous == '_' || previous == '-' {
+                redacted.push_str(&text[cursor..(key_start + pattern.len())]);
+                cursor = key_start + pattern.len();
+                continue;
+            }
+        }
+
+        let value_start = key_start + pattern.len();
+        let trimmed_start = if separator == ':' {
+            value_start
+                + text[value_start..]
+                    .chars()
+                    .take_while(|character| character.is_whitespace())
+                    .map(char::len_utf8)
+                    .sum::<usize>()
+        } else {
+            value_start
+        };
+        let value_end = text[trimmed_start..]
+            .find(is_secret_delimiter)
+            .map(|offset| trimmed_start + offset)
+            .unwrap_or(text.len());
+
+        redacted.push_str(&text[cursor..trimmed_start]);
+        if value_end > trimmed_start {
+            redacted.push_str("••••");
+        }
+        cursor = value_end;
+    }
+
+    redacted.push_str(&text[cursor..]);
+    redacted
+}
+
+fn redact_postgres_dsn_passwords(text: &str) -> String {
+    let mut redacted = text.to_string();
+    for scheme in ["postgres://", "postgresql://"] {
+        redacted = redact_dsn_scheme(&redacted, scheme);
+    }
+    redacted
+}
+
+fn redact_dsn_scheme(text: &str, scheme: &str) -> String {
+    let mut redacted = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+    let lower = text.to_ascii_lowercase();
+    let lower_scheme = scheme.to_ascii_lowercase();
+
+    while let Some(relative) = lower[cursor..].find(&lower_scheme) {
+        let start = cursor + relative;
+        let segment_end = text[start..]
+            .find(is_secret_delimiter)
+            .map(|offset| start + offset)
+            .unwrap_or(text.len());
+        let segment = &text[start..segment_end];
+        redacted.push_str(&text[cursor..start]);
+        redacted.push_str(&mask_postgres_dsn(segment));
+        cursor = segment_end;
+    }
+
+    redacted.push_str(&text[cursor..]);
+    redacted
+}
+
+fn mask_postgres_dsn(segment: &str) -> String {
+    let Some(authority_index) = segment.find("://").map(|index| index + 3) else {
+        return segment.to_string();
+    };
+    let Some(at_index) = segment[authority_index..].find('@').map(|index| authority_index + index)
+    else {
+        return segment.to_string();
+    };
+    let Some(colon_index) =
+        segment[authority_index..at_index].find(':').map(|index| authority_index + index)
+    else {
+        return segment.to_string();
+    };
+
+    let mut masked = String::with_capacity(segment.len());
+    masked.push_str(&segment[..(colon_index + 1)]);
+    masked.push_str("••••");
+    masked.push_str(&segment[at_index..]);
+    masked
+}
+
+fn is_secret_delimiter(character: char) -> bool {
+    character.is_whitespace() || matches!(character, '"' | '\'' | ',' | ';' | ')' | ']' | '}' | '&')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_text;
+
+    #[test]
+    fn redacts_bearer_tokens_and_assignments() {
+        let redacted = redact_text(
+            "authorization: Bearer abcdefghijklmnop token=secret-value password: open-sesame",
+        );
+
+        assert!(redacted.contains("authorization: ••••"));
+        assert!(redacted.contains("token=••••"));
+        assert!(redacted.contains("password: ••••"));
+    }
+
+    #[test]
+    fn redacts_postgres_passwords_in_plain_text() {
+        let redacted =
+            redact_text("postgres://service:super-secret@localhost:5432/acsa?sslmode=disable");
+
+        assert_eq!(redacted, "postgres://service:••••@localhost:5432/acsa?sslmode=disable");
+    }
 }

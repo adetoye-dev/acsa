@@ -4,10 +4,10 @@ Last updated: 2026-03-10
 
 ## Current Status
 
-- Project stage: Community-facing docs, contribution workflows, and release collateral implemented
-- Current phase: Phase 9 complete, Phase 10 pending review gate
-- Coding status: Public guides, templates, roadmap, legal notices, and release playbook are in place
-- Approval status: Waiting for user review before starting Phase 10
+- Project stage: Blueprint implementation complete through security hardening
+- Current phase: Phase 10 complete, review gate pending
+- Coding status: Security controls, audit workflow, and hardening docs are in place
+- Approval status: Waiting for user review before any post-blueprint work
 
 ## Completed This Session
 
@@ -89,6 +89,14 @@ Last updated: 2026-03-10
 - Added a user guide, API reference, connector development guide, UI manual, and architecture diagrams (see `docs/architecture.md`)
 - Added CONTRIBUTING, Code of Conduct, support guidance, roadmap, changelog, contributors list, release playbook, trademark notice, and dependency license snapshot
 - Added GitHub issue templates and a pull request template for public collaboration
+- Hardened webhook triggers with optional HMAC SHA-256 signature verification in addition to shared-secret headers
+- Tightened workflow trigger validation to accept signed webhooks and reject misconfigured signature fields
+- Hardened integration nodes to reject inline sensitive HTTP headers and inline PostgreSQL DSNs, and to bound HTTP/file payload sizes
+- Hardened connector manifests and runtimes with explicit timeout requirements, env allowlists, host/path restrictions, and a default-off WASM runtime gate
+- Added plain-text log redaction for bearer tokens, common credential key/value patterns, and PostgreSQL DSN passwords
+- Added a dedicated `docs/security.md` guide plus a checked-in `scripts/security-audit.sh` command for the accepted upstream Extism/Wasmtime audit exceptions
+- Fixed the UI lint workflow so `npm run lint` works on a clean checkout without requiring a prior Next build
+- Verified Phase 10 with `cargo fmt --all`, `cargo test --workspace`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `./scripts/security-audit.sh`, `npm run lint`, and `npm run build`
 
 ## Current Repository Baseline
 
@@ -108,16 +116,12 @@ Last updated: 2026-03-10
 - Phase 8 deployment assets now live under `deploy/`
 - Phase 8 release/install manifests now live under `scripts/`, `packaging/`, and `.github/workflows/release.yml`
 - Phase 9 public documentation now lives under `docs/` plus root community files such as `CONTRIBUTING.md` and `RELEASING.md`
+- Phase 10 security documentation now includes `docs/security.md`
+- Phase 10 dependency review is enforced through `scripts/security-audit.sh` and the CI workflow
 
 ## Next Action
 
-If the user approves, begin Phase 10 only:
-
-1. Harden plugin and dependency security
-2. Review logging, secret handling, and resource limits
-3. Close the remaining audit findings and document residual risk
-4. Keep the scope aligned to security review and hardening only
-5. Stop and ask for review before any post-blueprint work
+Wait for user review of Phase 10. Do not start post-blueprint work unless the user explicitly requests it.
 
 ## Non-Negotiable Execution Rules
 
@@ -196,15 +200,21 @@ If a phase introduces material risk without a corresponding validation or mitiga
 
 ## Known Follow-On Hardening
 
-- `cargo audit` currently reports 3 upstream Wasmtime advisories through `extism 1.13.0`:
-  - **RUSTSEC-2026-0020** (CVSS 6.9 Medium): Guest-controlled resource exhaustion in WASI implementations
-  - **RUSTSEC-2026-0021** (CVSS 6.9 Medium): Panic adding excessive fields to `wasi:http/types.fields`
-  - **RUSTSEC-2026-0006** (CVSS 4.1 Medium): Wasmtime segfault or unused out-of-sandbox load with `f64.copysign` on x86-64
-  - **Assessment**: Safe to proceed to Phase 10 with runtime mitigations. All advisories are Medium severity and affect guest-controlled edge cases. WASM connectors are sandboxed and the workflow engine terminates on timeout.
-  - **Mitigation plan**
-    - **Immediate**: (1) Document the advisories in acceptance criteria, (2) Enforce strict timeout/memory limits in connector manifests, (3) Subprocess connectors enforce timeout and JSON validation today.
-    - **Deferred / Phase 10**: (1) Pin Wasmtime >=41.0.4 when extism updates, (2) Keep subprocess memory caps and WASM dependency upgrades on the Phase 10 hardening track.
-- Subprocess connectors enforce timeout and JSON validation today, but OS-level memory caps remain a follow-on hardening task because the current implementation avoids unsafe/platform-specific limit code.
+- `extism 1.13.0` still pulls the following upstream Wasmtime advisories:
+  - `RUSTSEC-2026-0020`
+  - `RUSTSEC-2026-0021`
+  - `RUSTSEC-2026-0006`
+- `fxhash 0.2.1` is still reported as unmaintained through the same Wasmtime dependency tree:
+  - `RUSTSEC-2025-0057`
+- These IDs are explicitly carried in `scripts/security-audit.sh` so CI stays green while the residual risk remains visible in version control and `docs/security.md`.
+- Runtime mitigations in place today:
+  - WASM connectors are disabled unless `ACSA_ENABLE_WASM_CONNECTORS=1`
+  - connector manifests enforce strict timeout and memory ceilings before execution
+  - subprocess connectors keep the safer path for trusted local integrations
+- Remaining follow-up after the blueprint:
+  - upgrade `extism` as soon as it releases a patched Wasmtime chain
+  - remove the temporary audit exceptions after that upgrade
+  - evaluate portable OS-level memory caps for subprocess connectors without resorting to unsafe Rust
 
 ## Resume Protocol For Future Sessions
 

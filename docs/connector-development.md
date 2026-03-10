@@ -17,6 +17,10 @@ Current fields:
 - `outputs`
 - `limits.timeout`
 - `limits.memory`
+- `allowed_env`
+- `allowed_hosts`
+- `allowed_paths`
+- `enable_wasi`
 
 Example:
 
@@ -25,10 +29,11 @@ Example:
   "name": "sample-echo",
   "type": "sample_echo",
   "runtime": "process",
-  "entry": "./main.sh",
+  "entry": "sh main.sh",
   "version": "0.1.0",
   "inputs": ["message"],
   "outputs": ["echoed"],
+  "allowed_env": ["SAMPLE_API_TOKEN"],
   "limits": {
     "timeout": 5000
   }
@@ -44,8 +49,9 @@ Process connectors:
 - run as child processes
 - receive JSON on stdin
 - return JSON on stdout
-- inherit a minimal environment
+- inherit only `PATH` plus manifest-approved values from `allowed_env`
 - are killed on timeout
+- must use either a relative executable or an approved launcher such as `sh`, `bash`, `python3`, or `node`
 
 Use when:
 
@@ -60,7 +66,12 @@ WASM connectors:
 - are loaded through Extism
 - expose an `execute` function
 - support manifest-driven timeout and memory settings
-- are the preferred path for untrusted extension logic
+- support optional host allowlists via `allowed_hosts`
+- support optional filesystem mappings via `allowed_paths` when `enable_wasi` is set
+- are the preferred path for untrusted or third-party extension logic because sandboxing is stronger than subprocess execution
+- are disabled by default and require `ACSA_ENABLE_WASM_CONNECTORS=1`; keep this global flag off in production unless you explicitly need WASM support because Extism-based execution adds runtime/operational overhead and remains a stricter capability surface to operate
+
+Operational note: `ACSA_ENABLE_WASM_CONNECTORS=1` is a global runtime gate for all WASM connectors. Keep it disabled by default in production, then enable it only in environments where the specific WASM connectors you trust and need are deployed.
 
 Use when:
 
@@ -131,6 +142,7 @@ Recommended WASM pattern:
 
 - Process connectors should be treated as trusted host code
 - WASM connectors are safer for third-party code, but still need strict limits
+- Do not enable WASM connectors in production unless you explicitly need them
 - Always validate incoming params and output keys
 - Avoid reading arbitrary filesystem paths
 - Avoid inheriting the full parent environment

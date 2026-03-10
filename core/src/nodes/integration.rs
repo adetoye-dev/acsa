@@ -14,10 +14,13 @@
 
 #![deny(warnings)]
 
-use std::{path::PathBuf, str::FromStr};
+use std::{net::IpAddr, path::PathBuf, str::FromStr};
 
 use async_trait::async_trait;
-use reqwest::{header::HeaderMap, Method, Url};
+use reqwest::{
+    header::{HeaderMap, HeaderName, HeaderValue},
+    Method, Url,
+};
 use serde_json::{json, Map, Value};
 use sqlx::{
     postgres::{PgPoolOptions, PgRow},
@@ -29,6 +32,10 @@ use super::{
     as_array, as_object, as_string, ensure_relative_path, lookup_required, Node, NodeError,
     RateLimiter,
 };
+
+const DEFAULT_HTTP_RESPONSE_BYTES: usize = 1024 * 1024;
+const MAX_HTTP_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
+const MAX_FILE_BYTES: usize = 10 * 1024 * 1024;
 
 #[derive(Clone, Default)]
 pub struct HttpRequestNode {
@@ -71,13 +78,35 @@ impl Node for HttpRequestNode {
         let url = Url::parse(as_string(&url_value, "url")?).map_err(|error| {
             NodeError::InvalidParameter { parameter: "url".to_string(), message: error.to_string() }
         })?;
+        if !url.username().is_empty() || url.password().is_some() {
+            return Err(NodeError::SecurityViolation {
+                message: "http_request URLs must not embed credentials".to_string(),
+            });
+        }
 
         let allow_insecure = params.get("allow_insecure").and_then(Value::as_bool).unwrap_or(false);
-        if url.scheme() != "https" && !allow_insecure {
-            return Err(NodeError::SecurityViolation {
-                message: "http_request only allows HTTPS unless allow_insecure is explicitly true"
-                    .to_string(),
-            });
+        match url.scheme() {
+            "https" => {}
+            "http" if allow_insecure && is_allowed_insecure_host(&url) => {}
+            "http" if allow_insecure => {
+                return Err(NodeError::SecurityViolation {
+                    message:
+                        "http_request only allows insecure HTTP for loopback and private hosts"
+                            .to_string(),
+                });
+            }
+            "http" => {
+                return Err(NodeError::SecurityViolation {
+                    message:
+                        "http_request only allows HTTPS unless allow_insecure is explicitly true"
+                            .to_string(),
+                });
+            }
+            other => {
+                return Err(NodeError::SecurityViolation {
+                    message: format!("http_request does not allow the {other} scheme"),
+                });
+            }
         }
 
         let _rate_permit = self
@@ -90,8 +119,9 @@ impl Node for HttpRequestNode {
             params.get("timeout_secs").and_then(Value::as_u64).unwrap_or(30),
         ));
 
-        if let Some(headers) = params.get("headers") {
-            request = request.headers(build_headers(headers)?);
+        let request_headers = build_headers(params.get("headers"), params.get("headers_env"))?;
+        if !request_headers.is_empty() {
+            request = request.headers(request_headers);
         }
         if let Some(query) = params.get("query") {
             request = request.query(&flatten_query(query)?);
@@ -102,14 +132,48 @@ impl Node for HttpRequestNode {
             request = request.json(lookup_required(inputs, path)?);
         }
 
-        let response = request.send().await.map_err(|error| NodeError::Message {
+        let mut response = request.send().await.map_err(|error| NodeError::Message {
             message: format!("http request failed: {error}"),
         })?;
         let status = response.status();
         let headers = response.headers().clone();
-        let text = response.text().await.map_err(|error| NodeError::Message {
+        let max_response_bytes = parse_response_size_limit(params)?;
+        if let Some(content_length) = response.content_length() {
+            let limit = u64::try_from(max_response_bytes).expect("response size limit should fit");
+            if content_length > limit {
+                return Err(NodeError::SecurityViolation {
+                    message: format!(
+                        "http response size {} exceeds configured limit {}",
+                        content_length, max_response_bytes
+                    ),
+                });
+            }
+        }
+        let mut body_bytes = Vec::new();
+        let mut total_bytes = 0usize;
+        while let Some(chunk) = response.chunk().await.map_err(|error| NodeError::Message {
             message: format!("failed to read response body: {error}"),
-        })?;
+        })? {
+            total_bytes = total_bytes
+                .checked_add(chunk.len())
+                .ok_or_else(|| NodeError::SecurityViolation {
+                    message: format!(
+                        "http response size exceeds configured limit {}",
+                        max_response_bytes
+                    ),
+                })?;
+            if total_bytes > max_response_bytes {
+                return Err(NodeError::SecurityViolation {
+                    message: format!(
+                        "http response size {} exceeds configured limit {}",
+                        total_bytes, max_response_bytes
+                    ),
+                });
+            }
+            body_bytes.extend_from_slice(&chunk);
+        }
+        let text = String::from_utf8(body_bytes)
+            .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).to_string());
 
         if !status.is_success() {
             return Err(NodeError::Message {
@@ -227,17 +291,16 @@ impl Node for FileReadNode {
             .ok_or(NodeError::MissingParameter { parameter: "path" })?;
         let resolved = ensure_relative_path(&self.data_dir, path)?;
 
-        // Check file size before reading
-        const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024; // 10 MB limit
         let metadata = tokio::fs::metadata(&resolved).await.map_err(|error| {
             NodeError::Message { message: format!("failed to read file metadata: {error}") }
         })?;
-        if metadata.len() > MAX_FILE_SIZE {
+        let max_file_size = u64::try_from(MAX_FILE_BYTES).expect("file size limit should fit");
+        if metadata.len() > max_file_size {
             return Err(NodeError::Message {
                 message: format!(
                     "file size {} exceeds maximum allowed size {}",
                     metadata.len(),
-                    MAX_FILE_SIZE
+                    MAX_FILE_BYTES
                 ),
             });
         }
@@ -307,6 +370,15 @@ impl Node for FileWriteNode {
                 }
             }
         };
+        if contents.len() > MAX_FILE_BYTES {
+            return Err(NodeError::SecurityViolation {
+                message: format!(
+                    "file_write contents size {} exceeds maximum allowed size {}",
+                    contents.len(),
+                    MAX_FILE_BYTES
+                ),
+            });
+        }
 
         if params.get("append").and_then(Value::as_bool).unwrap_or(false) {
             use tokio::io::AsyncWriteExt;
@@ -331,23 +403,48 @@ impl Node for FileWriteNode {
     }
 }
 
-fn build_headers(value: &Value) -> Result<HeaderMap, NodeError> {
-    let object = as_object(value, "headers")?;
+fn build_headers(
+    headers_value: Option<&Value>,
+    headers_env_value: Option<&Value>,
+) -> Result<HeaderMap, NodeError> {
     let mut headers = HeaderMap::new();
-    for (key, value) in object {
-        let header_name =
-            reqwest::header::HeaderName::from_bytes(key.as_bytes()).map_err(|error| {
-                NodeError::InvalidParameter {
-                    parameter: "headers".to_string(),
+    if let Some(value) = headers_value {
+        let object = as_object(value, "headers")?;
+        for (key, value) in object {
+            let header_name = parse_header_name(key, "headers")?;
+            if is_sensitive_header(key) {
+                return Err(NodeError::SecurityViolation {
+                    message: format!(
+                        "sensitive request header '{key}' must be supplied through headers_env"
+                    ),
+                });
+            }
+            let header_value =
+                HeaderValue::from_str(as_string(value, "headers")?).map_err(|error| {
+                    NodeError::InvalidParameter {
+                        parameter: "headers".to_string(),
+                        message: error.to_string(),
+                    }
+                })?;
+            headers.insert(header_name, header_value);
+        }
+    }
+    if let Some(value) = headers_env_value {
+        let object = as_object(value, "headers_env")?;
+        for (key, value) in object {
+            let header_name = parse_header_name(key, "headers_env")?;
+            let env_name = as_string(value, "headers_env")?;
+            let env_value = std::env::var(env_name).map_err(|_| NodeError::InvalidParameter {
+                parameter: "headers_env".to_string(),
+                message: format!("environment variable {env_name} is not set"),
+            })?;
+            let header_value =
+                HeaderValue::from_str(&env_value).map_err(|error| NodeError::InvalidParameter {
+                    parameter: "headers_env".to_string(),
                     message: error.to_string(),
-                }
-            })?;
-        let header_value = reqwest::header::HeaderValue::from_str(as_string(value, "headers")?)
-            .map_err(|error| NodeError::InvalidParameter {
-                parameter: "headers".to_string(),
-                message: error.to_string(),
-            })?;
-        headers.insert(header_name, header_value);
+                })?;
+            headers.insert(header_name, header_value);
+        }
     }
     Ok(headers)
 }
@@ -368,26 +465,92 @@ fn flatten_query(value: &Value) -> Result<Vec<(String, String)>, NodeError> {
 }
 
 fn resolve_connection_string(params: &Value) -> Result<String, NodeError> {
-    if let Some(connection) = params.get("connection").and_then(Value::as_str) {
-        return Ok(connection.to_string());
-    }
-    if let Some(env_name) = params.get("connection_env").and_then(Value::as_str) {
-        return std::env::var(env_name).map_err(|_| NodeError::InvalidParameter {
-            parameter: "connection_env".to_string(),
-            message: format!("environment variable {env_name} is not set"),
+    if params.get("connection").is_some() {
+        return Err(NodeError::SecurityViolation {
+            message: "database_query postgres connections must use connection_env".to_string(),
         });
     }
-    Err(NodeError::MissingParameter { parameter: "connection" })
+    if let Some(env_name) = params.get("connection_env").and_then(Value::as_str) {
+        let connection = std::env::var(env_name).map_err(|_| NodeError::InvalidParameter {
+            parameter: "connection_env".to_string(),
+            message: format!("environment variable {env_name} is not set"),
+        })?;
+        if !(connection.starts_with("postgres://") || connection.starts_with("postgresql://")) {
+            return Err(NodeError::InvalidParameter {
+                parameter: "connection_env".to_string(),
+                message: "postgres connection string must start with postgres:// or postgresql://"
+                    .to_string(),
+            });
+        }
+        return Ok(connection);
+    }
+    Err(NodeError::MissingParameter { parameter: "connection_env" })
 }
 
 fn stringify_headers(headers: &HeaderMap) -> Value {
     let mut object = Map::new();
     for (key, value) in headers {
-        if let Ok(text) = value.to_str() {
+        if is_sensitive_header(key.as_str()) {
+            object.insert(key.to_string(), Value::String("••••".to_string()));
+        } else if let Ok(text) = value.to_str() {
             object.insert(key.to_string(), Value::String(text.to_string()));
         }
     }
     Value::Object(object)
+}
+
+fn is_allowed_insecure_host(url: &Url) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
+        return true;
+    }
+    match host.parse::<IpAddr>() {
+        Ok(IpAddr::V4(address)) => {
+            address.is_private() || address.is_loopback() || address.is_link_local()
+        }
+        Ok(IpAddr::V6(address)) => {
+            address.is_loopback() || address.is_unique_local() || address.is_unicast_link_local()
+        }
+        Err(_) => false,
+    }
+}
+
+fn is_sensitive_header(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    key == "authorization"
+        || key == "proxy-authorization"
+        || key == "cookie"
+        || key == "set-cookie"
+        || key.contains("token")
+        || key.contains("secret")
+        || key.contains("api-key")
+        || key.contains("apikey")
+}
+
+fn parse_header_name(value: &str, parameter: &str) -> Result<HeaderName, NodeError> {
+    HeaderName::from_bytes(value.as_bytes()).map_err(|error| NodeError::InvalidParameter {
+        parameter: parameter.to_string(),
+        message: error.to_string(),
+    })
+}
+
+fn parse_response_size_limit(params: &Value) -> Result<usize, NodeError> {
+    let Some(raw) = params.get("max_response_bytes").and_then(Value::as_u64) else {
+        return Ok(DEFAULT_HTTP_RESPONSE_BYTES);
+    };
+    let parsed = usize::try_from(raw).map_err(|_| NodeError::InvalidParameter {
+        parameter: "max_response_bytes".to_string(),
+        message: "value does not fit into usize".to_string(),
+    })?;
+    if parsed == 0 || parsed > MAX_HTTP_RESPONSE_BYTES {
+        return Err(NodeError::InvalidParameter {
+            parameter: "max_response_bytes".to_string(),
+            message: format!("max_response_bytes must be between 1 and {MAX_HTTP_RESPONSE_BYTES}"),
+        });
+    }
+    Ok(parsed)
 }
 
 async fn execute_sqlite_query(
@@ -589,6 +752,80 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn http_request_node_rejects_public_insecure_hosts() {
+        let node = HttpRequestNode::new(crate::nodes::RateLimiter::default());
+        let error = node
+            .execute(
+                &json!({}),
+                &json!({
+                    "method": "GET",
+                    "url": "http://example.com/health",
+                    "allow_insecure": true
+                }),
+            )
+            .await
+            .expect_err("public insecure hosts should be rejected");
+
+        assert!(matches!(error, crate::nodes::NodeError::SecurityViolation { .. }));
+    }
+
+    #[tokio::test]
+    async fn http_request_node_rejects_inline_sensitive_headers() {
+        let node = HttpRequestNode::new(crate::nodes::RateLimiter::default());
+        let error = node
+            .execute(
+                &json!({}),
+                &json!({
+                    "method": "GET",
+                    "url": "http://localhost/health",
+                    "allow_insecure": true,
+                    "headers": {
+                        "authorization": "Bearer inline-secret"
+                    }
+                }),
+            )
+            .await
+            .expect_err("inline authorization header should be rejected");
+
+        assert!(matches!(error, crate::nodes::NodeError::SecurityViolation { .. }));
+    }
+
+    #[tokio::test]
+    async fn http_request_node_redacts_sensitive_response_headers() {
+        let app = Router::new().route(
+            "/headers",
+            get(|| async {
+                (
+                    [("set-cookie", "session=super-secret"), ("x-request-id", "req-123")],
+                    axum::Json(json!({ "ok": true })),
+                )
+            }),
+        );
+        let listener =
+            tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("test listener should bind");
+        let address: SocketAddr = listener.local_addr().expect("local address should be available");
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("test server should run");
+        });
+
+        let node = HttpRequestNode::new(crate::nodes::RateLimiter::default());
+        let output = node
+            .execute(
+                &json!({}),
+                &json!({
+                    "method": "GET",
+                    "url": format!("http://{address}/headers"),
+                    "allow_insecure": true
+                }),
+            )
+            .await
+            .expect("http request should succeed");
+
+        assert_eq!(output["headers"]["set-cookie"], json!("••••"));
+        assert_eq!(output["headers"]["x-request-id"], json!("req-123"));
+    }
+
+    #[tokio::test]
     async fn file_nodes_round_trip_within_data_directory() {
         let data_dir = temp_data_dir();
         let writer = FileWriteNode::new(data_dir.clone());
@@ -652,6 +889,28 @@ mod tests {
             .expect("select should succeed");
 
         assert_eq!(output["rows"][0]["name"], json!("alpha"));
+
+        tokio::fs::remove_dir_all(data_dir).await.expect("temp directory cleanup should succeed");
+    }
+
+    #[tokio::test]
+    async fn postgres_queries_require_env_backed_connections() {
+        let data_dir = temp_data_dir();
+        let node = DatabaseQueryNode::new(data_dir.clone());
+
+        let error = node
+            .execute(
+                &json!({}),
+                &json!({
+                    "backend": "postgres",
+                    "connection": "postgres://user:secret@localhost/db",
+                    "query": "SELECT 1"
+                }),
+            )
+            .await
+            .expect_err("inline postgres connections should be rejected");
+
+        assert!(matches!(error, crate::nodes::NodeError::SecurityViolation { .. }));
 
         tokio::fs::remove_dir_all(data_dir).await.expect("temp directory cleanup should succeed");
     }

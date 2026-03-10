@@ -2,7 +2,7 @@
 
 Acsa is a production-grade, open-source workflow automation engine from Achsah Systems. It is being built as a local-first platform for YAML workflow-as-code, DAG execution, plugin-based extensibility, observability, and security-first automation.
 
-## Phase 9 Status
+## Phase 10 Status
 
 This repository now contains:
 
@@ -16,6 +16,7 @@ This repository now contains:
 - run history, log search, and metrics endpoints plus an execution view in the UI
 - release-oriented build metadata, Docker packaging, install scripts, and self-hosting assets
 - user, API, connector, UI, architecture, and community release documentation
+- Phase 10 security hardening for signed webhooks, stricter connector/runtime limits, and log redaction
 
 ## Product Goals
 
@@ -56,7 +57,7 @@ ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows -
 cargo run -p acsa-core -- connector-test examples/process-connector/manifest.json --inputs examples/process-connector/sample-input.json
 ```
 
-**Note:** Generate a strong secret for production with `openssl rand -hex 32` and set it in the `ACSA_WEBHOOK_SECRET` environment variable.
+**Note:** Generate strong webhook secrets for production with `openssl rand -hex 32`. Shared-secret headers use `ACSA_WEBHOOK_SECRET`; signed webhooks can additionally use `ACSA_WEBHOOK_SIGNATURE_SECRET`.
 
 The current CLI can validate workflows, list workflow files, print build metadata, manually execute DAG workflows, serve cron plus webhook triggers, persist and resume human review tasks, scaffold connectors, and test connector manifests locally.
 
@@ -99,6 +100,7 @@ The production UI is configured for Next.js standalone output so it can ship ins
   - [docs/user-guide.md](docs/user-guide.md)
   - [docs/api-reference.md](docs/api-reference.md)
   - [docs/connector-development.md](docs/connector-development.md)
+  - [docs/security.md](docs/security.md)
   - [docs/ui-manual.md](docs/ui-manual.md)
   - [docs/architecture.md](docs/architecture.md)
   - [docs/workflow-schema.md](docs/workflow-schema.md)
@@ -120,7 +122,10 @@ The production UI is configured for Next.js standalone output so it can ship ins
 - No secrets should be committed to this repository
 - Workflows should reference environment-managed secrets instead of storing raw values
 - Logs must redact sensitive values
-- Plugins must be sandboxed and resource-limited in later phases
+- Webhook triggers support shared-secret headers and HMAC signatures
+- HTTP and database nodes reject inline credentials in runtime configuration
+- WASM connectors are disabled unless `ACSA_ENABLE_WASM_CONNECTORS=1`
+- Connector manifests enforce timeout, size, host, path, and env controls
 - Unsafe Rust is avoided by default
 
 ## Current Engine Scope
@@ -153,7 +158,9 @@ The production UI is configured for Next.js standalone output so it can ship ins
 - `ACSA_LOG_RETENTION_DAYS=30` purges old logs in the background
 - `ACSA_RUN_RETENTION_DAYS=14` purges old finished runs and related records
 
-Sensitive keys and common credential patterns are redacted before log persistence. See [docs/observability.md](docs/observability.md) for the full endpoint and retention reference.
+Sensitive keys and common credential patterns are redacted before log persistence. See [docs/observability.md](docs/observability.md) for the endpoint and retention reference, and [docs/security.md](docs/security.md) for the full hardening model.
+
+The repository audit command is [scripts/security-audit.sh](scripts/security-audit.sh), which carries the temporary Extism/Wasmtime exception list until upstream patched releases are available.
 
 See [docs/self-hosting.md](docs/self-hosting.md) for binary installs, Docker, Kubernetes, and release packaging commands.
 
@@ -167,5 +174,5 @@ See [docs/self-hosting.md](docs/self-hosting.md) for binary installs, Docker, Ku
 
 ## Next Milestones
 
-1. Harden connector isolation and release processes
-2. Track upstream Extism/Wasmtime security fixes as patched versions land
+1. Track upstream Extism/Wasmtime security fixes as patched versions land
+2. Remove the temporary audit exceptions once Extism ships the patched dependency chain

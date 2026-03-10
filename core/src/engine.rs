@@ -22,6 +22,7 @@ use std::{
     time::Duration,
 };
 
+use axum::http::header::HeaderName;
 use petgraph::{
     algo::toposort,
     graph::{DiGraph, NodeIndex},
@@ -1135,14 +1136,18 @@ fn validate_trigger(trigger: &Trigger) -> Result<(), EngineError> {
             Ok(())
         }
         "webhook" => {
-            let _ = trigger
+            let has_token_secret = trigger
                 .details
                 .get("secret_env")
                 .or_else(|| trigger.details.get("token_env"))
-                .ok_or(EngineError::MissingTriggerDetail {
-                    detail: "secret_env",
+                .is_some();
+            let has_signature_secret = trigger.details.contains_key("signature_env");
+            if !has_token_secret && !has_signature_secret {
+                return Err(EngineError::MissingTriggerDetail {
+                    detail: "secret_env or signature_env",
                     trigger_type: "webhook",
-                })?;
+                });
+            }
             if let Some(path) = trigger.details.get("path") {
                 let path = yaml_string(path, "path", "webhook")?;
                 if !path.starts_with('/') {
@@ -1152,6 +1157,31 @@ fn validate_trigger(trigger: &Trigger) -> Result<(), EngineError> {
                         trigger_type: "webhook".to_string(),
                     });
                 }
+            }
+            if let Some(header) = trigger.details.get("header") {
+                parse_header_name(yaml_string(header, "header", "webhook")?, "header", "webhook")?;
+            }
+            if let Some(signature_env) = trigger.details.get("signature_env") {
+                let _ = yaml_string(signature_env, "signature_env", "webhook")?;
+            } else if trigger.details.contains_key("signature_header")
+                || trigger.details.contains_key("signature_prefix")
+            {
+                return Err(EngineError::InvalidTriggerDetail {
+                    detail: "signature_env".to_string(),
+                    message: "signature_header and signature_prefix require signature_env"
+                        .to_string(),
+                    trigger_type: "webhook".to_string(),
+                });
+            }
+            if let Some(signature_header) = trigger.details.get("signature_header") {
+                parse_header_name(
+                    yaml_string(signature_header, "signature_header", "webhook")?,
+                    "signature_header",
+                    "webhook",
+                )?;
+            }
+            if let Some(signature_prefix) = trigger.details.get("signature_prefix") {
+                let _ = yaml_string(signature_prefix, "signature_prefix", "webhook")?;
             }
             Ok(())
         }
@@ -1168,6 +1198,16 @@ fn yaml_string<'a>(
         detail: detail.to_string(),
         message: "expected a string".to_string(),
         trigger_type: trigger_type.to_string(),
+    })
+}
+
+fn parse_header_name(value: &str, detail: &str, trigger_type: &str) -> Result<(), EngineError> {
+    HeaderName::from_bytes(value.as_bytes()).map(|_| ()).map_err(|error| {
+        EngineError::InvalidTriggerDetail {
+            detail: detail.to_string(),
+            message: error.to_string(),
+            trigger_type: trigger_type.to_string(),
+        }
     })
 }
 
@@ -1283,7 +1323,7 @@ steps:
     }
 
     #[test]
-    fn rejects_webhook_triggers_without_secret_env() {
+    fn rejects_webhook_triggers_without_authentication() {
         let workflow = Workflow {
             version: "v1".to_string(),
             name: "missing-secret".to_string(),
@@ -1303,8 +1343,40 @@ steps:
 
         assert!(matches!(
             error,
-            EngineError::MissingTriggerDetail { trigger_type: "webhook", detail: "secret_env" }
+            EngineError::MissingTriggerDetail {
+                trigger_type: "webhook",
+                detail: "secret_env or signature_env"
+            }
         ));
+    }
+
+    #[test]
+    fn accepts_signature_only_webhook_triggers() {
+        let mut trigger_details = serde_yaml::Mapping::new();
+        trigger_details.insert(
+            serde_yaml::Value::String("signature_env".to_string()),
+            serde_yaml::Value::String("ACSA_WEBHOOK_SIGNATURE_SECRET".to_string()),
+        );
+        let workflow = Workflow {
+            version: "v1".to_string(),
+            name: "signed-webhook".to_string(),
+            trigger: Trigger {
+                r#type: "webhook".to_string(),
+                details: serde_yaml::from_value(serde_yaml::Value::Mapping(trigger_details))
+                    .expect("mapping should convert"),
+            },
+            steps: vec![Step {
+                id: "start".to_string(),
+                r#type: "constant".to_string(),
+                params: serde_yaml::to_value(json!({ "value": true }))
+                    .expect("json should convert to yaml"),
+                next: vec![],
+                retry: None,
+                timeout_ms: None,
+            }],
+        };
+
+        validate_workflow(&workflow).expect("signature-only webhook should validate");
     }
 
     #[test]

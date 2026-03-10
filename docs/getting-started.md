@@ -29,7 +29,8 @@ Expected behavior:
 - serves cron and webhook triggers over HTTP while recording next-run state
 - exposes `/human-tasks` and `/human-tasks/{task_id}/resolve` for pending human-review steps
 - exposes `/api/workflows` and `/api/node-catalog` for the visual editor
-- runs connector manifests locally for subprocess and WASM development
+- runs connector manifests locally for subprocess development
+- runs WASM connector manifests only when `ACSA_ENABLE_WASM_CONNECTORS=1`
 
 ## Install a packaged binary
 
@@ -93,6 +94,7 @@ Useful environment variables:
 - `ACSA_LOG_FILE_PATH=./logs/acsa.log` mirrors redacted structured logs to a file
 - `ACSA_LOG_RETENTION_DAYS=30` purges old logs
 - `ACSA_RUN_RETENTION_DAYS=14` purges finished runs, step history, and related human tasks
+- `ACSA_WEBHOOK_SIGNATURE_SECRET=your_hmac_key` sets the HMAC key used to verify `x-acsa-signature` for signed webhook triggers
 
 ## Workflow samples
 
@@ -110,6 +112,28 @@ curl \
   -H "content-type: application/json" \
   -H "x-acsa-webhook-token: YOUR_SECRET_HERE" \
   -d '{"priority":"urgent","ticket_id":"INC-1024"}'
+```
+
+Signed webhook example:
+
+`ACSA_WEBHOOK_SECRET` is the public shared token sent in `x-acsa-webhook-token`. `ACSA_WEBHOOK_SIGNATURE_SECRET` is the private HMAC key used to compute and verify the `sha256` signature sent in `x-acsa-signature`.
+
+Set both before sending signed webhook requests:
+
+```bash
+export ACSA_WEBHOOK_SECRET="YOUR_SECRET_HERE"
+export ACSA_WEBHOOK_SIGNATURE_SECRET="your_hmac_key"
+```
+
+```bash
+body='{"priority":"urgent","ticket_id":"INC-1024"}'
+signature="sha256=$(printf '%s' "$body" | openssl dgst -sha256 -hmac "$ACSA_WEBHOOK_SIGNATURE_SECRET" -binary | xxd -p -c 256)"
+curl \
+  -X POST http://127.0.0.1:3001/hooks/incoming-review \
+  -H "content-type: application/json" \
+  -H "x-acsa-webhook-token: $ACSA_WEBHOOK_SECRET" \
+  -H "x-acsa-signature: $signature" \
+  -d "$body"
 ```
 
 ## Human Task Example
@@ -150,7 +174,9 @@ For Kubernetes and release packaging details, see `docs/self-hosting.md`.
 - keep secrets out of workflow files
 - use environment variables or secret managers
 - the workflow API rejects inline values for secret-like fields such as `secret`, `token`, and `password`; use `*_env` or `secrets_env` references instead
+- use `headers_env` for sensitive HTTP headers and `connection_env` for PostgreSQL DSNs
 - do not commit local `.env` files
 - treat logs as potentially sensitive and redact before persistence
 - disable payload visibility with `ACSA_LOG_PAYLOADS=0` when log data should stay minimal
+- enable WASM connectors only when required with `ACSA_ENABLE_WASM_CONNECTORS=1`
 - replace placeholder checksums in `packaging/homebrew/acsa.rb` and `packaging/scoop/acsa.json` when publishing releases

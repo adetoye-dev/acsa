@@ -6,7 +6,7 @@
     "dev": "next dev --port 3000",
     "build": "next build",
     "start": "next start --port 3000",
-    "lint": "tsc --noEmit"
+    "lint": "node ./scripts/ensure-next-types.mjs && tsc --noEmit"
   },
   "dependencies": {
     "@xyflow/react": "12.4.2",

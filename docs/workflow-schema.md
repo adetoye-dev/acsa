@@ -28,6 +28,7 @@ trigger:
   type: webhook
   path: /hooks/incoming-review
   secret_env: ACSA_WEBHOOK_SECRET
+  signature_env: ACSA_WEBHOOK_SIGNATURE_SECRET
 steps:
   - id: classify_priority
     type: condition
@@ -67,7 +68,7 @@ steps:
 - `trigger.*`: trigger-specific properties.
   - `manual`: no additional required fields.
   - `cron`: requires `schedule` or `expression`.
-  - `webhook`: canonical field is `secret_env`; the workflow API also accepts `secrets_env` and `token_env` for compatibility. `path` and `header` are optional.
+  - `webhook`: requires at least one of `secret_env`, `token_env`, or `signature_env`. `path` and `header` are optional. `signature_header` is the HTTP header that carries the HMAC signature. `signature_prefix` is an optional prefix before the signature value (for example `sha256=`).
 - `steps[].id`: stable step identifier.
 - `steps[].type`: node or connector type.
   - Built-in logic: `constant`, `noop`, `condition`, `switch`, `loop`, `parallel`
@@ -85,7 +86,7 @@ steps:
 - YAML remains the single source of truth for workflows.
 - The engine validates trigger configuration before execution and compiles the steps into a DAG.
 - Condition and switch nodes can route to specific downstream steps; non-selected branches are recorded as skipped.
-- Cron triggers persist their next-run timestamps in SQLite; webhook triggers require an environment-managed shared secret.
+- Cron triggers persist their next-run timestamps in SQLite; webhook triggers require environment-managed shared secrets and can additionally enforce HMAC signatures.
 - Approval and manual-input nodes persist pending human tasks in SQLite and can be resumed through the HTTP API.
 - External connector nodes are discovered from manifest files and executed either as subprocesses or Extism-backed WASM plugins.
 - The visual editor loads, saves, duplicates, deletes, and manually runs workflows through the engine API under `/api/workflows`.
