@@ -1,3 +1,4 @@
+# Minimal manual workflow for first-run validation: seed data, fan out, then join.
 version: v1
 name: manual-demo
 trigger:
@@ -8,7 +9,7 @@ steps:
     params:
       value:
         message: Hello from Acsa
-        stage: phase-3
+        environment: local-demo
     next: [fanout_left, fanout_right]
     timeout_ms: 1000
   - id: fanout_left

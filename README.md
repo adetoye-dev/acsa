@@ -2,7 +2,7 @@
 
 Acsa is a production-grade, open-source workflow automation engine from Achsah Systems. It is being built as a local-first platform for YAML workflow-as-code, DAG execution, plugin-based extensibility, observability, and security-first automation.
 
-## Phase 10 Status
+## Current Snapshot
 
 This repository now contains:
 
@@ -44,6 +44,23 @@ acsa/
 
 ## Quick Start
 
+## First 5 Minutes
+
+Run the fastest happy-path commands first:
+
+```bash
+# 1. Validate the smallest workflow
+cargo run -p acsa-core -- validate workflows/hello.yaml
+
+# 2. Execute a local DAG and persist run state
+cargo run -p acsa-core -- run workflows/manual-demo.yaml --db ./acsa.db
+
+# 3. Exercise the sample connector without creating anything first
+cargo run -p acsa-core -- connector-test
+```
+
+Those three commands cover schema validation, workflow execution, and connector execution with working defaults.
+
 ### Engine
 
 Rust is required to build and run the engine.
@@ -54,7 +71,7 @@ cargo run -p acsa-core -- list workflows
 cargo run -p acsa-core -- --version
 cargo run -p acsa-core -- run workflows/manual-demo.yaml --db ./acsa.db
 ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
-cargo run -p acsa-core -- connector-test examples/process-connector/manifest.json --inputs examples/process-connector/sample-input.json
+cargo run -p acsa-core -- connector-test
 ```
 
 **Note:** Generate strong webhook secrets for production with `openssl rand -hex 32`. Shared-secret headers use `ACSA_WEBHOOK_SECRET`; signed webhooks can additionally use `ACSA_WEBHOOK_SIGNATURE_SECRET`.
@@ -70,7 +87,7 @@ The HTTP server now also exposes:
 
 ### Distribution
 
-Phase 8 adds:
+Included distribution assets:
 
 - `scripts/install.sh` for GitHub release installs with checksum verification
 - `scripts/package-release.sh` for local artifact packaging
@@ -90,7 +107,7 @@ npm install
 npm run dev
 ```
 
-The Phase 9 UI now loads workflows from the engine API, edits YAML-backed workflow state, saves validated changes, starts manual runs, resolves persisted human tasks from the editor inbox, and shows run history, step timelines, log search, and execution metrics. By default the Next.js app proxies `/engine/*` to `http://127.0.0.1:3001/*`; override that with `ACSA_ENGINE_URL` if your engine runs elsewhere.
+The UI loads workflows from the engine API, edits YAML-backed workflow state, saves validated changes, starts manual runs, resolves persisted human tasks from the editor inbox, and shows run history, step timelines, log search, and execution metrics. By default the Next.js app proxies `/engine/*` to `http://127.0.0.1:3001/*`; override that with `ACSA_ENGINE_URL` if your engine runs elsewhere.
 
 The production UI is configured for Next.js standalone output so it can ship inside the Acsa container image or a packaged bundle.
 

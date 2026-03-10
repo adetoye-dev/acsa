@@ -66,6 +66,11 @@ impl Cli {
             }),
             [flag] if flag == "--help" || flag == "-h" => Err(CliError::HelpRequested),
             [flag] if flag == "--version" || flag == "-V" => Ok(Self { command: Command::Version }),
+            [command, flag] if command == "help" && (flag == "--help" || flag == "-h") => {
+                Err(CliError::HelpRequested)
+            }
+            [command] if command == "help" => Err(CliError::HelpRequested),
+            [_, flag] if flag == "--help" || flag == "-h" => Err(CliError::HelpRequested),
             [command, rest @ ..] => match command.as_str() {
                 "connector-new" => Ok(Self { command: parse_connector_new(rest)? }),
                 "connector-test" => Ok(Self { command: parse_connector_test(rest)? }),
@@ -80,7 +85,7 @@ impl Cli {
     }
 
     pub const fn usage() -> &'static str {
-        "Usage:\n  acsa-core validate [workflow-file]\n  acsa-core list [workflows-dir]\n  acsa-core run [workflow-file] [--db path] [--max-concurrency N]\n  acsa-core serve [workflows-dir] [--db path] [--host HOST] [--port PORT] [--max-concurrency N]\n  acsa-core connector-new NAME --type TYPE --runtime process|wasm [--dir connectors]\n  acsa-core connector-test [manifest-file] [--inputs path] [--params path]\n  acsa-core version\n  acsa-core --version"
+        "Usage:\n  acsa-core validate [workflow-file]\n  acsa-core list [workflows-dir]\n  acsa-core run [workflow-file] [--db path] [--max-concurrency N]\n  acsa-core serve [workflows-dir] [--db path] [--host HOST] [--port PORT] [--max-concurrency N]\n  acsa-core connector-new NAME --type TYPE --runtime process|wasm [--dir connectors]\n  acsa-core connector-test [manifest-file] [--inputs path] [--params path]\n  acsa-core version\n  acsa-core --version\n\nDefaults:\n  validate        workflows/hello.yaml\n  list            workflows/\n  run             workflows/manual-demo.yaml --db acsa.db\n  serve           workflows/ --db acsa.db --host 127.0.0.1 --port 3001\n  connector-test  examples/process-connector/manifest.json --inputs examples/process-connector/sample-input.json\n\nExamples:\n  acsa-core run workflows/manual-demo.yaml --db acsa.db\n  acsa-core serve workflows --db acsa.db --port 3001\n  acsa-core connector-test\n  acsa-core connector-new sample-echo --type sample_echo --runtime process --dir ./connectors"
     }
 }
 
@@ -205,7 +210,7 @@ fn parse_connector_new(args: &[String]) -> Result<Command, CliError> {
 }
 
 fn parse_connector_test(args: &[String]) -> Result<Command, CliError> {
-    let mut manifest_path = PathBuf::from("connectors/manifest.yaml");
+    let mut manifest_path = PathBuf::from("examples/process-connector/manifest.json");
     let mut inputs_path = None;
     let mut params_path = None;
     let mut path_assigned = false;
@@ -236,6 +241,10 @@ fn parse_connector_test(args: &[String]) -> Result<Command, CliError> {
                 index += 1;
             }
         }
+    }
+
+    if !path_assigned && inputs_path.is_none() {
+        inputs_path = Some(PathBuf::from("examples/process-connector/sample-input.json"));
     }
 
     Ok(Command::ConnectorTest { inputs_path, manifest_path, params_path })
@@ -298,4 +307,35 @@ fn parse_serve(args: &[String]) -> Result<Command, CliError> {
     }
 
     Ok(Command::Serve { database_path, host, max_concurrency, port, workflows_dir })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::{parse_connector_test, Cli, Command};
+
+    #[test]
+    fn connector_test_defaults_to_the_working_example() {
+        let command =
+            parse_connector_test(&[]).expect("default connector test command should parse");
+
+        assert_eq!(
+            command,
+            Command::ConnectorTest {
+                manifest_path: PathBuf::from("examples/process-connector/manifest.json"),
+                inputs_path: Some(PathBuf::from("examples/process-connector/sample-input.json")),
+                params_path: None,
+            }
+        );
+    }
+
+    #[test]
+    fn usage_lists_defaults_and_examples() {
+        let usage = Cli::usage();
+
+        assert!(usage.contains("Defaults:"));
+        assert!(usage.contains("Examples:"));
+        assert!(usage.contains("acsa-core connector-test"));
+    }
 }

@@ -14,7 +14,7 @@
 
 #![deny(warnings)]
 
-use std::fs;
+use std::{fs, io, path::Path};
 
 use serde_json::json;
 
@@ -33,8 +33,15 @@ use acsa_core::{
 type MainError = Box<dyn std::error::Error>;
 
 #[tokio::main]
-async fn main() -> Result<(), MainError> {
+async fn main() {
     init_tracing();
+    if let Err(error) = run().await {
+        report_error(error.as_ref());
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<(), MainError> {
     let cli = match Cli::from_env() {
         Ok(cli) => cli,
         Err(CliError::HelpRequested) => {
@@ -55,11 +62,19 @@ async fn main() -> Result<(), MainError> {
                 runtime_name(runtime),
                 connector_dir.display()
             );
+            println!("Next steps:");
+            println!("  1. Review {}", connector_dir.join("README.md").display());
+            println!(
+                "  2. Test it with: cargo run -p acsa-core -- connector-test {} --inputs {}",
+                connector_dir.join("manifest.json").display(),
+                connector_dir.join("sample-input.json").display()
+            );
         }
         Command::ConnectorTest { inputs_path, manifest_path, params_path } => {
-            let inputs = load_json_file(inputs_path.as_deref())
+            ensure_file_exists(&manifest_path, "connector manifest")?;
+            let inputs = load_json_file(inputs_path.as_deref(), "inputs")
                 .map_err(|error| -> MainError { Box::new(error) })?;
-            let params = load_json_file(params_path.as_deref())
+            let params = load_json_file(params_path.as_deref(), "params")
                 .map_err(|error| -> MainError { Box::new(error) })?;
             let output = run_manifest_path(&manifest_path, inputs, params)
                 .await
@@ -154,14 +169,31 @@ async fn main() -> Result<(), MainError> {
     Ok(())
 }
 
-fn load_json_file(path: Option<&std::path::Path>) -> Result<serde_json::Value, std::io::Error> {
+fn load_json_file(path: Option<&Path>, label: &str) -> Result<serde_json::Value, std::io::Error> {
     match path {
         Some(path) => {
+            ensure_file_exists(path, label)?;
             let raw = fs::read_to_string(path)?;
-            let parsed = serde_json::from_str(&raw).map_err(std::io::Error::other)?;
+            let parsed = serde_json::from_str(&raw).map_err(|error| {
+                io::Error::other(format!(
+                    "failed to parse {label} JSON from {}: {error}",
+                    path.display()
+                ))
+            })?;
             Ok(parsed)
         }
         None => Ok(json!({})),
+    }
+}
+
+fn ensure_file_exists(path: &Path, label: &str) -> Result<(), io::Error> {
+    if path.exists() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{label} not found at {}", path.display()),
+        ))
     }
 }
 
@@ -170,6 +202,14 @@ fn parse_connector_runtime(runtime: &str) -> Result<ConnectorRuntime, MainError>
         "process" => Ok(ConnectorRuntime::Process),
         "wasm" => Ok(ConnectorRuntime::Wasm),
         other => Err(format!("unsupported connector runtime {other}").into()),
+    }
+}
+
+fn report_error(error: &(dyn std::error::Error + 'static)) {
+    eprintln!("error: {error}");
+    if error.downcast_ref::<CliError>().is_some() {
+        eprintln!();
+        eprintln!("{}", Cli::usage());
     }
 }
 

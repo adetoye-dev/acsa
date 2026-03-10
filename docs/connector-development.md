@@ -110,6 +110,13 @@ Create a connector:
 cargo run -p acsa-core -- connector-new sample-echo --type sample_echo --runtime process --dir ./connectors
 ```
 
+The scaffold includes:
+
+- `manifest.json`
+- `sample-input.json`
+- `README.md`
+- runtime-specific starter source files
+
 Test a manifest directly:
 
 ```bash

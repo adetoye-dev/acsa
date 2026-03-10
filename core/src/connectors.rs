@@ -463,6 +463,7 @@ message = payload.get("inputs", {}).get("message", "")
 print(json.dumps({"echoed": message, "params": payload.get("params", {})}))
 "#,
     )?;
+    scaffold_sample_files(connector_dir, name, type_id, ConnectorRuntime::Process)?;
     Ok(())
 }
 
@@ -486,6 +487,7 @@ fn scaffold_wasm_connector(
         version: Some("0.1.0".to_string()),
     };
     fs::create_dir_all(connector_dir.join("src"))?;
+    fs::create_dir_all(connector_dir.join("dist"))?;
     fs::write(connector_dir.join("manifest.json"), serde_json::to_string_pretty(&manifest)?)?;
     fs::write(
         connector_dir.join("Cargo.toml"),
@@ -514,7 +516,50 @@ pub fn execute(input: String) -> FnResult<String> {
 }
 "#,
     )?;
+    scaffold_sample_files(connector_dir, name, type_id, ConnectorRuntime::Wasm)?;
     Ok(())
+}
+
+fn scaffold_sample_files(
+    connector_dir: &Path,
+    name: &str,
+    type_id: &str,
+    runtime: ConnectorRuntime,
+) -> Result<(), ConnectorError> {
+    fs::write(
+        connector_dir.join("sample-input.json"),
+        serde_json::to_string_pretty(&json!({
+            "message": format!("hello from {type_id}")
+        }))?,
+    )?;
+    fs::write(connector_dir.join("README.md"), scaffold_readme(name, type_id, runtime))?;
+    Ok(())
+}
+
+fn scaffold_readme(name: &str, type_id: &str, runtime: ConnectorRuntime) -> String {
+    let runtime_notes = match runtime {
+        ConnectorRuntime::Process => {
+            "Edit `main.py`, then test locally with the command below."
+        }
+        ConnectorRuntime::Wasm => {
+            "Build the WASM artifact into `dist/connector.wasm`, enable `ACSA_ENABLE_WASM_CONNECTORS=1`, then test locally with the command below."
+        }
+    };
+
+    format!(
+        "# {name}\n\n\
+Type: `{type_id}`\n\
+Runtime: `{}`\n\n\
+{runtime_notes}\n\n\
+## Local test\n\n\
+```bash\n\
+cargo run -p acsa-core -- connector-test ./manifest.json --inputs ./sample-input.json\n\
+```\n",
+        match runtime {
+            ConnectorRuntime::Process => "process",
+            ConnectorRuntime::Wasm => "wasm",
+        }
+    )
 }
 
 fn resolve_secrets(params: &Value) -> Result<Value, NodeError> {
@@ -779,8 +824,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        run_manifest_path, validate_manifest, validate_output_keys, ConnectorLimits,
-        ConnectorManifest, ConnectorRuntime,
+        run_manifest_path, scaffold_connector, validate_manifest, validate_output_keys,
+        ConnectorLimits, ConnectorManifest, ConnectorRuntime,
     };
 
     #[test]
@@ -898,5 +943,20 @@ mod tests {
             .expect_err("allowed_paths without wasi should be rejected");
 
         assert!(matches!(error, super::ConnectorError::InvalidManifest { .. }));
+    }
+
+    #[test]
+    fn scaffolded_connectors_include_readme_and_sample_input() {
+        let temp_dir = std::env::temp_dir().join(format!("acsa-scaffold-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).expect("temp connector directory should be created");
+
+        let connector_dir =
+            scaffold_connector(&temp_dir, "sample-echo", "sample_echo", ConnectorRuntime::Process)
+                .expect("connector should scaffold");
+
+        assert!(connector_dir.join("README.md").exists());
+        assert!(connector_dir.join("sample-input.json").exists());
+
+        fs::remove_dir_all(temp_dir).expect("temp connector directory should be removed");
     }
 }

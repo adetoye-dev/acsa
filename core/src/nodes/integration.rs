@@ -154,14 +154,14 @@ impl Node for HttpRequestNode {
         while let Some(chunk) = response.chunk().await.map_err(|error| NodeError::Message {
             message: format!("failed to read response body: {error}"),
         })? {
-            total_bytes = total_bytes
-                .checked_add(chunk.len())
-                .ok_or_else(|| NodeError::SecurityViolation {
+            total_bytes = total_bytes.checked_add(chunk.len()).ok_or_else(|| {
+                NodeError::SecurityViolation {
                     message: format!(
                         "http response size exceeds configured limit {}",
                         max_response_bytes
                     ),
-                })?;
+                }
+            })?;
             if total_bytes > max_response_bytes {
                 return Err(NodeError::SecurityViolation {
                     message: format!(

@@ -10,6 +10,21 @@
 - Node.js 22+
 - npm 11+ or pnpm 10+
 
+## First success
+
+Use these commands in order if you are trying Acsa for the first time:
+
+```bash
+# Validate the smallest workflow
+cargo run -p acsa-core -- validate workflows/hello.yaml
+
+# Run a local manual workflow and write SQLite state
+cargo run -p acsa-core -- run workflows/manual-demo.yaml --db ./acsa.db
+
+# Run the built-in connector example with working defaults
+cargo run -p acsa-core -- connector-test
+```
+
 ## Run the Current CLI
 
 ```bash
@@ -18,7 +33,7 @@ cargo run -p acsa-core -- list workflows
 cargo run -p acsa-core -- --version
 cargo run -p acsa-core -- run workflows/conditional-demo.yaml --db ./acsa.db
 ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
-cargo run -p acsa-core -- connector-test examples/process-connector/manifest.json --inputs examples/process-connector/sample-input.json
+cargo run -p acsa-core -- connector-test
 ```
 
 Expected behavior:
@@ -45,7 +60,7 @@ For local packaging instead of downloading a release:
 ./scripts/package-release.sh
 ```
 
-## Run the Phase 9 UI
+## Run the UI
 
 ```bash
 ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
@@ -160,6 +175,8 @@ cargo run -p acsa-core -- connector-new sample-echo --type sample_echo --runtime
 # Test the newly created connector
 cargo run -p acsa-core -- connector-test ./tmp-connectors/sample-echo/manifest.json --inputs ./tmp-connectors/sample-echo/sample-input.json
 ```
+
+`connector-new` now writes a starter `README.md` and `sample-input.json` into the scaffolded connector directory.
 
 ## Container Example
 
