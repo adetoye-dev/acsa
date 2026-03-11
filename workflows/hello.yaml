@@ -8,7 +8,7 @@ steps:
     type: http_request
     params:
       method: GET
-      url: https://example.com/health
+      url: https://healthchecks.io/api/v3/status/
       headers:
         accept: application/json
     next: []
