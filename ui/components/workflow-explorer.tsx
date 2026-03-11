@@ -41,11 +41,11 @@ export function WorkflowExplorer({
   workflows
 }: WorkflowExplorerProps) {
   return (
-    <aside className="panel-surface p-5">
-      <div className="flex items-center justify-between gap-3">
+    <section className="panel-surface overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-black/10 px-4 py-4">
         <div>
-          <p className="section-kicker">Workflow explorer</p>
-          <h2 className="section-title mt-2">YAML definitions</h2>
+          <p className="section-kicker">Workflows</p>
+          <h2 className="section-title mt-1">YAML definitions</h2>
         </div>
         <button
           className="ui-button ui-button-tide"
@@ -57,14 +57,14 @@ export function WorkflowExplorer({
         </button>
       </div>
 
-      <div className="mt-5 space-y-3">
+      <div className="space-y-3 px-4 py-4">
         {workflows.map((workflow) => {
           const isActive = workflow.id === activeWorkflowId;
 
           return (
             <article
               key={workflow.id}
-              className={`rounded-2xl border px-4 py-4 transition ${
+              className={`rounded-2xl border px-3 py-3 transition ${
                 isActive
                   ? "border-tide/40 bg-tide/10"
                   : "border-black/10 bg-white/70 hover:border-black/20 hover:bg-white"
@@ -76,7 +76,7 @@ export function WorkflowExplorer({
                 type="button"
               >
                 <div className="flex items-center justify-between gap-3">
-                  <span className="font-display text-lg font-semibold text-ink">
+                  <span className="truncate font-display text-base font-semibold text-ink">
                     {workflow.name}
                   </span>
                   <span className="ui-badge">
@@ -86,8 +86,9 @@ export function WorkflowExplorer({
                 <p className="mt-2 text-sm leading-6 text-slate">
                   {workflow.description}
                 </p>
-                <div className="mt-3 flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
+                <div className="mt-3 flex flex-wrap items-center gap-2 font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
                   <span>{workflow.file_name}</span>
+                  <span>{workflow.step_count} step{workflow.step_count === 1 ? "" : "s"}</span>
                   {workflow.has_connector_steps ? (
                     <span className="rounded-md bg-ember/10 px-2 py-1 text-ember">
                       Connector step
@@ -96,7 +97,7 @@ export function WorkflowExplorer({
                 </div>
               </button>
 
-              <div className="mt-4 flex flex-wrap gap-2">
+              <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   className="ui-button"
                   disabled={isBusy}
@@ -117,21 +118,21 @@ export function WorkflowExplorer({
             </article>
           );
         })}
-      </div>
 
-      {invalidFiles.length > 0 ? (
-        <div className="mt-6 rounded-2xl border border-ember/20 bg-ember/5 p-4">
-          <p className="section-kicker text-ember">Needs attention</p>
-          <div className="mt-3 space-y-3">
-            {invalidFiles.map((file) => (
-              <div key={file.id} className="rounded-xl border border-ember/15 bg-white/80 p-3">
-                <div className="text-sm font-semibold text-ink">{file.file_name}</div>
-                <p className="mt-1 text-sm leading-6 text-slate">{file.error}</p>
-              </div>
-            ))}
+        {invalidFiles.length > 0 ? (
+          <div className="rounded-2xl border border-ember/20 bg-ember/5 p-4">
+            <p className="section-kicker text-ember">Needs attention</p>
+            <div className="mt-3 space-y-3">
+              {invalidFiles.map((file) => (
+                <div key={file.id} className="rounded-xl border border-ember/15 bg-white/80 p-3">
+                  <div className="text-sm font-semibold text-ink">{file.file_name}</div>
+                  <p className="mt-1 text-sm leading-6 text-slate">{file.error}</p>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      ) : null}
-    </aside>
+        ) : null}
+      </div>
+    </section>
   );
 }

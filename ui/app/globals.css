@@ -104,6 +104,22 @@ a {
   background: rgba(16, 26, 29, 0.97);
 }
 
+.yaml-editor .cm-content,
+.yaml-editor .cm-line {
+  color: rgba(238, 246, 246, 0.92);
+}
+
+.yaml-editor .cm-cursor,
+.yaml-editor .cm-dropCursor {
+  border-left-color: rgba(255, 255, 255, 0.88);
+}
+
+.yaml-editor .cm-selectionBackground,
+.yaml-editor .cm-focused .cm-selectionBackground,
+.yaml-editor ::selection {
+  background: rgba(92, 167, 171, 0.28) !important;
+}
+
 .yaml-editor .cm-scroller {
   min-height: inherit;
   font-family:
@@ -126,9 +142,30 @@ a {
   color: rgba(229, 240, 239, 0.45);
 }
 
+.sleek-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(16, 26, 29, 0.18) transparent;
+}
+
+.sleek-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.sleek-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sleek-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  background-color: rgba(16, 26, 29, 0.16);
+}
+
 @layer components {
   .panel-surface {
-    @apply rounded-2xl border border-black/10 bg-white/75 shadow-panel backdrop-blur;
+    @apply rounded-[18px] border border-black/10 bg-white/80 shadow-panel backdrop-blur;
   }
 
   .section-kicker {
@@ -140,7 +177,7 @@ a {
   }
 
   .ui-button {
-    @apply inline-flex items-center gap-2 rounded-md border border-black/10 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-ink transition hover:border-black/20 hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60;
+    @apply inline-flex items-center gap-2 rounded-md border border-black/10 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-ink transition hover:border-black/20 hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60;
   }
 
   .ui-button-primary {

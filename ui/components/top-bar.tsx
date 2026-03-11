@@ -14,96 +14,97 @@
  * limitations under the License.
  */
 
+export type WorkspaceView = "canvas" | "preview" | "history" | "logs";
+
 type TopBarProps = {
   activeWorkflowFile: string;
   activeWorkflowName: string;
+  hasUnsavedChanges: boolean;
   isRunning: boolean;
   isSaving: boolean;
-  lastAction: string;
   onRefresh: () => void;
   onRun: () => void;
   onSave: () => void;
-  pendingTaskCount: number;
   runStatus: string | null;
 };
 
 export function TopBar({
   activeWorkflowFile,
   activeWorkflowName,
+  hasUnsavedChanges,
   isRunning,
   isSaving,
-  lastAction,
   onRefresh,
   onRun,
   onSave,
-  pendingTaskCount,
   runStatus
 }: TopBarProps) {
   return (
     <section className="panel-surface overflow-hidden">
-      <div className="flex flex-col gap-5 px-6 py-5 lg:flex-row lg:items-center lg:justify-between">
-        <div className="max-w-3xl">
-          <p className="section-kicker">Achsah Systems</p>
-          <h1 className="mt-2 font-display text-4xl font-semibold tracking-tight text-ink">
-            Acsa workflow studio
-          </h1>
-          <p className="mt-2 text-sm leading-6 text-slate">
-            A local-first editor for YAML workflows, bounded DAG execution, and
-            secure connector expansion.
-          </p>
-        </div>
-
-        <div className="flex flex-col items-stretch gap-3 lg:min-w-[420px] lg:items-end">
-          <div className="ui-panel-card px-4 py-3 text-sm text-slate">
-            <div>
-              <span className="font-semibold text-ink">Active workflow:</span>{" "}
-              {activeWorkflowName}
+      <div className="flex h-[58px] items-center justify-between gap-4 px-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="rounded-xl border border-black/10 bg-ink px-3 py-2 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-white">
+            Acsa
+          </div>
+          <div className="min-w-0">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate/55">
+              Workflow studio
             </div>
-            <div className="ui-meta mt-1">
-              {activeWorkflowFile}
-            </div>
-            <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.18em]">
-              <span className="ui-badge">
-                {pendingTaskCount} pending task{pendingTaskCount === 1 ? "" : "s"}
-              </span>
-              {runStatus ? (
-                <span className="rounded-md bg-tide/10 px-2 py-1 font-mono text-[11px] text-tide">
-                  {runStatus}
-                </span>
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="truncate text-[15px] font-semibold text-ink">
+                {activeWorkflowName}
+              </div>
+              {hasUnsavedChanges ? (
+                <ShellBadge label="unsaved" tone="warn" />
               ) : null}
             </div>
-            <div className="ui-meta mt-3">
-              {lastAction}
-            </div>
           </div>
+        </div>
 
-          <div className="flex flex-wrap gap-3">
-            <button
-              className="ui-button"
-              onClick={onRefresh}
-              type="button"
-            >
-              Refresh
-            </button>
-            <button
-              className="ui-button"
-              disabled={isSaving}
-              onClick={onSave}
-              type="button"
-            >
-              {isSaving ? "Saving..." : "Save YAML"}
-            </button>
-            <button
-              className="ui-button ui-button-primary"
-              disabled={isRunning}
-              onClick={onRun}
-              type="button"
-            >
-              {isRunning ? "Running..." : "Run workflow"}
-            </button>
-          </div>
+        <div className="hidden items-center gap-2 xl:flex">
+          <ShellBadge label={activeWorkflowFile} tone="neutral" />
+          {runStatus ? <ShellBadge label={runStatus} tone="warn" /> : null}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button className="ui-button" onClick={onRefresh} type="button">
+            Refresh
+          </button>
+          <button className="ui-button" disabled={isSaving} onClick={onSave} type="button">
+            {isSaving ? "Saving..." : "Save"}
+          </button>
+          <button
+            className="ui-button ui-button-primary"
+            disabled={isRunning}
+            onClick={onRun}
+            type="button"
+          >
+            {isRunning ? "Running..." : "Run"}
+          </button>
         </div>
       </div>
     </section>
+  );
+}
+
+function ShellBadge({
+  label,
+  tone
+}: {
+  label: string;
+  tone: "info" | "neutral" | "warn";
+}) {
+  const toneMap = {
+    info: "border-tide/15 bg-tide/10 text-tide",
+    neutral: "border-black/10 bg-black/[0.04] text-slate/72",
+    warn: "border-ember/15 bg-ember/10 text-ember"
+  } as const;
+
+  return (
+    <span
+      className={`rounded-md border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.16em] ${toneMap[tone]}`}
+    >
+      {label}
+    </span>
   );
 }

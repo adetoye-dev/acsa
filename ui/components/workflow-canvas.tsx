@@ -57,20 +57,28 @@ import { WorkflowNode } from "./workflow-node";
 
 type WorkflowCanvasProps = {
   edges: Edge[];
+  frameRequestKey?: number;
   nodes: CanvasNode[];
   onDeleteStep: (stepId: string) => void;
   onEdgesCommit: (edges: Edge[]) => void;
   onPositionsCommit: (positions: Record<string, XYPosition>) => void;
   onSelectNode: (nodeId: string | null) => void;
+  showControls?: boolean;
+  showMiniMap?: boolean;
+  showViewportPanel?: boolean;
 };
 
 export function WorkflowCanvas({
   edges,
+  frameRequestKey = 0,
   nodes,
   onDeleteStep,
   onEdgesCommit,
   onPositionsCommit,
-  onSelectNode
+  onSelectNode,
+  showControls = true,
+  showMiniMap = true,
+  showViewportPanel = true
 }: WorkflowCanvasProps) {
   const [localNodes, setLocalNodes] = useState<CanvasNode[]>(nodes);
   const [localEdges, setLocalEdges] = useState<Edge[]>(edges);
@@ -198,14 +206,18 @@ export function WorkflowCanvas({
         zoomOnDoubleClick={false}
         zoomOnScroll={false}
       >
-        <InitialFrame nodeCount={localNodes.length} />
-        <ViewportPanel />
-        <MiniMap
-          pannable
-          zoomable
-          className="!rounded-xl !border !border-black/10 !bg-white/85"
-        />
-        <Controls className="!rounded-xl !border !border-black/10 !bg-white/85" />
+        <InitialFrame frameRequestKey={frameRequestKey} nodeCount={localNodes.length} />
+        {showViewportPanel ? <ViewportPanel /> : null}
+        {showMiniMap ? (
+          <MiniMap
+            pannable
+            zoomable
+            className="!rounded-xl !border !border-black/10 !bg-white/85"
+          />
+        ) : null}
+        {showControls ? (
+          <Controls className="!rounded-xl !border !border-black/10 !bg-white/85" />
+        ) : null}
         <Background
           color="rgba(16, 26, 29, 0.035)"
           gap={28}
@@ -217,7 +229,13 @@ export function WorkflowCanvas({
   );
 }
 
-function InitialFrame({ nodeCount }: { nodeCount: number }) {
+function InitialFrame({
+  frameRequestKey,
+  nodeCount
+}: {
+  frameRequestKey: number;
+  nodeCount: number;
+}) {
   const hasFramedOnMount = useRef(false);
   const nodesInitialized = useNodesInitialized();
   const reactFlow = useReactFlow();
@@ -234,6 +252,18 @@ function InitialFrame({ nodeCount }: { nodeCount: number }) {
 
     return () => window.cancelAnimationFrame(frameId);
   }, [nodeCount, nodesInitialized, reactFlow]);
+
+  useEffect(() => {
+    if (!nodesInitialized || frameRequestKey === 0) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      void reactFlow.fitView({ duration: 180, maxZoom: 1.05, padding: 0.18 });
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [frameRequestKey, nodesInitialized, reactFlow]);
 
   return null;
 }

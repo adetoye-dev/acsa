@@ -16,7 +16,7 @@
 
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import {
@@ -27,10 +27,8 @@ import {
 import { HumanTaskInbox } from "./human-task-inbox";
 import { NodeInspector } from "./node-inspector";
 import { RunHistoryPanel } from "./run-history-panel";
-import { TopBar } from "./top-bar";
-import { ConnectorManager } from "./connector-manager";
+import { TopBar, type WorkspaceView } from "./top-bar";
 import { WorkflowCanvas } from "./workflow-canvas";
-import { WorkflowExplorer } from "./workflow-explorer";
 import {
   fetchEngineJson,
   fetchEngineNoContent,
@@ -63,11 +61,9 @@ import {
   type HumanTask,
   type InvalidWorkflowFile,
   type NodeExecutionState,
-  type PendingTask,
   type StepTypeEntry,
   type TriggerTypeEntry,
   TRIGGER_NODE_ID,
-  type WorkflowDefinition,
   type WorkflowDocument,
   type WorkflowDocumentResponse,
   type WorkflowSummary,
@@ -112,7 +108,6 @@ export function EditorShell() {
     isRefreshingTasks,
     isRunning,
     isSaving,
-    lastAction,
     lastRun,
     newStepType,
     pendingTasks,
@@ -136,7 +131,6 @@ export function EditorShell() {
       isRefreshingTasks: state.isRefreshingTasks,
       isRunning: state.isRunning,
       isSaving: state.isSaving,
-      lastAction: state.lastAction,
       lastRun: state.lastRun,
       newStepType: state.newStepType,
       pendingTasks: state.pendingTasks,
@@ -159,7 +153,6 @@ export function EditorShell() {
     runLogs,
     runPage,
     runStatusFilter,
-    runWorkflowFilter,
     selectedRunId
   } = useObservabilityStore(
     useShallow((state) => ({
@@ -171,7 +164,6 @@ export function EditorShell() {
       runLogs: state.logs,
       runPage: state.runPage,
       runStatusFilter: state.runStatusFilter,
-      runWorkflowFilter: state.runWorkflowFilter,
       selectedRunId: state.selectedRunId
     }))
   );
@@ -180,6 +172,8 @@ export function EditorShell() {
   const { patch: patchObservabilityState } = useObservabilityActions();
 
   const activeWorkflow = activeWorkflowId ? documents[activeWorkflowId] ?? null : null;
+  const [centerView, setCenterView] = useState<WorkspaceView>("canvas");
+  const [frameRequestKey, setFrameRequestKey] = useState(0);
   const canvas = useMemo(
     () =>
       activeWorkflow
@@ -212,7 +206,7 @@ export function EditorShell() {
       return;
     }
     void refreshRunHistory(selectedRunId);
-  }, [runStatusFilter, runWorkflowFilter, selectedRunId]);
+  }, [isBooting, runStatusFilter, selectedRunId]);
 
   useEffect(() => {
     if (!activeWorkflow) {
@@ -285,10 +279,12 @@ export function EditorShell() {
         inventory.workflows[0]?.id ??
         null;
       patchWorkflowState({ activeWorkflowId: preferredWorkflowId });
+      let workflowName: string | null = null;
       if (preferredWorkflowId) {
-        await loadWorkflowDocument(preferredWorkflowId);
+        const response = await loadWorkflowDocument(preferredWorkflowId);
+        workflowName = response?.summary.name ?? null;
       }
-      await refreshRunHistory();
+      await refreshRunHistory(undefined, workflowName);
       patchWorkflowState({
         lastAction: "Loaded workflow inventory, node catalog, and pending tasks"
       });
@@ -313,11 +309,13 @@ export function EditorShell() {
         lastAction: `Opened ${response.summary.file_name}`,
         selectedNodeId: TRIGGER_NODE_ID
       });
+      return response;
     } catch (error) {
       patchWorkflowState({
         globalError: errorMessage(error),
         lastAction: `Failed to load ${workflowId}.yaml`
       });
+      return null;
     } finally {
       patchWorkflowState({ isLoadingWorkflow: false });
     }
@@ -349,25 +347,18 @@ export function EditorShell() {
     return nextWorkflowId;
   }
 
-  async function refreshNodeCatalog() {
-    try {
-      const catalog = await fetchEngineJson<NodeCatalogResponse>("/api/node-catalog");
-      patchWorkflowState({
-        stepCatalog: catalog.step_types,
-        triggerCatalog: catalog.trigger_types
-      });
-    } catch (error) {
-      patchWorkflowState({ globalError: errorMessage(error) });
-    }
-  }
-
-  async function refreshRunHistory(preferredRunId?: string | null) {
+  async function refreshRunHistory(
+    preferredRunId?: string | null,
+    workflowNameOverride?: string | null
+  ) {
     const currentObservabilityState = observabilityStoreState();
     patchObservabilityState({ isRefreshingHistory: true });
     try {
       const query = new URLSearchParams();
-      if (currentObservabilityState.runWorkflowFilter.trim()) {
-        query.set("workflow_name", currentObservabilityState.runWorkflowFilter.trim());
+      const workflowName =
+        workflowNameOverride?.trim() ?? activeWorkflow?.workflow.name.trim() ?? "";
+      if (workflowName) {
+        query.set("workflow_name", workflowName);
       }
       if (currentObservabilityState.runStatusFilter.trim()) {
         query.set("status", currentObservabilityState.runStatusFilter.trim());
@@ -489,6 +480,7 @@ export function EditorShell() {
         selectedNodeId: TRIGGER_NODE_ID
       });
       await refreshInventory(response.id);
+      await refreshRunHistory(undefined, response.summary.name);
     } catch (error) {
       patchWorkflowState({
         globalError: errorMessage(error),
@@ -515,9 +507,12 @@ export function EditorShell() {
       const nextWorkflowId = await refreshInventory(
         activeWorkflowId === workflowId ? null : activeWorkflowId
       );
+      let workflowName: string | null = null;
       if (nextWorkflowId) {
-        await loadWorkflowDocument(nextWorkflowId);
+        const response = await loadWorkflowDocument(nextWorkflowId);
+        workflowName = response?.summary.name ?? null;
       }
+      await refreshRunHistory(undefined, workflowName);
       patchWorkflowState({
         globalError: null,
         lastAction: `Deleted ${workflowId}.yaml`
@@ -556,6 +551,7 @@ export function EditorShell() {
         selectedNodeId: TRIGGER_NODE_ID
       });
       await refreshInventory(response.id);
+      await refreshRunHistory(undefined, response.summary.name);
     } catch (error) {
       patchWorkflowState({
         globalError: errorMessage(error),
@@ -590,16 +586,18 @@ export function EditorShell() {
     if (!activeWorkflow) {
       return;
     }
+    const typeName =
+      selectedNode?.data.kind === "step" ? selectedNode.data.typeName : newStepType;
     const { selectedNodeId: createdNodeId, workflow } = addStepToWorkflow(
       activeWorkflow.workflow,
-      newStepType
+      typeName
     );
     applyActiveWorkflowUpdate((document) => ({
       ...document,
       workflow
     }));
     patchWorkflowState({
-      lastAction: `Added ${newStepType} step`,
+      lastAction: `Added ${typeName} step`,
       selectedNodeId: createdNodeId
     });
   }
@@ -619,11 +617,13 @@ export function EditorShell() {
     try {
       const nextWorkflowId = await refreshInventory(activeWorkflowId);
       await refreshHumanTasks();
-      await refreshRunHistory(selectedRunId);
       const workflowIdToLoad = nextWorkflowId ?? activeWorkflowId;
+      let workflowName: string | null = activeWorkflow?.workflow.name ?? null;
       if (workflowIdToLoad) {
-        await loadWorkflowDocument(workflowIdToLoad);
+        const response = await loadWorkflowDocument(workflowIdToLoad);
+        workflowName = response?.summary.name ?? workflowName;
       }
+      await refreshRunHistory(selectedRunId, workflowName);
       patchWorkflowState({
         globalError: null,
         lastAction: "Refreshed workflow inventory, tasks, and run history"
@@ -713,9 +713,11 @@ export function EditorShell() {
       selectedNodeId: TRIGGER_NODE_ID
     });
     if (!documents[workflowId]) {
-      await loadWorkflowDocument(workflowId);
+      const response = await loadWorkflowDocument(workflowId);
+      await refreshRunHistory(selectedRunId, response?.summary.name ?? workflowId);
       return;
     }
+    await refreshRunHistory(selectedRunId, documents[workflowId].workflow.name);
     patchWorkflowState({ lastAction: `Opened ${workflowId}.yaml` });
   }
 
@@ -998,172 +1000,595 @@ export function EditorShell() {
     }
   }
 
+  const showCanvasView = centerView === "canvas";
+  const activeRunStatus =
+    runStatus ??
+    (lastRun ? `${lastRun.status} • ${lastRun.run_id.slice(0, 8)}` : null);
+  const centerViewLabel =
+    centerView === "canvas"
+      ? "Canvas"
+      : centerView === "preview"
+        ? "Preview"
+        : centerView === "history"
+          ? "History"
+          : "Logs";
+
   return (
-    <main className="min-h-screen px-5 py-6 text-ink lg:px-8">
-      <div className="mx-auto flex max-w-[1700px] flex-col gap-5">
+    <main className="h-[100dvh] overflow-hidden bg-[#edf2f1] p-4 text-ink">
+      <div
+        className={`mx-auto grid h-full max-w-[1880px] gap-4 ${
+          globalError ? "grid-rows-[58px_auto_minmax(0,1fr)]" : "grid-rows-[58px_minmax(0,1fr)]"
+        }`}
+      >
         <TopBar
           activeWorkflowFile={activeWorkflow?.summary.file_name ?? "No workflow selected"}
           activeWorkflowName={activeWorkflow?.workflow.name ?? "No workflow"}
+          hasUnsavedChanges={activeWorkflow?.dirty ?? false}
           isRunning={isRunning}
           isSaving={isSaving}
-          lastAction={lastAction}
           onRefresh={() => void handleRefresh()}
           onRun={() => void handleRun()}
           onSave={() => void handleSave()}
-          pendingTaskCount={pendingTasks.length}
-          runStatus={
-            runStatus ??
-            (lastRun
-              ? `${lastRun.status} • ${lastRun.run_id.slice(0, 8)}`
-              : null)
-          }
+          runStatus={activeRunStatus}
         />
 
         {globalError ? (
-          <section className="rounded-3xl border border-ember/20 bg-ember/5 px-5 py-4 text-sm leading-6 text-ember">
+          <section className="rounded-2xl border border-ember/20 bg-ember/5 px-4 py-3 text-sm leading-6 text-ember">
             {globalError}
           </section>
         ) : null}
 
-        <section className="grid gap-5 lg:grid-cols-[320px_minmax(0,1fr)_400px]">
-          <div className="flex min-h-0 flex-col gap-5">
-            <WorkflowExplorer
-              activeWorkflowId={activeWorkflowId}
-              invalidFiles={invalidFiles}
-              isBusy={isBusy}
-              onCreateWorkflow={() => void handleCreateWorkflow()}
-              onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
-              onDuplicateWorkflow={(workflowId) => void handleDuplicateWorkflow(workflowId)}
-              onSelectWorkflow={(workflowId) => void handleSelectWorkflow(workflowId)}
-              workflows={workflows}
-            />
-
-            <ConnectorManager onCatalogInvalidated={() => refreshNodeCatalog()} />
-          </div>
-
-          <div className="panel-surface min-h-[760px] overflow-hidden">
-            <div className="flex flex-col gap-4 border-b border-black/10 px-6 py-4 lg:flex-row lg:items-center lg:justify-between">
-              <div>
-                <p className="section-kicker">Canvas</p>
-                <h2 className="section-title">
-                  {activeWorkflow?.workflow.name ?? "Untitled workflow"}
-                </h2>
+        <section
+          className={`grid min-h-0 gap-4 ${
+            showCanvasView
+              ? "xl:grid-cols-[256px_minmax(0,1fr)_336px]"
+              : "xl:grid-cols-[256px_minmax(0,1fr)]"
+          }`}
+        >
+          <aside className="panel-surface grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
+            <div className="border-b border-black/10 px-4 py-4">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/55">
+                Navigation
               </div>
-              <div className="flex flex-wrap items-center gap-3">
-                <select
-                  className="ui-input w-auto min-w-[220px]"
-                  onChange={(event) =>
-                    patchWorkflowState({ newStepType: event.target.value })
-                  }
-                  value={newStepType}
-                >
-                  {groupedOptions(stepCatalog).map(([category, entries]) => (
-                    <optgroup key={category} label={titleCase(category)}>
-                      {entries.map((entry) => (
-                        <option key={entry.type_name} value={entry.type_name}>
-                          {entry.label}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-                <button
-                  className="ui-button ui-button-tide"
-                  onClick={handleAddStep}
-                  type="button"
-                >
-                  Add step
-                </button>
-                <button
-                  className="ui-button"
-                  onClick={handleAutoLayout}
-                  type="button"
-                >
-                  Auto layout
-                </button>
-                <div className="rounded-md border border-ember/20 bg-ember/10 px-3 py-2 font-mono text-[11px] uppercase tracking-[0.16em] text-ember">
-                  YAML remains the source of truth
-                </div>
+              <div className="mt-1 text-lg font-semibold tracking-tight text-ink">
+                Workspace
               </div>
             </div>
 
-            <div className="h-[680px]">
-              {activeWorkflow ? (
-                <WorkflowCanvas
-                  key={activeWorkflow.id}
-                  edges={canvas.edges}
-                  nodes={displayNodes}
-                  onDeleteStep={handleDeleteSelectedNode}
-                  onEdgesCommit={handleEdgesCommit}
-                  onPositionsCommit={handlePositionsCommit}
-                  onSelectNode={(nodeId) => patchWorkflowState({ selectedNodeId: nodeId })}
+            <div className="sleek-scroll flex min-h-0 flex-col overflow-y-auto px-3 py-3">
+              <SidebarBlock
+                accessory={
+                  <button
+                    className="ui-button !px-2.5 !py-2 !text-[10px]"
+                    disabled={isBusy}
+                    onClick={() => void handleCreateWorkflow()}
+                    type="button"
+                  >
+                    New
+                  </button>
+                }
+                title="Workflows"
+              >
+                <WorkflowList
+                  activeWorkflowId={activeWorkflowId}
+                  invalidFiles={invalidFiles}
+                  isBusy={isBusy}
+                  onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
+                  onDuplicateWorkflow={(workflowId) => void handleDuplicateWorkflow(workflowId)}
+                  onSelectWorkflow={(workflowId) => void handleSelectWorkflow(workflowId)}
+                  workflows={workflows}
                 />
-              ) : (
-                <div className="flex h-full items-center justify-center px-10 text-center text-sm leading-7 text-slate">
-                  {isBooting
-                    ? "Booting the editor..."
-                    : "No valid workflow is loaded yet. Create a new workflow or fix invalid YAML files from the explorer."}
-                </div>
-              )}
+              </SidebarBlock>
+
+              <div className="mt-auto pt-8">
+                <SidebarBlock title="Quick status">
+                  <SidebarQuickStatus
+                    activeRunStatus={activeRunStatus}
+                    invalidFileCount={invalidFiles.length}
+                    metrics={metrics}
+                  />
+                </SidebarBlock>
+              </div>
             </div>
-          </div>
+          </aside>
 
-          <div className="flex min-h-0 flex-col gap-5">
-            <NodeInspector
-              activeWorkflow={activeWorkflow}
-              inspectorError={inspectorError}
-              onDeleteSelectedNode={() => handleDeleteSelectedNode()}
-              onSelectedNodeIdChange={handleSelectedNodeIdChange}
-              onSelectedNodeParamsChange={handleSelectedNodeParamsChange}
-              onSelectedNodeRetryAttemptsChange={handleSelectedNodeRetryAttemptsChange}
-              onSelectedNodeRetryBackoffChange={handleSelectedNodeRetryBackoffChange}
-              onSelectedNodeTimeoutChange={handleSelectedNodeTimeoutChange}
-              onSelectedNodeTypeChange={handleSelectedNodeTypeChange}
-              onTriggerDetailsChange={handleTriggerDetailsChange}
-              onTriggerTypeChange={handleTriggerTypeChange}
-              onWorkflowNameChange={handleWorkflowNameChange}
-              selectedNode={selectedNode}
-              stepCatalog={stepCatalog}
-              stepParamsDraft={stepParamsDraft}
-              triggerCatalog={triggerCatalog}
-              triggerDetailsDraft={triggerDetailsDraft}
-              workflowYaml={activeWorkflow?.yaml ?? ""}
-            />
+          <section className="panel-surface grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
+            <div className="flex items-center justify-between border-b border-black/10 px-4 py-3">
+              <div className="min-w-0">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/55">
+                  Center workspace
+                </div>
+                <div className="mt-1 text-lg font-semibold tracking-tight text-ink">
+                  {centerViewLabel}
+                </div>
+              </div>
 
-            <HumanTaskInbox
-              isRefreshing={isRefreshingTasks}
-              onApprove={(taskId, approved) => void handleApprovalTask(taskId, approved)}
-              onRefresh={() => void refreshHumanTasks()}
-              onResolveValue={(taskId) => void handleManualInputTask(taskId)}
-              onValueChange={handleTaskValueChange}
-              taskValues={taskValues}
-              tasks={pendingTasks}
-            />
-          </div>
+              <div className="flex items-center gap-2 rounded-2xl border border-black/10 bg-white/80 p-1">
+                {(["canvas", "preview", "history", "logs"] as WorkspaceView[]).map((view) => (
+                  <button
+                    key={view}
+                    className={`rounded-xl px-3 py-2 font-mono text-[11px] uppercase tracking-[0.16em] ${
+                      centerView === view ? "bg-ink text-white" : "text-slate/68"
+                    }`}
+                    onClick={() => setCenterView(view)}
+                    type="button"
+                  >
+                    {view}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {showCanvasView ? (
+              <div className="relative h-full min-h-0">
+                {activeWorkflow ? (
+                  <>
+                    <WorkflowCanvas
+                      key={activeWorkflow.id}
+                      edges={canvas.edges}
+                      frameRequestKey={frameRequestKey}
+                      nodes={displayNodes}
+                      onDeleteStep={handleDeleteSelectedNode}
+                      onEdgesCommit={handleEdgesCommit}
+                      onPositionsCommit={handlePositionsCommit}
+                      onSelectNode={(nodeId) => patchWorkflowState({ selectedNodeId: nodeId })}
+                      showControls={false}
+                      showMiniMap={false}
+                      showViewportPanel={false}
+                    />
+                    <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-end p-4">
+                      <div className="pointer-events-auto flex flex-wrap items-center gap-2">
+                        <button
+                          className="ui-button !px-2.5 !py-2 !text-[10px]"
+                          onClick={() => setFrameRequestKey((current) => current + 1)}
+                          type="button"
+                        >
+                          Frame
+                        </button>
+                        <button
+                          className="ui-button !px-2.5 !py-2 !text-[10px]"
+                          onClick={handleAutoLayout}
+                          type="button"
+                        >
+                          Auto layout
+                        </button>
+                      </div>
+                    </div>
+                    <button
+                      aria-label="Add step"
+                      className="absolute bottom-4 right-4 flex h-11 w-11 items-center justify-center rounded-2xl border border-black/10 bg-ink text-xl text-white shadow-panel transition hover:bg-slate"
+                      onClick={handleAddStep}
+                      type="button"
+                    >
+                      +
+                    </button>
+                  </>
+                ) : (
+                  <div className="flex h-full items-center justify-center px-10 text-center text-sm leading-7 text-slate">
+                    {isBooting
+                      ? "Booting the editor..."
+                      : "No valid workflow is loaded yet. Create a new workflow or fix invalid YAML files from the sidebar."}
+                  </div>
+                )}
+              </div>
+            ) : centerView === "preview" ? (
+              <div className="min-h-0 p-4">
+                <WorkflowYamlCard
+                  fullHeight
+                  workflowYaml={activeWorkflow?.yaml ?? ""}
+                />
+              </div>
+            ) : (
+              <RunHistoryPanel
+                embedded
+                isLoading={isRefreshingHistory}
+                logLevelFilter={logLevelFilter}
+                logSearch={logSearch}
+                logs={runLogs}
+                metrics={metrics}
+                onLogLevelFilterChange={(value) => patchObservabilityState({ logLevelFilter: value })}
+                onLogSearchChange={(value) => patchObservabilityState({ logSearch: value })}
+                onRefresh={() => void refreshRunHistory(selectedRunId)}
+                onRunStatusFilterChange={(value) => patchObservabilityState({ runStatusFilter: value })}
+                onSelectRun={(runId) => patchObservabilityState({ selectedRunId: runId })}
+                runDetail={runDetail}
+                runPage={runPage}
+                runStatusFilter={runStatusFilter}
+                selectedRunId={selectedRunId}
+                view={centerView === "logs" ? "logs" : "history"}
+                workflowName={activeWorkflow?.workflow.name ?? null}
+              />
+            )}
+          </section>
+
+          {showCanvasView ? (
+            <aside className="panel-surface grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
+              <div className="border-b border-black/10 px-4 py-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/55">
+                      Context rail
+                    </div>
+                    <div className="mt-1 text-lg font-semibold tracking-tight text-ink">
+                      Canvas details
+                    </div>
+                  </div>
+                  <ShellBadge label="canvas only" tone="info" />
+                </div>
+              </div>
+
+              <div className="sleek-scroll min-h-0 overflow-y-auto px-3 py-3">
+                <AccordionCard
+                  defaultOpen={pendingTasks.length > 0}
+                  subtitle="Only shown when the workflow actually needs attention"
+                  title="Required actions"
+                  tone="warn"
+                >
+                  <HumanTaskInbox
+                    embedded
+                    isRefreshing={isRefreshingTasks}
+                    onApprove={(taskId, approved) => void handleApprovalTask(taskId, approved)}
+                    onRefresh={() => void refreshHumanTasks()}
+                    onResolveValue={(taskId) => void handleManualInputTask(taskId)}
+                    onValueChange={handleTaskValueChange}
+                    taskValues={taskValues}
+                    tasks={pendingTasks}
+                  />
+                </AccordionCard>
+
+                <AccordionCard
+                  defaultOpen
+                  subtitle="Step metadata and settings stay compact until needed"
+                  title="Inspector"
+                  tone="neutral"
+                >
+                  <NodeInspector
+                    activeWorkflow={activeWorkflow}
+                    embedded
+                    inspectorError={inspectorError}
+                    onDeleteSelectedNode={() => handleDeleteSelectedNode()}
+                    onSelectedNodeIdChange={handleSelectedNodeIdChange}
+                    onSelectedNodeParamsChange={handleSelectedNodeParamsChange}
+                    onSelectedNodeRetryAttemptsChange={handleSelectedNodeRetryAttemptsChange}
+                    onSelectedNodeRetryBackoffChange={handleSelectedNodeRetryBackoffChange}
+                    onSelectedNodeTimeoutChange={handleSelectedNodeTimeoutChange}
+                    onSelectedNodeTypeChange={handleSelectedNodeTypeChange}
+                    onTriggerDetailsChange={handleTriggerDetailsChange}
+                    onTriggerTypeChange={handleTriggerTypeChange}
+                    onWorkflowNameChange={handleWorkflowNameChange}
+                    selectedNode={selectedNode}
+                    showYamlPreview={false}
+                    stepCatalog={stepCatalog}
+                    stepParamsDraft={stepParamsDraft}
+                    triggerCatalog={triggerCatalog}
+                    triggerDetailsDraft={triggerDetailsDraft}
+                    workflowYaml={activeWorkflow?.yaml ?? ""}
+                  />
+                </AccordionCard>
+              </div>
+            </aside>
+          ) : null}
         </section>
-
-        <RunHistoryPanel
-          isLoading={isRefreshingHistory}
-          logLevelFilter={logLevelFilter}
-          logSearch={logSearch}
-          logs={runLogs}
-          metrics={metrics}
-          onLogLevelFilterChange={(value) => patchObservabilityState({ logLevelFilter: value })}
-          onLogSearchChange={(value) => patchObservabilityState({ logSearch: value })}
-          onRefresh={() => void refreshRunHistory(selectedRunId)}
-          onRunStatusFilterChange={(value) => patchObservabilityState({ runStatusFilter: value })}
-          onRunWorkflowFilterChange={(value) =>
-            patchObservabilityState({ runWorkflowFilter: value })
-          }
-          onSelectRun={(runId) => patchObservabilityState({ selectedRunId: runId })}
-          runDetail={runDetail}
-          runPage={runPage}
-          runStatusFilter={runStatusFilter}
-          runWorkflowFilter={runWorkflowFilter}
-          selectedRunId={selectedRunId}
-        />
       </div>
     </main>
+  );
+}
+
+function SidebarBlock({
+  accessory,
+  children,
+  title
+}: {
+  accessory?: ReactNode;
+  children: ReactNode;
+  title: string;
+}) {
+  return (
+    <section className="mb-4">
+      <div className="mb-3 flex items-center justify-between gap-3 px-1">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/55">
+          {title}
+        </div>
+        {accessory}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function AccordionCard({
+  children,
+  defaultOpen,
+  subtitle,
+  title,
+  tone
+}: {
+  children: ReactNode;
+  defaultOpen?: boolean;
+  subtitle: string;
+  title: string;
+  tone: "dark" | "neutral" | "warn";
+}) {
+  const toneShell = {
+    dark: "bg-white/80",
+    neutral: "bg-white/80",
+    warn: "bg-white/80"
+  } as const;
+
+  return (
+    <details className={`mb-4 rounded-2xl border border-black/10 px-3 py-3 ${toneShell[tone]}`} open={defaultOpen}>
+      <summary className="cursor-pointer list-none">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-sm font-semibold text-ink">{title}</div>
+            <div className="mt-1 text-xs leading-5 text-slate">{subtitle}</div>
+          </div>
+          <div className="rounded-xl border border-black/10 bg-white/70 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-slate/62">
+            ▾
+          </div>
+        </div>
+      </summary>
+      <div className="mt-3">{children}</div>
+    </details>
+  );
+}
+
+function ShellBadge({
+  label,
+  tone
+}: {
+  label: string;
+  tone: "info" | "info-dark" | "neutral" | "neutral-dark" | "warn";
+}) {
+  const toneMap = {
+    info: "border-tide/15 bg-tide/10 text-tide",
+    "info-dark": "border-tide/10 bg-tide/15 text-[#8be2e6]",
+    neutral: "border-black/10 bg-black/[0.04] text-slate/72",
+    "neutral-dark": "border-white/10 bg-white/10 text-white/72",
+    warn: "border-ember/15 bg-ember/10 text-ember"
+  } as const;
+
+  return (
+    <span
+      className={`rounded-md border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.16em] ${toneMap[tone]}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function SidebarQuickStatus({
+  activeRunStatus,
+  invalidFileCount,
+  metrics
+}: {
+  activeRunStatus: string | null;
+  invalidFileCount: number;
+  metrics: MetricsSummary | null;
+}) {
+  return (
+    <div className="rounded-2xl border border-black/10 bg-white/70 px-3 py-3">
+      <div className="grid grid-cols-3 gap-2">
+        <StatPill label="runs" value={String(metrics?.workflowRunsTotal ?? 0)} />
+        <StatPill label="paused" value={String(metrics?.workflowRunsPaused ?? 0)} />
+        <StatPill label="errors" value={String(invalidFileCount)} />
+      </div>
+      <div className="mt-3 rounded-xl border border-black/10 bg-black/[0.03] px-2.5 py-2">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate/55">
+          Status
+        </div>
+        <div className="mt-1 font-mono text-[11px] uppercase tracking-[0.14em] text-ink">
+          {activeRunStatus ? activeRunStatus.split(" • ")[0] : "idle"}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatPill({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-black/10 bg-black/[0.03] px-2.5 py-2">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate/55">
+        {label}
+      </div>
+      <div className="mt-1 font-mono text-[11px] uppercase tracking-[0.14em] text-ink">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function WorkflowList({
+  activeWorkflowId,
+  invalidFiles,
+  isBusy,
+  onDeleteWorkflow,
+  onDuplicateWorkflow,
+  onSelectWorkflow,
+  workflows
+}: {
+  activeWorkflowId: string | null;
+  invalidFiles: InvalidWorkflowFile[];
+  isBusy: boolean;
+  onDeleteWorkflow: (workflowId: string) => void;
+  onDuplicateWorkflow: (workflowId: string) => void;
+  onSelectWorkflow: (workflowId: string) => void;
+  workflows: WorkflowSummary[];
+}) {
+  return (
+    <div className="space-y-2">
+      {workflows.map((workflow) => {
+        const isActive = workflow.id === activeWorkflowId;
+
+        return (
+          <article
+            key={workflow.id}
+            className={`rounded-2xl border px-3 py-3 ${
+              isActive ? "border-tide/20 bg-tide/10" : "border-black/10 bg-white/70"
+            }`}
+          >
+            <div className="flex items-start gap-2">
+              <button
+                className="min-w-0 flex-1 text-left"
+                onClick={() => onSelectWorkflow(workflow.id)}
+                type="button"
+              >
+                <div className="truncate text-sm font-semibold text-ink">{workflow.name}</div>
+                <div className="mt-2 font-mono text-[10px] uppercase tracking-[0.16em] text-slate/58">
+                  {workflow.file_name}
+                </div>
+              </button>
+
+              <WorkflowCardMenu
+                disabled={isBusy}
+                onDelete={() => onDeleteWorkflow(workflow.id)}
+                onDuplicate={() => onDuplicateWorkflow(workflow.id)}
+              />
+            </div>
+          </article>
+        );
+      })}
+
+      {invalidFiles.length > 0 ? (
+        <div className="rounded-2xl border border-ember/20 bg-ember/5 p-3">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ember">
+            Needs attention
+          </div>
+          <div className="mt-2 space-y-2">
+            {invalidFiles.map((file) => (
+              <div key={file.id} className="rounded-xl border border-ember/15 bg-white/80 p-3">
+                <div className="text-sm font-semibold text-ink">{file.file_name}</div>
+                <div className="mt-1 text-sm leading-6 text-slate">{file.error}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function WorkflowCardMenu({
+  disabled,
+  onDelete,
+  onDuplicate
+}: {
+  disabled: boolean;
+  onDelete: () => void;
+  onDuplicate: () => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsOpen(false);
+      }
+    }
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
+
+  return (
+    <div className="relative shrink-0" ref={menuRef}>
+      <button
+        aria-expanded={isOpen}
+        aria-haspopup="menu"
+        className="flex h-7 w-7 cursor-pointer list-none items-center justify-center rounded-lg border border-black/10 bg-black/[0.03] text-slate/68 transition hover:border-black/20 hover:bg-black/[0.06] [&::-webkit-details-marker]:hidden"
+        onClick={() => setIsOpen((current) => !current)}
+        type="button"
+      >
+        <span className="sr-only">Workflow actions</span>
+        <ThreeDotsVerticalIcon />
+      </button>
+
+      {isOpen ? (
+        <div className="absolute right-0 top-[calc(100%+0.35rem)] z-20 min-w-[148px] rounded-lg border border-black/10 bg-white p-1 shadow-panel">
+          <button
+            className="flex w-full items-center rounded-md px-2.5 py-2 text-left text-sm text-ink transition hover:bg-black/[0.04] disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={disabled}
+            onClick={() => {
+              setIsOpen(false);
+              onDuplicate();
+            }}
+            type="button"
+          >
+            Duplicate
+          </button>
+          <button
+            className="flex w-full items-center rounded-md px-2.5 py-2 text-left text-sm text-ember transition hover:bg-ember/5 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={disabled}
+            onClick={() => {
+              setIsOpen(false);
+              onDelete();
+            }}
+            type="button"
+          >
+            Delete
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ThreeDotsVerticalIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      fill="none"
+      viewBox="0 0 16 16"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <circle cx="8" cy="3" fill="currentColor" r="1.1" />
+      <circle cx="8" cy="8" fill="currentColor" r="1.1" />
+      <circle cx="8" cy="13" fill="currentColor" r="1.1" />
+    </svg>
+  );
+}
+
+function WorkflowYamlCard({
+  fullHeight = false,
+  workflowYaml
+}: {
+  fullHeight?: boolean;
+  workflowYaml: string;
+}) {
+  return (
+    <div
+      className={`rounded-2xl border border-black/10 bg-[#101517] p-3 ${
+        fullHeight ? "grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]" : ""
+      }`}
+    >
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <ShellBadge label="canonical" tone="info-dark" />
+        <ShellBadge label="monospace" tone="neutral-dark" />
+      </div>
+      <pre
+        className={`sleek-scroll rounded-xl border border-white/10 bg-black/20 p-3 font-mono text-[12px] leading-6 text-[#E9F8F3] ${
+          fullHeight ? "min-h-0 overflow-auto" : "overflow-x-auto"
+        }`}
+      >
+        {workflowYaml || "# No workflow selected"}
+      </pre>
+    </div>
   );
 }
 

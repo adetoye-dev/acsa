@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+import type { ReactNode } from "react";
+
 import {
   formatDuration,
   formatTimestamp,
@@ -24,6 +26,7 @@ import {
 } from "../lib/observability";
 
 type RunHistoryPanelProps = {
+  embedded?: boolean;
   isLoading: boolean;
   logLevelFilter: string;
   logSearch: string;
@@ -33,16 +36,17 @@ type RunHistoryPanelProps = {
   onLogSearchChange: (value: string) => void;
   onRefresh: () => void;
   onRunStatusFilterChange: (value: string) => void;
-  onRunWorkflowFilterChange: (value: string) => void;
   onSelectRun: (runId: string) => void;
   runDetail: RunDetailResponse | null;
   runPage: RunPageResponse | null;
   runStatusFilter: string;
-  runWorkflowFilter: string;
   selectedRunId: string | null;
+  view: "history" | "logs";
+  workflowName: string | null;
 };
 
 export function RunHistoryPanel({
+  embedded = false,
   isLoading,
   logLevelFilter,
   logSearch,
@@ -52,240 +56,351 @@ export function RunHistoryPanel({
   onLogSearchChange,
   onRefresh,
   onRunStatusFilterChange,
-  onRunWorkflowFilterChange,
   onSelectRun,
   runDetail,
   runPage,
   runStatusFilter,
-  runWorkflowFilter,
-  selectedRunId
+  selectedRunId,
+  view,
+  workflowName
 }: RunHistoryPanelProps) {
+  const title = view === "history" ? "Run history" : "Workflow logs";
+  const subtitle =
+    view === "history"
+      ? "Execution detail for the active workflow"
+      : "Structured log stream for the selected run";
+
+  const body = (
+    <div className="grid min-h-0 xl:grid-cols-[320px_minmax(0,1fr)]">
+      <aside className="flex min-h-0 flex-col border-b border-black/10 xl:border-b-0 xl:border-r">
+        <div className="border-b border-black/10 px-4 py-4">
+          <label className="grid gap-2 text-sm text-slate" htmlFor="run-status-filter">
+            Run status
+            <select
+              className="ui-input"
+              id="run-status-filter"
+              onChange={(event) => onRunStatusFilterChange(event.target.value)}
+              value={runStatusFilter}
+            >
+              <option value="">All statuses</option>
+              <option value="success">Success</option>
+              <option value="failed">Failed</option>
+              <option value="paused">Paused</option>
+              <option value="running">Running</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="sleek-scroll min-h-0 space-y-3 overflow-y-auto px-4 py-4">
+          {runPage?.runs.map((run) => {
+            const active = run.id === selectedRunId;
+            return (
+              <button
+                key={run.id}
+                className={`w-full rounded-2xl border px-3 py-3 text-left transition ${
+                  active
+                    ? "border-tide/40 bg-tide/10"
+                    : "border-black/10 bg-white/70 hover:border-black/20 hover:bg-white"
+                }`}
+                onClick={() => onSelectRun(run.id)}
+                type="button"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <div className="truncate text-sm font-semibold text-ink">
+                    {run.workflow_name}
+                  </div>
+                  <span className="ui-badge">{run.status}</span>
+                </div>
+                <div className="mt-3 font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
+                  {run.id.slice(0, 8)}
+                </div>
+                <div className="mt-2 text-sm text-slate">
+                  Started {formatTimestamp(run.started_at)}
+                </div>
+                <div className="ui-meta mt-1">
+                  Duration {formatDuration(run.duration_seconds)}
+                </div>
+              </button>
+            );
+          })}
+
+          {!runPage?.runs.length ? (
+            <EmptyState>
+              No runs exist for the active workflow with the current status filter.
+            </EmptyState>
+          ) : null}
+        </div>
+      </aside>
+
+      <div className="min-h-0">
+        {runDetail ? (
+          view === "history" ? (
+            <HistoryDetail runDetail={runDetail} />
+          ) : (
+            <LogDetail
+              logLevelFilter={logLevelFilter}
+              logSearch={logSearch}
+              logs={logs}
+              onLogLevelFilterChange={onLogLevelFilterChange}
+              onLogSearchChange={onLogSearchChange}
+              runDetail={runDetail}
+            />
+          )
+        ) : (
+          <div className="flex h-full items-center justify-center px-8">
+            <EmptyState>
+              Select a run to inspect timeline details and structured logs.
+            </EmptyState>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  if (embedded) {
+    return (
+      <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+        <div className="border-b border-black/10 px-4 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm text-slate">{subtitle}</div>
+            <div className="flex flex-wrap items-center gap-2">
+              {workflowName ? (
+                <span className="rounded-md bg-ink px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-white">
+                  {workflowName}
+                </span>
+              ) : null}
+              <span className="rounded-md bg-sand px-2 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-ember">
+                {runPage?.total ?? 0} run{runPage?.total === 1 ? "" : "s"}
+              </span>
+              <button className="ui-button" disabled={isLoading} onClick={onRefresh} type="button">
+                {isLoading ? "Refreshing..." : "Refresh"}
+              </button>
+            </div>
+          </div>
+
+          {view === "history" ? (
+            <div className="mt-4 grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
+              <MetricCard
+                label="Workflow runs"
+                note={`${metrics?.workflowRunsSuccess ?? 0} succeeded`}
+                value={metrics?.workflowRunsTotal ?? 0}
+              />
+              <MetricCard
+                label="Paused runs"
+                note={`${metrics?.workflowRunsFailed ?? 0} failed`}
+                value={metrics?.workflowRunsPaused ?? 0}
+              />
+              <MetricCard
+                label="Step attempts"
+                note={`${metrics?.stepRetries ?? 0} retries`}
+                value={metrics?.stepExecutions ?? 0}
+              />
+              <MetricCard
+                label="Average run time"
+                note={`${metrics?.stepFailures ?? 0} step failures`}
+                value={formatDuration(Math.round(metrics?.workflowAverageDurationSeconds ?? 0))}
+              />
+            </div>
+          ) : null}
+        </div>
+        {body}
+      </div>
+    );
+  }
+
   return (
-    <section className="panel-surface overflow-hidden">
-      <div className="border-b border-black/10 px-6 py-5">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+    <section className="panel-surface grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
+      <div className="border-b border-black/10 px-4 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="section-kicker">Observability</p>
-            <h2 className="section-title mt-2">Run history, logs, and metrics</h2>
+            <h2 className="section-title mt-1">{title}</h2>
           </div>
-          <button
-            className="ui-button"
-            disabled={isLoading}
-            onClick={onRefresh}
-            type="button"
-          >
-            {isLoading ? "Refreshing..." : "Refresh history"}
-          </button>
-        </div>
-
-        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <MetricCard
-            label="Workflow runs"
-            value={metrics?.workflowRunsTotal ?? 0}
-            note={`${metrics?.workflowRunsSuccess ?? 0} succeeded`}
-          />
-          <MetricCard
-            label="Paused runs"
-            value={metrics?.workflowRunsPaused ?? 0}
-            note={`${metrics?.workflowRunsFailed ?? 0} failed`}
-          />
-          <MetricCard
-            label="Step attempts"
-            value={metrics?.stepExecutions ?? 0}
-            note={`${metrics?.stepRetries ?? 0} retries`}
-          />
-          <MetricCard
-            label="Average run time"
-            value={formatDuration(
-              Math.round(metrics?.workflowAverageDurationSeconds ?? 0)
-            )}
-            note={`${metrics?.stepFailures ?? 0} step failures`}
-          />
-        </div>
-      </div>
-
-      <div className="grid gap-0 xl:grid-cols-[420px_minmax(0,1fr)]">
-        <div className="border-b border-black/10 xl:border-b-0 xl:border-r">
-          <div className="space-y-4 px-5 py-5">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
-              <input
-                className="ui-input"
-                onChange={(event) => onRunWorkflowFilterChange(event.target.value)}
-                placeholder="Filter by workflow"
-                type="text"
-                value={runWorkflowFilter}
-              />
-              <select
-                className="ui-input"
-                onChange={(event) => onRunStatusFilterChange(event.target.value)}
-                value={runStatusFilter}
-              >
-                <option value="">All statuses</option>
-                <option value="success">Success</option>
-                <option value="failed">Failed</option>
-                <option value="paused">Paused</option>
-                <option value="running">Running</option>
-              </select>
-            </div>
-
-            <div className="space-y-3">
-              {runPage?.runs.map((run) => {
-                const active = run.id === selectedRunId;
-                return (
-                  <button
-                    key={run.id}
-                    className={`w-full rounded-2xl border px-4 py-4 text-left transition ${
-                      active
-                        ? "border-tide/40 bg-tide/10"
-                        : "border-black/10 bg-white/70 hover:border-black/20 hover:bg-white"
-                    }`}
-                    onClick={() => onSelectRun(run.id)}
-                    type="button"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <span className="font-display text-lg font-semibold text-ink">
-                        {run.workflow_name}
-                      </span>
-                      <span className="ui-badge">
-                        {run.status}
-                      </span>
-                    </div>
-                    <div className="mt-3 font-mono text-sm leading-6 text-slate">
-                      {run.id}
-                    </div>
-                    <div className="mt-2 text-sm leading-6 text-slate">
-                      Started {formatTimestamp(run.started_at)}
-                    </div>
-                    <div className="ui-meta mt-1">
-                      Duration {formatDuration(run.duration_seconds)}
-                    </div>
-                  </button>
-                );
-              })}
-              {!runPage?.runs.length ? (
-                <div className="rounded-2xl border border-dashed border-black/15 bg-white/60 px-4 py-8 text-center text-sm leading-6 text-slate">
-                  No runs match the current filters yet.
-                </div>
-              ) : null}
-            </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {workflowName ? (
+              <span className="rounded-md bg-ink px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-white">
+                {workflowName}
+              </span>
+            ) : null}
+            <span className="rounded-md bg-sand px-2 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-ember">
+              {runPage?.total ?? 0} run{runPage?.total === 1 ? "" : "s"}
+            </span>
+            <button className="ui-button" disabled={isLoading} onClick={onRefresh} type="button">
+              {isLoading ? "Refreshing..." : "Refresh"}
+            </button>
           </div>
         </div>
+        <p className="mt-2 text-sm leading-6 text-slate">{subtitle}</p>
 
-        <div className="space-y-5 px-5 py-5">
-          {runDetail ? (
-            <>
-              <section className="ui-panel-card p-4">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                  <div>
-                    <p className="section-kicker">Run detail</p>
-                    <h3 className="mt-2 font-display text-2xl text-ink">
-                      {runDetail.run.workflow_name}
-                    </h3>
-                  </div>
-                  <div className="font-mono text-sm leading-6 text-slate">
-                    <div>{runDetail.run.id}</div>
-                    <div>{formatTimestamp(runDetail.run.started_at)}</div>
-                  </div>
-                </div>
-                {runDetail.run.error_message ? (
-                  <div className="mt-4 rounded-xl border border-ember/20 bg-ember/5 px-4 py-3 text-sm leading-6 text-ember">
-                    {runDetail.run.error_message}
-                  </div>
-                ) : null}
-              </section>
-
-              <section className="ui-panel-card p-4">
-                <p className="section-kicker">Timeline</p>
-                <div className="mt-4 space-y-4">
-                  {runDetail.step_runs.map((stepRun) => (
-                    <article
-                      key={stepRun.id}
-                      className="rounded-2xl border border-black/10 bg-white p-4"
-                    >
-                      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                        <div>
-                          <h4 className="font-display text-xl text-ink">
-                            {stepRun.step_id}
-                          </h4>
-                          <div className="ui-meta mt-1">
-                            attempt {stepRun.attempt} • {stepRun.status}
-                          </div>
-                        </div>
-                        <div className="font-mono text-sm leading-6 text-slate">
-                          {formatDuration(stepRun.duration_seconds)}
-                        </div>
-                      </div>
-
-                      {stepRun.error_message ? (
-                        <div className="mt-4 rounded-xl border border-ember/20 bg-ember/5 px-4 py-3 text-sm leading-6 text-ember">
-                          {stepRun.error_message}
-                        </div>
-                      ) : null}
-
-                      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                        <PayloadBox label="Input" value={stepRun.input} />
-                        <PayloadBox label="Output" value={stepRun.output} />
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              </section>
-
-              <section className="ui-panel-card p-4">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                  <p className="section-kicker">Logs</p>
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <select
-                      className="ui-input"
-                      onChange={(event) => onLogLevelFilterChange(event.target.value)}
-                      value={logLevelFilter}
-                    >
-                      <option value="">All levels</option>
-                      <option value="info">Info</option>
-                      <option value="warn">Warn</option>
-                      <option value="error">Error</option>
-                    </select>
-                    <input
-                      className="ui-input"
-                      onChange={(event) => onLogSearchChange(event.target.value)}
-                      placeholder="Search logs"
-                      type="text"
-                      value={logSearch}
-                    />
-                  </div>
-                </div>
-
-                <div className="mt-4 space-y-3">
-                  {logs?.logs.map((log) => (
-                    <div
-                      key={log.id}
-                      className="rounded-xl border border-black/10 bg-ink px-4 py-3 text-sm text-mist"
-                    >
-                      <div className="flex flex-wrap items-center gap-3 font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-white/65">
-                        <span>{log.level}</span>
-                        <span>{formatTimestamp(log.timestamp)}</span>
-                        {log.step_id ? <span>{log.step_id}</span> : null}
-                      </div>
-                      <p className="mt-3 whitespace-pre-wrap font-mono leading-6">{log.message}</p>
-                    </div>
-                  ))}
-                  {!logs?.logs.length ? (
-                    <div className="rounded-2xl border border-dashed border-black/15 bg-white/60 px-4 py-8 text-center text-sm leading-6 text-slate">
-                      No log entries match the current filters for this run.
-                    </div>
-                  ) : null}
-                </div>
-              </section>
-            </>
-          ) : (
-            <div className="rounded-2xl border border-dashed border-black/15 bg-white/60 px-4 py-12 text-center text-sm leading-6 text-slate">
-              Select a run from the history list to inspect steps, inputs,
-              outputs, and logs.
-            </div>
-          )}
-        </div>
+        {view === "history" ? (
+          <div className="mt-4 grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
+            <MetricCard
+              label="Workflow runs"
+              note={`${metrics?.workflowRunsSuccess ?? 0} succeeded`}
+              value={metrics?.workflowRunsTotal ?? 0}
+            />
+            <MetricCard
+              label="Paused runs"
+              note={`${metrics?.workflowRunsFailed ?? 0} failed`}
+              value={metrics?.workflowRunsPaused ?? 0}
+            />
+            <MetricCard
+              label="Step attempts"
+              note={`${metrics?.stepRetries ?? 0} retries`}
+              value={metrics?.stepExecutions ?? 0}
+            />
+            <MetricCard
+              label="Average run time"
+              note={`${metrics?.stepFailures ?? 0} step failures`}
+              value={formatDuration(Math.round(metrics?.workflowAverageDurationSeconds ?? 0))}
+            />
+          </div>
+        ) : null}
       </div>
+
+      {body}
     </section>
+  );
+}
+
+function HistoryDetail({ runDetail }: { runDetail: RunDetailResponse }) {
+  return (
+    <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+      <section className="border-b border-black/10 px-4 py-4">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="section-kicker">Selected run</p>
+            <h3 className="mt-1 text-lg font-semibold tracking-tight text-ink">
+              {runDetail.run.workflow_name}
+            </h3>
+          </div>
+          <div className="font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
+            <div>{runDetail.run.id}</div>
+            <div>{formatTimestamp(runDetail.run.started_at)}</div>
+          </div>
+        </div>
+        {runDetail.run.error_message ? (
+          <div className="mt-4 rounded-xl border border-ember/20 bg-ember/5 px-4 py-3 text-sm leading-6 text-ember">
+            {runDetail.run.error_message}
+          </div>
+        ) : null}
+      </section>
+
+      <div className="sleek-scroll min-h-0 space-y-4 overflow-y-auto px-4 py-4">
+        {runDetail.step_runs.map((stepRun) => (
+          <article key={stepRun.id} className="ui-panel-card p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h4 className="text-base font-semibold text-ink">{stepRun.step_id}</h4>
+                <div className="ui-meta mt-1">
+                  attempt {stepRun.attempt} • {stepRun.status}
+                </div>
+              </div>
+              <div className="font-mono text-sm text-slate">
+                {formatDuration(stepRun.duration_seconds)}
+              </div>
+            </div>
+
+            {stepRun.error_message ? (
+              <div className="mt-4 rounded-xl border border-ember/20 bg-ember/5 px-4 py-3 text-sm leading-6 text-ember">
+                {stepRun.error_message}
+              </div>
+            ) : null}
+
+            <div className="mt-4 grid gap-4 xl:grid-cols-2">
+              <PayloadBox label="Input" value={stepRun.input} />
+              <PayloadBox label="Output" value={stepRun.output} />
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function LogDetail({
+  logLevelFilter,
+  logSearch,
+  logs,
+  onLogLevelFilterChange,
+  onLogSearchChange,
+  runDetail
+}: {
+  logLevelFilter: string;
+  logSearch: string;
+  logs: LogPageResponse | null;
+  onLogLevelFilterChange: (value: string) => void;
+  onLogSearchChange: (value: string) => void;
+  runDetail: RunDetailResponse;
+}) {
+  return (
+    <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+      <section className="border-b border-black/10 px-4 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="section-kicker">Selected run</p>
+            <h3 className="mt-1 text-lg font-semibold tracking-tight text-ink">
+              {runDetail.run.id.slice(0, 8)} • {runDetail.run.status}
+            </h3>
+          </div>
+          <div className="font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
+            {formatTimestamp(runDetail.run.started_at)}
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-[160px_minmax(0,1fr)]">
+          <select
+            aria-label="Filter by log level"
+            className="ui-input"
+            onChange={(event) => onLogLevelFilterChange(event.target.value)}
+            value={logLevelFilter}
+          >
+            <option value="">All levels</option>
+            <option value="info">Info</option>
+            <option value="warn">Warn</option>
+            <option value="error">Error</option>
+          </select>
+          <input
+            aria-label="Search log messages"
+            className="ui-input"
+            onChange={(event) => onLogSearchChange(event.target.value)}
+            placeholder="Search log messages"
+            type="text"
+            value={logSearch}
+          />
+        </div>
+      </section>
+
+      <div className="sleek-scroll min-h-0 space-y-3 overflow-y-auto px-4 py-4">
+        {logs?.logs.map((log) => (
+          <div
+            key={log.id}
+            className="rounded-2xl border border-black/10 bg-ink px-4 py-3 text-sm text-mist"
+          >
+            <div className="flex flex-wrap items-center gap-3 font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-white/60">
+              <span>{log.level}</span>
+              <span>{formatTimestamp(log.timestamp)}</span>
+              {log.step_id ? <span>{log.step_id}</span> : null}
+            </div>
+            <p className="mt-3 whitespace-pre-wrap font-mono leading-6 text-white/88">
+              {log.message}
+            </p>
+          </div>
+        ))}
+
+        {!logs?.logs.length ? (
+          <EmptyState>No log entries matched the current filters for this run.</EmptyState>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({ children }: { children: ReactNode }) {
+  return (
+    <div className="rounded-2xl border border-dashed border-black/15 bg-white/60 px-4 py-8 text-center text-sm leading-6 text-slate">
+      {children}
+    </div>
   );
 }
 
@@ -299,12 +414,12 @@ function MetricCard({
   value: number | string;
 }) {
   return (
-    <article className="rounded-2xl border border-black/10 bg-white/70 px-4 py-4">
-      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate/65">
+    <article className="rounded-2xl border border-black/10 bg-white/70 px-4 py-3">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/65">
         {label}
       </div>
-      <div className="mt-3 font-display text-3xl text-ink">{value}</div>
-      <div className="mt-2 text-sm leading-6 text-slate">{note}</div>
+      <div className="mt-2 text-2xl font-semibold tracking-tight text-ink">{value}</div>
+      <div className="mt-1 text-sm text-slate">{note}</div>
     </article>
   );
 }
@@ -312,7 +427,7 @@ function MetricCard({
 function PayloadBox({ label, value }: { label: string; value?: string | null }) {
   return (
     <div className="rounded-2xl border border-black/10 bg-ink p-4 text-white">
-      <div className="text-xs font-semibold uppercase tracking-[0.18em] text-white/65">
+      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/60">
         {label}
       </div>
       <pre className="mt-3 overflow-x-auto whitespace-pre-wrap font-mono text-xs leading-6 text-mist">
