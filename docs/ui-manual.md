@@ -16,6 +16,16 @@ Use the left-side explorer to:
 
 Invalid files are surfaced separately so bad YAML does not disappear silently.
 
+### Connector manager
+
+The connector manager sits under the workflow explorer and lets you:
+
+- inspect loaded connector manifests
+- see which connectors are blocked by the WASM runtime flag
+- scaffold a new process or WASM connector into `connectors/`
+- run a connector's sample input without leaving the editor
+- spot invalid connector manifests without breaking the rest of the catalog
+
 ### Top bar
 
 The top bar provides:
@@ -78,10 +88,11 @@ The observability panel shows:
 1. Open or create a workflow
 2. Set the trigger type and details
 3. Add steps from the catalog
-4. Edit params and retry or timeout settings
-5. Save the workflow
-6. Run it manually or trigger it through cron or webhook
-7. Use run history and logs to inspect the result
+4. Scaffold or test connectors from the left rail when you need a new integration
+5. Edit params and retry or timeout settings
+6. Save the workflow
+7. Run it manually or trigger it through cron or webhook
+8. Use run history and logs to inspect the result
 
 ## Save behavior
 

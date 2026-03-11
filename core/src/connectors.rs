@@ -80,6 +80,26 @@ pub enum ConnectorRuntime {
     Wasm,
 }
 
+#[derive(Debug, Clone)]
+pub struct DiscoveredConnector {
+    pub connector_dir: PathBuf,
+    pub manifest: ConnectorManifest,
+    pub manifest_path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct InvalidConnector {
+    pub connector_dir: PathBuf,
+    pub error: String,
+    pub manifest_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConnectorInspection {
+    pub connectors: Vec<DiscoveredConnector>,
+    pub invalid: Vec<InvalidConnector>,
+}
+
 #[derive(Clone)]
 struct ConnectorNode {
     connector_dir: PathBuf,
@@ -132,7 +152,9 @@ pub fn load_connectors_into(
 ) -> Result<Vec<String>, ConnectorError> {
     let mut loaded = Vec::new();
 
-    for (connector_dir, manifest) in discover_connectors(connectors_dir)? {
+    for connector in inspect_connectors(connectors_dir)?.connectors {
+        let connector_dir = connector.connector_dir;
+        let manifest = connector.manifest;
         let type_id = manifest.type_id.clone();
         registry.register(ConnectorNode { connector_dir, manifest });
         loaded.push(type_id);
@@ -144,8 +166,83 @@ pub fn load_connectors_into(
 pub fn discover_connector_manifests(
     connectors_dir: &Path,
 ) -> Result<Vec<ConnectorManifest>, ConnectorError> {
-    discover_connectors(connectors_dir)
-        .map(|connectors| connectors.into_iter().map(|(_, manifest)| manifest).collect())
+    inspect_connectors(connectors_dir).map(|inspection| {
+        inspection.connectors.into_iter().map(|connector| connector.manifest).collect()
+    })
+}
+
+pub fn inspect_connectors(connectors_dir: &Path) -> Result<ConnectorInspection, ConnectorError> {
+    if !connectors_dir.exists() {
+        return Ok(ConnectorInspection { connectors: Vec::new(), invalid: Vec::new() });
+    }
+
+    let mut connectors = Vec::new();
+    let mut invalid = Vec::new();
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(connectors_dir)? {
+        match entry {
+            Ok(dir_entry) => entries.push(dir_entry),
+            Err(error) => {
+                invalid.push(InvalidConnector {
+                    connector_dir: connectors_dir.to_path_buf(),
+                    error: format!("failed to read connector directory entry: {error}"),
+                    manifest_path: None,
+                });
+            }
+        }
+    }
+    entries.sort_by_key(|entry| entry.path());
+
+    for entry in entries {
+        let entry_path = entry.path();
+        let canonical_dir = match fs::canonicalize(&entry_path) {
+            Ok(path) => path,
+            Err(error) => {
+                invalid.push(InvalidConnector {
+                    connector_dir: entry_path,
+                    error: error.to_string(),
+                    manifest_path: None,
+                });
+                continue;
+            }
+        };
+        if !canonical_dir.is_dir() {
+            continue;
+        }
+        let manifest_path = canonical_dir.join("manifest.json");
+        if !manifest_path.exists() {
+            continue;
+        }
+
+        let manifest = match load_manifest(&manifest_path) {
+            Ok(manifest) => manifest,
+            Err(error) => {
+                invalid.push(InvalidConnector {
+                    connector_dir: canonical_dir,
+                    error: error.to_string(),
+                    manifest_path: Some(manifest_path),
+                });
+                continue;
+            }
+        };
+
+        if let Err(error) = validate_manifest(&manifest, &canonical_dir) {
+            invalid.push(InvalidConnector {
+                connector_dir: canonical_dir,
+                error: error.to_string(),
+                manifest_path: Some(manifest_path),
+            });
+            continue;
+        }
+
+        connectors.push(DiscoveredConnector {
+            connector_dir: canonical_dir,
+            manifest,
+            manifest_path,
+        });
+    }
+
+    Ok(ConnectorInspection { connectors, invalid })
 }
 
 pub fn load_manifest(path: &Path) -> Result<ConnectorManifest, ConnectorError> {
@@ -311,35 +408,6 @@ fn connector_error(error: ConnectorError) -> NodeError {
 
 fn connector_timeout(manifest: &ConnectorManifest) -> std::time::Duration {
     std::time::Duration::from_millis(timeout_ms(manifest))
-}
-
-fn discover_connectors(
-    connectors_dir: &Path,
-) -> Result<Vec<(PathBuf, ConnectorManifest)>, ConnectorError> {
-    if !connectors_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut discovered = Vec::new();
-    let mut entries = fs::read_dir(connectors_dir)?.collect::<Result<Vec<_>, _>>()?;
-    entries.sort_by_key(|entry| entry.path());
-
-    for entry in entries {
-        let connector_dir = fs::canonicalize(entry.path())?;
-        if !connector_dir.is_dir() {
-            continue;
-        }
-        let manifest_path = connector_dir.join("manifest.json");
-        if !manifest_path.exists() {
-            continue;
-        }
-
-        let manifest = load_manifest(&manifest_path)?;
-        validate_manifest(&manifest, &connector_dir)?;
-        discovered.push((connector_dir, manifest));
-    }
-
-    Ok(discovered)
 }
 
 fn load_process_argument(connector_dir: &Path, argument: &str) -> OsString {
@@ -745,6 +813,10 @@ fn wasm_runtime_enabled() -> bool {
     matches!(env::var(WASM_CONNECTOR_RUNTIME_ENV).as_deref(), Ok("1" | "true" | "TRUE" | "True"))
 }
 
+pub fn wasm_connectors_enabled() -> bool {
+    wasm_runtime_enabled()
+}
+
 fn validate_output_keys(manifest: &ConnectorManifest, output: &Value) -> Result<(), NodeError> {
     if manifest.outputs.is_empty() {
         return Ok(());
@@ -824,8 +896,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        run_manifest_path, scaffold_connector, validate_manifest, validate_output_keys,
-        ConnectorLimits, ConnectorManifest, ConnectorRuntime,
+        inspect_connectors, run_manifest_path, scaffold_connector, validate_manifest,
+        validate_output_keys, ConnectorLimits, ConnectorManifest, ConnectorRuntime,
     };
 
     #[test]
@@ -956,6 +1028,49 @@ mod tests {
 
         assert!(connector_dir.join("README.md").exists());
         assert!(connector_dir.join("sample-input.json").exists());
+
+        fs::remove_dir_all(temp_dir).expect("temp connector directory should be removed");
+    }
+
+    #[test]
+    fn inspection_keeps_valid_connectors_when_a_neighbor_manifest_is_invalid() {
+        let temp_dir = std::env::temp_dir().join(format!("acsa-inspect-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).expect("temp connector directory should be created");
+
+        let valid_dir = temp_dir.join("valid");
+        fs::create_dir_all(&valid_dir).expect("valid connector dir should be created");
+        fs::write(
+            valid_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&ConnectorManifest {
+                allowed_env: Vec::new(),
+                allowed_hosts: Vec::new(),
+                allowed_paths: BTreeMap::new(),
+                entry: "python3 main.py".to_string(),
+                enable_wasi: false,
+                inputs: vec!["message".to_string()],
+                limits: ConnectorLimits { memory: None, timeout: Some(1_000) },
+                name: "valid".to_string(),
+                outputs: vec!["echoed".to_string()],
+                runtime: ConnectorRuntime::Process,
+                type_id: "valid_connector".to_string(),
+                version: Some("0.1.0".to_string()),
+            })
+            .expect("valid manifest should serialize"),
+        )
+        .expect("valid manifest should be written");
+        fs::write(valid_dir.join("main.py"), "print('{}')")
+            .expect("valid script should be written");
+
+        let invalid_dir = temp_dir.join("invalid");
+        fs::create_dir_all(&invalid_dir).expect("invalid connector dir should be created");
+        fs::write(invalid_dir.join("manifest.json"), "{invalid json")
+            .expect("invalid manifest should be written");
+
+        let inspection =
+            inspect_connectors(&temp_dir).expect("connector inspection should succeed");
+        assert_eq!(inspection.connectors.len(), 1);
+        assert_eq!(inspection.connectors[0].manifest.type_id, "valid_connector");
+        assert_eq!(inspection.invalid.len(), 1);
 
         fs::remove_dir_all(temp_dir).expect("temp connector directory should be removed");
     }

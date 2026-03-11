@@ -46,7 +46,10 @@ use thiserror::Error;
 use tracing::{error, info};
 
 use crate::{
-    connectors::{discover_connector_manifests, ConnectorError},
+    connectors::{
+        discover_connector_manifests, inspect_connectors, run_manifest_path, scaffold_connector,
+        wasm_connectors_enabled, ConnectorError, ConnectorRuntime,
+    },
     engine::{
         compile_workflow, load_workflows_from_dir, validate_workflow, EngineError, ExecutionStatus,
         WorkflowEngine, WorkflowPlan,
@@ -119,6 +122,23 @@ struct SaveWorkflowRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct CreateConnectorRequest {
+    name: String,
+    runtime: String,
+    type_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct TestConnectorRequest {
+    #[serde(default)]
+    inputs: Option<Value>,
+    #[serde(default)]
+    params: Option<Value>,
+    #[serde(default = "default_true")]
+    use_sample_input: bool,
+}
+
+#[derive(Debug, Deserialize)]
 struct RunLogsQuery {
     level: Option<String>,
     page: Option<usize>,
@@ -181,6 +201,56 @@ struct WorkflowNodePosition {
 struct WorkflowInventoryResponse {
     invalid_files: Vec<InvalidWorkflowFile>,
     workflows: Vec<WorkflowSummary>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ConnectorInventoryResponse {
+    connectors: Vec<ConnectorView>,
+    connectors_dir: String,
+    invalid_connectors: Vec<InvalidConnectorView>,
+    wasm_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ConnectorScaffoldResponse {
+    connector: ConnectorView,
+    next_steps: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ConnectorTestResponse {
+    connector: ConnectorView,
+    inputs: Value,
+    output: Value,
+    params: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ConnectorView {
+    allowed_env: Vec<String>,
+    allowed_hosts: Vec<String>,
+    connector_dir: String,
+    entry: String,
+    inputs: Vec<String>,
+    manifest_path: String,
+    name: String,
+    notes: Vec<String>,
+    outputs: Vec<String>,
+    readme_path: Option<String>,
+    runtime: String,
+    runtime_ready: bool,
+    runtime_status: String,
+    sample_input_path: Option<String>,
+    type_name: String,
+    version: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct InvalidConnectorView {
+    connector_dir: String,
+    error: String,
+    id: String,
+    manifest_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -296,6 +366,9 @@ pub async fn serve(
     let app = Router::new()
         .route("/healthz", get(health))
         .route("/metrics", get(export_metrics))
+        .route("/api/connectors", get(list_connectors))
+        .route("/api/connectors/scaffold", post(create_connector))
+        .route("/api/connectors/{connector_type}/test", post(test_connector))
         .route("/api/node-catalog", get(list_node_catalog))
         .route("/api/runs", get(list_runs))
         .route("/api/runs/{run_id}", get(get_run_detail))
@@ -405,6 +478,117 @@ async fn list_node_catalog(State(state): State<AppState>) -> impl IntoResponse {
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
         }
+    }
+}
+
+async fn list_connectors(State(state): State<AppState>) -> impl IntoResponse {
+    match connector_inventory(&state.connectors_dir) {
+        Ok(inventory) => (StatusCode::OK, Json(json!(inventory))),
+        Err(error) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+        }
+    }
+}
+
+async fn create_connector(
+    State(state): State<AppState>,
+    Json(request): Json<CreateConnectorRequest>,
+) -> Response {
+    let runtime = match parse_connector_runtime(&request.runtime) {
+        Ok(runtime) => runtime,
+        Err(error) => return connector_error_response(error),
+    };
+
+    match scaffold_connector(
+        &state.connectors_dir,
+        request.name.trim(),
+        request.type_id.trim(),
+        runtime,
+    ) {
+        Ok(connector_dir) => match connector_inventory(&state.connectors_dir) {
+            Ok(inventory) => match inventory
+                .connectors
+                .into_iter()
+                .find(|connector| connector.type_name == request.type_id.trim())
+            {
+                Some(connector) => (
+                    StatusCode::CREATED,
+                    Json(json!(ConnectorScaffoldResponse {
+                        connector: connector.clone(),
+                        next_steps: vec![
+                            format!(
+                                "Review {}",
+                                connector.readme_path.clone().unwrap_or_else(|| connector_dir
+                                    .join("README.md")
+                                    .display()
+                                    .to_string())
+                            ),
+                            format!(
+                                "Run sample test with {}",
+                                connector.sample_input_path.clone().unwrap_or_else(|| {
+                                    connector_dir.join("sample-input.json").display().to_string()
+                                })
+                            ),
+                        ],
+                    })),
+                )
+                    .into_response(),
+                None => connector_error_response(TriggerError::Connector(
+                    ConnectorError::InvalidManifest {
+                        message: "scaffolded connector could not be reloaded from inventory"
+                            .to_string(),
+                    },
+                )),
+            },
+            Err(error) => connector_error_response(error),
+        },
+        Err(error) => connector_error_response(TriggerError::Connector(error)),
+    }
+}
+
+async fn test_connector(
+    State(state): State<AppState>,
+    AxumPath(connector_type): AxumPath<String>,
+    Json(request): Json<TestConnectorRequest>,
+) -> Response {
+    let inspection = match inspect_connectors(&state.connectors_dir) {
+        Ok(inspection) => inspection,
+        Err(error) => return connector_error_response(TriggerError::Connector(error)),
+    };
+    let Some(connector) = inspection
+        .connectors
+        .into_iter()
+        .find(|connector| connector.manifest.type_id == connector_type)
+    else {
+        return connector_error_response(TriggerError::Connector(
+            ConnectorError::InvalidManifest {
+                message: format!(
+                    "connector {} was not found in {}",
+                    connector_type,
+                    state.connectors_dir.display()
+                ),
+            },
+        ));
+    };
+
+    let inputs = match resolve_connector_test_inputs(&connector.connector_dir, &request) {
+        Ok(inputs) => inputs,
+        Err(error) => return connector_error_response(error),
+    };
+    let params = request.params.unwrap_or_else(|| json!({}));
+
+    match run_manifest_path(&connector.manifest_path, inputs.clone(), params.clone()).await {
+        Ok(output) => (
+            StatusCode::OK,
+            Json(json!(ConnectorTestResponse {
+                connector: connector_view(&connector),
+                inputs,
+                output,
+                params,
+            })),
+        )
+            .into_response(),
+        Err(error) => connector_error_response(TriggerError::Connector(error)),
     }
 }
 
@@ -787,6 +971,16 @@ fn is_builtin_step_type(type_name: &str) -> bool {
     )
 }
 
+fn connector_inventory(connectors_dir: &Path) -> Result<ConnectorInventoryResponse, TriggerError> {
+    let inspection = inspect_connectors(connectors_dir)?;
+    Ok(ConnectorInventoryResponse {
+        connectors: inspection.connectors.iter().map(connector_view).collect(),
+        connectors_dir: connectors_dir.display().to_string(),
+        invalid_connectors: inspection.invalid.iter().map(invalid_connector_view).collect(),
+        wasm_enabled: wasm_connectors_enabled(),
+    })
+}
+
 fn node_catalog(
     connectors_dir: &Path,
 ) -> Result<(Vec<StepTypeEntry>, Vec<TriggerTypeEntry>), TriggerError> {
@@ -969,6 +1163,67 @@ fn node_catalog(
     ))
 }
 
+fn connector_view(connector: &crate::connectors::DiscoveredConnector) -> ConnectorView {
+    let runtime = connector_runtime_name(connector.manifest.runtime).to_string();
+    let readme_path = connector.connector_dir.join("README.md");
+    let sample_input_path = connector.connector_dir.join("sample-input.json");
+    let runtime_ready =
+        connector.manifest.runtime != ConnectorRuntime::Wasm || wasm_connectors_enabled();
+    let mut notes = Vec::new();
+    if connector.manifest.runtime == ConnectorRuntime::Wasm && !runtime_ready {
+        notes.push("Enable ACSA_ENABLE_WASM_CONNECTORS=1 to run this connector.".to_string());
+    }
+    if !sample_input_path.exists() {
+        notes.push("Add sample-input.json to enable one-click sample tests.".to_string());
+    }
+    if !readme_path.exists() {
+        notes.push(
+            "Add README.md so maintainers see setup and usage guidance in the repo.".to_string(),
+        );
+    }
+
+    ConnectorView {
+        allowed_env: connector.manifest.allowed_env.clone(),
+        allowed_hosts: connector.manifest.allowed_hosts.clone(),
+        connector_dir: connector.connector_dir.display().to_string(),
+        entry: connector.manifest.entry.clone(),
+        inputs: connector.manifest.inputs.clone(),
+        manifest_path: connector.manifest_path.display().to_string(),
+        name: connector.manifest.name.clone(),
+        notes,
+        outputs: connector.manifest.outputs.clone(),
+        readme_path: readme_path.exists().then(|| readme_path.display().to_string()),
+        runtime: runtime.clone(),
+        runtime_ready,
+        runtime_status: if runtime_ready {
+            "ready".to_string()
+        } else {
+            "runtime_disabled".to_string()
+        },
+        sample_input_path: sample_input_path
+            .exists()
+            .then(|| sample_input_path.display().to_string()),
+        type_name: connector.manifest.type_id.clone(),
+        version: connector.manifest.version.clone(),
+    }
+}
+
+fn invalid_connector_view(connector: &crate::connectors::InvalidConnector) -> InvalidConnectorView {
+    InvalidConnectorView {
+        connector_dir: connector.connector_dir.display().to_string(),
+        error: connector.error.clone(),
+        id: connector
+            .manifest_path
+            .as_ref()
+            .and_then(|path| path.parent())
+            .and_then(|path| path.file_name())
+            .or_else(|| connector.connector_dir.file_name())
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| "connector".to_string()),
+        manifest_path: connector.manifest_path.as_ref().map(|path| path.display().to_string()),
+    }
+}
+
 fn parse_workflow_yaml(yaml: &str) -> Result<Workflow, TriggerError> {
     let workflow = serde_yaml::from_str::<Workflow>(yaml)
         .map_err(|error| TriggerError::InvalidWorkflowYaml { message: error.to_string() })?;
@@ -1090,7 +1345,11 @@ fn insert_ui_positions(
     Ok(())
 }
 
-fn yaml_number_field(mapping: &serde_yaml::Mapping, field_name: &str, node_id: &str) -> Result<f64, TriggerError> {
+fn yaml_number_field(
+    mapping: &serde_yaml::Mapping,
+    field_name: &str,
+    node_id: &str,
+) -> Result<f64, TriggerError> {
     let Some(value) = mapping.get(YamlValue::String(field_name.to_string())) else {
         return Err(TriggerError::InvalidWorkflowYaml {
             message: format!("node {node_id}: ui.positions.{field_name} is missing"),
@@ -1160,6 +1419,45 @@ fn validate_secret_value(context: &str, value: &YamlValue) -> Result<(), Trigger
     }
 }
 
+fn resolve_connector_test_inputs(
+    connector_dir: &Path,
+    request: &TestConnectorRequest,
+) -> Result<Value, TriggerError> {
+    if let Some(inputs) = &request.inputs {
+        return Ok(inputs.clone());
+    }
+    if !request.use_sample_input {
+        return Ok(json!({}));
+    }
+
+    let sample_input_path = connector_dir.join("sample-input.json");
+    if !sample_input_path.exists() {
+        return Err(TriggerError::Connector(ConnectorError::InvalidManifest {
+            message: format!(
+                "connector test needs explicit inputs or a sample-input.json file at {}",
+                sample_input_path.display()
+            ),
+        }));
+    }
+
+    let raw = fs::read_to_string(&sample_input_path)?;
+    serde_json::from_str(&raw).map_err(|error| TriggerError::Connector(ConnectorError::Json(error)))
+}
+
+fn parse_connector_runtime(runtime: &str) -> Result<ConnectorRuntime, TriggerError> {
+    match runtime {
+        "process" => Ok(ConnectorRuntime::Process),
+        "wasm" => Ok(ConnectorRuntime::Wasm),
+        other => Err(TriggerError::Connector(ConnectorError::InvalidManifest {
+            message: format!("unsupported connector runtime {other}"),
+        })),
+    }
+}
+
+const fn default_true() -> bool {
+    true
+}
+
 fn looks_like_secret_key(key: &str) -> bool {
     let key = key.to_ascii_lowercase();
     key.contains("secret")
@@ -1189,6 +1487,16 @@ fn workflow_error_response(error: TriggerError) -> axum::response::Response {
         | TriggerError::InvalidWorkflowYaml { .. } => StatusCode::BAD_REQUEST,
         TriggerError::WorkflowAlreadyExists { .. } => StatusCode::CONFLICT,
         TriggerError::WorkflowNotFound { .. } => StatusCode::NOT_FOUND,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+
+    (status, Json(json!({ "error": error.to_string() }))).into_response()
+}
+
+fn connector_error_response(error: TriggerError) -> axum::response::Response {
+    let status = match &error {
+        TriggerError::Connector(ConnectorError::InvalidManifest { .. })
+        | TriggerError::Connector(ConnectorError::Json(_)) => StatusCode::BAD_REQUEST,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
 

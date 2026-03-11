@@ -16,13 +16,11 @@
 
 import type {
   InvalidWorkflowFile,
-  StepTypeEntry,
   WorkflowSummary
 } from "../lib/workflow-editor";
 
 type WorkflowExplorerProps = {
   activeWorkflowId: string | null;
-  connectors: StepTypeEntry[];
   invalidFiles: InvalidWorkflowFile[];
   isBusy: boolean;
   onCreateWorkflow: () => void;
@@ -34,7 +32,6 @@ type WorkflowExplorerProps = {
 
 export function WorkflowExplorer({
   activeWorkflowId,
-  connectors,
   invalidFiles,
   isBusy,
   onCreateWorkflow,
@@ -135,52 +132,6 @@ export function WorkflowExplorer({
           </div>
         </div>
       ) : null}
-
-      <div className="mt-6 rounded-2xl border border-black/10 bg-white/65 p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="section-kicker">Connectors</p>
-            <h3 className="section-title mt-2">Loaded plugins</h3>
-          </div>
-          <span className="ui-badge">{connectors.length}</span>
-        </div>
-
-        <p className="mt-3 text-sm leading-6 text-slate">
-          Connector nodes are discovered from the local
-          <code className="mx-1 rounded bg-sand px-1.5 py-0.5 font-mono text-ember">
-            connectors/
-          </code>
-          directory. Shipping a drag-and-drop installer still needs a backend upload API.
-        </p>
-
-        <div className="mt-4 space-y-3">
-          {connectors.length > 0 ? (
-            connectors.map((connector) => (
-              <article
-                key={connector.type_name}
-                className="rounded-xl border border-black/10 bg-white/80 px-3 py-3"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div className="font-semibold text-ink">{connector.label}</div>
-                  <span className="rounded-md bg-tide/10 px-2 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-tide">
-                    {connector.runtime ?? "plugin"}
-                  </span>
-                </div>
-                <div className="mt-2 font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
-                  {connector.type_name}
-                </div>
-                <p className="mt-2 text-sm leading-6 text-slate">
-                  {connector.description}
-                </p>
-              </article>
-            ))
-          ) : (
-            <div className="rounded-xl border border-dashed border-black/15 bg-white/80 px-4 py-6 text-center text-sm leading-6 text-slate">
-              No connector manifests are loaded yet. Built-in nodes remain available in the canvas.
-            </div>
-          )}
-        </div>
-      </div>
     </aside>
   );
 }

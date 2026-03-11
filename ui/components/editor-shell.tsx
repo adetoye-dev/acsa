@@ -16,7 +16,8 @@
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import {
   type Edge,
@@ -27,8 +28,14 @@ import { HumanTaskInbox } from "./human-task-inbox";
 import { NodeInspector } from "./node-inspector";
 import { RunHistoryPanel } from "./run-history-panel";
 import { TopBar } from "./top-bar";
+import { ConnectorManager } from "./connector-manager";
 import { WorkflowCanvas } from "./workflow-canvas";
 import { WorkflowExplorer } from "./workflow-explorer";
+import {
+  fetchEngineJson,
+  fetchEngineNoContent,
+  fetchEngineText
+} from "../lib/engine-client";
 import {
   formatDuration,
   parseMetricsSummary,
@@ -38,12 +45,16 @@ import {
   type RunPageResponse
 } from "../lib/observability";
 import {
+  observabilityStoreState,
+  useObservabilityActions,
+  useObservabilityStore
+} from "../lib/observability-store";
+import {
   addStepToWorkflow,
   autoLayoutWorkflow,
   createBlankWorkflow,
   defaultStepParamsForType,
   defaultTriggerDetailsForType,
-  ENGINE_PROXY_BASE,
   extractTriggerDetails,
   formatYaml,
   parseObjectYaml,
@@ -69,6 +80,11 @@ import {
   summarizeWorkflow,
   withStepUpdated
 } from "../lib/workflow-editor";
+import {
+  useWorkflowActions,
+  useWorkflowStore,
+  workflowStoreState
+} from "../lib/workflow-store";
 
 type NodeCatalogResponse = {
   step_types: StepTypeEntry[];
@@ -85,38 +101,83 @@ type HumanTaskResponse = {
 };
 
 export function EditorShell() {
-  const [documents, setDocuments] = useState<Record<string, WorkflowDocument>>({});
-  const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(null);
-  const [invalidFiles, setInvalidFiles] = useState<InvalidWorkflowFile[]>([]);
-  const [workflows, setWorkflows] = useState<WorkflowSummary[]>([]);
-  const [stepCatalog, setStepCatalog] = useState<StepTypeEntry[]>([]);
-  const [triggerCatalog, setTriggerCatalog] = useState<TriggerTypeEntry[]>([]);
-  const [pendingTasks, setPendingTasks] = useState<HumanTask[]>([]);
-  const [taskValues, setTaskValues] = useState<Record<string, string>>({});
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(TRIGGER_NODE_ID);
-  const [stepParamsDraft, setStepParamsDraft] = useState("{}");
-  const [triggerDetailsDraft, setTriggerDetailsDraft] = useState("{}");
-  const [newStepType, setNewStepType] = useState("noop");
-  const [lastAction, setLastAction] = useState("Loading workflow inventory");
-  const [runStatus, setRunStatus] = useState<string | null>(null);
-  const [globalError, setGlobalError] = useState<string | null>(null);
-  const [inspectorError, setInspectorError] = useState<string | null>(null);
-  const [isBooting, setIsBooting] = useState(true);
-  const [isRefreshingHistory, setIsRefreshingHistory] = useState(false);
-  const [isLoadingWorkflow, setIsLoadingWorkflow] = useState(false);
-  const [isRefreshingTasks, setIsRefreshingTasks] = useState(false);
-  const [isRunning, setIsRunning] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [lastRun, setLastRun] = useState<RunSummary | null>(null);
-  const [metrics, setMetrics] = useState<MetricsSummary | null>(null);
-  const [runDetail, setRunDetail] = useState<RunDetailResponse | null>(null);
-  const [runLogs, setRunLogs] = useState<LogPageResponse | null>(null);
-  const [runPage, setRunPage] = useState<RunPageResponse | null>(null);
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
-  const [runWorkflowFilter, setRunWorkflowFilter] = useState("");
-  const [runStatusFilter, setRunStatusFilter] = useState("");
-  const [logLevelFilter, setLogLevelFilter] = useState("");
-  const [logSearch, setLogSearch] = useState("");
+  const {
+    activeWorkflowId,
+    documents,
+    globalError,
+    inspectorError,
+    invalidFiles,
+    isBooting,
+    isLoadingWorkflow,
+    isRefreshingTasks,
+    isRunning,
+    isSaving,
+    lastAction,
+    lastRun,
+    newStepType,
+    pendingTasks,
+    runStatus,
+    selectedNodeId,
+    stepCatalog,
+    stepParamsDraft,
+    taskValues,
+    triggerCatalog,
+    triggerDetailsDraft,
+    workflows
+  } = useWorkflowStore(
+    useShallow((state) => ({
+      activeWorkflowId: state.activeWorkflowId,
+      documents: state.documents,
+      globalError: state.globalError,
+      inspectorError: state.inspectorError,
+      invalidFiles: state.invalidFiles,
+      isBooting: state.isBooting,
+      isLoadingWorkflow: state.isLoadingWorkflow,
+      isRefreshingTasks: state.isRefreshingTasks,
+      isRunning: state.isRunning,
+      isSaving: state.isSaving,
+      lastAction: state.lastAction,
+      lastRun: state.lastRun,
+      newStepType: state.newStepType,
+      pendingTasks: state.pendingTasks,
+      runStatus: state.runStatus,
+      selectedNodeId: state.selectedNodeId,
+      stepCatalog: state.stepCatalog,
+      stepParamsDraft: state.stepParamsDraft,
+      taskValues: state.taskValues,
+      triggerCatalog: state.triggerCatalog,
+      triggerDetailsDraft: state.triggerDetailsDraft,
+      workflows: state.workflows
+    }))
+  );
+  const {
+    isRefreshingHistory,
+    logLevelFilter,
+    logSearch,
+    metrics,
+    runDetail,
+    runLogs,
+    runPage,
+    runStatusFilter,
+    runWorkflowFilter,
+    selectedRunId
+  } = useObservabilityStore(
+    useShallow((state) => ({
+      isRefreshingHistory: state.isRefreshingHistory,
+      logLevelFilter: state.logLevelFilter,
+      logSearch: state.logSearch,
+      metrics: state.metrics,
+      runDetail: state.runDetail,
+      runLogs: state.logs,
+      runPage: state.runPage,
+      runStatusFilter: state.runStatusFilter,
+      runWorkflowFilter: state.runWorkflowFilter,
+      selectedRunId: state.selectedRunId
+    }))
+  );
+  const { clearTaskValue, patch: patchWorkflowState, setDocuments, setTaskValue, setWorkflows } =
+    useWorkflowActions();
+  const { patch: patchObservabilityState } = useObservabilityActions();
 
   const activeWorkflow = activeWorkflowId ? documents[activeWorkflowId] ?? null : null;
   const canvas = useMemo(
@@ -129,10 +190,6 @@ export function EditorShell() {
   const displayNodes = useMemo(
     () => decorateNodesForSelectedRun(canvas.nodes, activeWorkflow, runDetail),
     [activeWorkflow, canvas.nodes, runDetail]
-  );
-  const connectorSteps = useMemo(
-    () => stepCatalog.filter((entry) => entry.source === "connector"),
-    [stepCatalog]
   );
   const selectedNode =
     selectedNodeId === null
@@ -159,28 +216,41 @@ export function EditorShell() {
 
   useEffect(() => {
     if (!activeWorkflow) {
-      setStepParamsDraft("{}");
-      setTriggerDetailsDraft("{}");
+      patchWorkflowState({
+        inspectorError: null,
+        stepParamsDraft: "{}",
+        triggerDetailsDraft: "{}"
+      });
       return;
     }
 
-    setTriggerDetailsDraft(formatYaml(extractTriggerDetails(activeWorkflow.workflow.trigger)));
+    const nextWorkflowDraftState: {
+      inspectorError: string | null;
+      stepParamsDraft: string;
+      triggerDetailsDraft: string;
+    } = {
+      inspectorError: null,
+      stepParamsDraft: "{}",
+      triggerDetailsDraft: formatYaml(extractTriggerDetails(activeWorkflow.workflow.trigger))
+    };
+
     if (selectedNode?.data.kind === "step") {
       const selectedStep = activeWorkflow.workflow.steps.find(
         (step) => step.id === selectedNode.id
       );
-      setStepParamsDraft(formatYaml(selectedStep?.params ?? {}));
-    } else {
-      setStepParamsDraft("{}");
+      nextWorkflowDraftState.stepParamsDraft = formatYaml(selectedStep?.params ?? {});
     }
-    setInspectorError(null);
+
+    patchWorkflowState(nextWorkflowDraftState);
   }, [activeWorkflow, selectedNode?.data.kind, selectedNode?.id]);
 
   useEffect(() => {
     if (isBooting || !selectedRunId) {
       if (!selectedRunId) {
-        setRunDetail(null);
-        setRunLogs(null);
+        patchObservabilityState({
+          logs: null,
+          runDetail: null
+        });
       }
       return;
     }
@@ -188,8 +258,10 @@ export function EditorShell() {
   }, [isBooting, logLevelFilter, logSearch, selectedRunId]);
 
   async function bootstrap() {
-    setIsBooting(true);
-    setGlobalError(null);
+    patchWorkflowState({
+      globalError: null,
+      isBooting: true
+    });
     try {
       const [catalog, inventory, tasks] = await Promise.all([
         fetchEngineJson<NodeCatalogResponse>("/api/node-catalog"),
@@ -197,81 +269,108 @@ export function EditorShell() {
         fetchEngineJson<HumanTaskResponse>("/human-tasks")
       ]);
 
-      setStepCatalog(catalog.step_types);
-      setTriggerCatalog(catalog.trigger_types);
-      setNewStepType(catalog.step_types[0]?.type_name ?? "noop");
-      setPendingTasks(tasks.tasks);
-      setWorkflows(inventory.workflows);
-      setInvalidFiles(inventory.invalid_files);
+      patchWorkflowState({
+        invalidFiles: inventory.invalid_files,
+        newStepType: catalog.step_types[0]?.type_name ?? "noop",
+        pendingTasks: tasks.tasks,
+        stepCatalog: catalog.step_types,
+        triggerCatalog: catalog.trigger_types,
+        workflows: inventory.workflows
+      });
 
       const preferredWorkflowId =
-        inventory.workflows.find((workflow) => workflow.id === activeWorkflowId)?.id ??
+        inventory.workflows.find(
+          (workflow) => workflow.id === workflowStoreState().activeWorkflowId
+        )?.id ??
         inventory.workflows[0]?.id ??
         null;
-      setActiveWorkflowId(preferredWorkflowId);
+      patchWorkflowState({ activeWorkflowId: preferredWorkflowId });
       if (preferredWorkflowId) {
         await loadWorkflowDocument(preferredWorkflowId);
       }
       await refreshRunHistory();
-      setLastAction("Loaded workflow inventory, node catalog, and pending tasks");
+      patchWorkflowState({
+        lastAction: "Loaded workflow inventory, node catalog, and pending tasks"
+      });
     } catch (error) {
-      setGlobalError(errorMessage(error));
-      setLastAction("Failed to reach the engine API");
+      patchWorkflowState({
+        globalError: errorMessage(error),
+        lastAction: "Failed to reach the engine API"
+      });
     } finally {
-      setIsBooting(false);
+      patchWorkflowState({ isBooting: false });
     }
   }
 
   async function loadWorkflowDocument(workflowId: string) {
-    setIsLoadingWorkflow(true);
+    patchWorkflowState({ isLoadingWorkflow: true });
     try {
       const response = await fetchEngineJson<WorkflowDocumentResponse>(
         `/api/workflows/${workflowId}`
       );
       applyWorkflowResponse(response);
-      setSelectedNodeId(TRIGGER_NODE_ID);
-      setLastAction(`Opened ${response.summary.file_name}`);
+      patchWorkflowState({
+        lastAction: `Opened ${response.summary.file_name}`,
+        selectedNodeId: TRIGGER_NODE_ID
+      });
     } catch (error) {
-      setGlobalError(errorMessage(error));
-      setLastAction(`Failed to load ${workflowId}.yaml`);
+      patchWorkflowState({
+        globalError: errorMessage(error),
+        lastAction: `Failed to load ${workflowId}.yaml`
+      });
     } finally {
-      setIsLoadingWorkflow(false);
+      patchWorkflowState({ isLoadingWorkflow: false });
     }
   }
 
   async function refreshHumanTasks() {
-    setIsRefreshingTasks(true);
+    patchWorkflowState({ isRefreshingTasks: true });
     try {
       const response = await fetchEngineJson<HumanTaskResponse>("/human-tasks");
-      setPendingTasks(response.tasks);
+      patchWorkflowState({ pendingTasks: response.tasks });
     } catch (error) {
-      setGlobalError(errorMessage(error));
+      patchWorkflowState({ globalError: errorMessage(error) });
     } finally {
-      setIsRefreshingTasks(false);
+      patchWorkflowState({ isRefreshingTasks: false });
     }
   }
 
   async function refreshInventory(preferredWorkflowId?: string | null) {
     const inventory = await fetchEngineJson<WorkflowInventoryResponse>("/api/workflows");
-    setWorkflows(inventory.workflows);
-    setInvalidFiles(inventory.invalid_files);
+    patchWorkflowState({
+      invalidFiles: inventory.invalid_files,
+      workflows: inventory.workflows
+    });
     const nextWorkflowId =
       inventory.workflows.find((workflow) => workflow.id === preferredWorkflowId)?.id ??
       inventory.workflows[0]?.id ??
       null;
-    setActiveWorkflowId(nextWorkflowId);
+    patchWorkflowState({ activeWorkflowId: nextWorkflowId });
     return nextWorkflowId;
   }
 
+  async function refreshNodeCatalog() {
+    try {
+      const catalog = await fetchEngineJson<NodeCatalogResponse>("/api/node-catalog");
+      patchWorkflowState({
+        stepCatalog: catalog.step_types,
+        triggerCatalog: catalog.trigger_types
+      });
+    } catch (error) {
+      patchWorkflowState({ globalError: errorMessage(error) });
+    }
+  }
+
   async function refreshRunHistory(preferredRunId?: string | null) {
-    setIsRefreshingHistory(true);
+    const currentObservabilityState = observabilityStoreState();
+    patchObservabilityState({ isRefreshingHistory: true });
     try {
       const query = new URLSearchParams();
-      if (runWorkflowFilter.trim()) {
-        query.set("workflow_name", runWorkflowFilter.trim());
+      if (currentObservabilityState.runWorkflowFilter.trim()) {
+        query.set("workflow_name", currentObservabilityState.runWorkflowFilter.trim());
       }
-      if (runStatusFilter.trim()) {
-        query.set("status", runStatusFilter.trim());
+      if (currentObservabilityState.runStatusFilter.trim()) {
+        query.set("status", currentObservabilityState.runStatusFilter.trim());
       }
       query.set("page", "1");
       query.set("page_size", "12");
@@ -281,42 +380,52 @@ export function EditorShell() {
         fetchEngineText("/metrics")
       ]);
 
-      setRunPage(pageResponse);
-      setMetrics(parseMetricsSummary(metricsText));
       const nextRunId =
         pageResponse.runs.find((run) => run.id === preferredRunId)?.id ??
-        pageResponse.runs.find((run) => run.id === selectedRunId)?.id ??
+        pageResponse.runs.find(
+          (run) => run.id === currentObservabilityState.selectedRunId
+        )?.id ??
         pageResponse.runs[0]?.id ??
         null;
-      setSelectedRunId(nextRunId);
-      if (!nextRunId) {
-        setRunDetail(null);
-        setRunLogs(null);
-      }
+      patchObservabilityState({
+        isRefreshingHistory: false,
+        logs: nextRunId ? currentObservabilityState.logs : null,
+        metrics: parseMetricsSummary(metricsText),
+        runDetail: nextRunId ? currentObservabilityState.runDetail : null,
+        runPage: pageResponse,
+        selectedRunId: nextRunId
+      });
     } catch (error) {
-      setGlobalError(errorMessage(error));
+      patchWorkflowState({ globalError: errorMessage(error) });
     } finally {
-      setIsRefreshingHistory(false);
+      patchObservabilityState({ isRefreshingHistory: false });
     }
   }
 
   async function loadRunDetail(runId: string) {
+    const currentObservabilityState = observabilityStoreState();
     try {
       const [detailResponse, logResponse] = await Promise.all([
         fetchEngineJson<RunDetailResponse>(`/api/runs/${runId}`),
         fetchEngineJson<LogPageResponse>(
           `/api/runs/${runId}/logs?${new URLSearchParams({
-            ...(logLevelFilter ? { level: logLevelFilter } : {}),
-            ...(logSearch ? { search: logSearch } : {}),
+            ...(currentObservabilityState.logLevelFilter
+              ? { level: currentObservabilityState.logLevelFilter }
+              : {}),
+            ...(currentObservabilityState.logSearch
+              ? { search: currentObservabilityState.logSearch }
+              : {}),
             page: "1",
             page_size: "80"
           }).toString()}`
         )
       ]);
-      setRunDetail(detailResponse);
-      setRunLogs(logResponse);
+      patchObservabilityState({
+        logs: logResponse,
+        runDetail: detailResponse
+      });
     } catch (error) {
-      setGlobalError(errorMessage(error));
+      patchWorkflowState({ globalError: errorMessage(error) });
     }
   }
 
@@ -373,14 +482,18 @@ export function EditorShell() {
         method: "POST"
       });
       applyWorkflowResponse(response);
-      setActiveWorkflowId(response.id);
-      setSelectedNodeId(TRIGGER_NODE_ID);
-      setLastAction(`Created ${response.summary.file_name}`);
-      setGlobalError(null);
+      patchWorkflowState({
+        activeWorkflowId: response.id,
+        globalError: null,
+        lastAction: `Created ${response.summary.file_name}`,
+        selectedNodeId: TRIGGER_NODE_ID
+      });
       await refreshInventory(response.id);
     } catch (error) {
-      setGlobalError(errorMessage(error));
-      setLastAction("Failed to create workflow");
+      patchWorkflowState({
+        globalError: errorMessage(error),
+        lastAction: "Failed to create workflow"
+      });
     }
   }
 
@@ -405,11 +518,15 @@ export function EditorShell() {
       if (nextWorkflowId) {
         await loadWorkflowDocument(nextWorkflowId);
       }
-      setLastAction(`Deleted ${workflowId}.yaml`);
-      setGlobalError(null);
+      patchWorkflowState({
+        globalError: null,
+        lastAction: `Deleted ${workflowId}.yaml`
+      });
     } catch (error) {
-      setGlobalError(errorMessage(error));
-      setLastAction(`Failed to delete ${workflowId}.yaml`);
+      patchWorkflowState({
+        globalError: errorMessage(error),
+        lastAction: `Failed to delete ${workflowId}.yaml`
+      });
     }
   }
 
@@ -432,14 +549,18 @@ export function EditorShell() {
         }
       );
       applyWorkflowResponse(response);
-      setActiveWorkflowId(response.id);
-      setSelectedNodeId(TRIGGER_NODE_ID);
-      setLastAction(`Duplicated ${workflowId}.yaml to ${response.summary.file_name}`);
-      setGlobalError(null);
+      patchWorkflowState({
+        activeWorkflowId: response.id,
+        globalError: null,
+        lastAction: `Duplicated ${workflowId}.yaml to ${response.summary.file_name}`,
+        selectedNodeId: TRIGGER_NODE_ID
+      });
       await refreshInventory(response.id);
     } catch (error) {
-      setGlobalError(errorMessage(error));
-      setLastAction("Workflow duplication failed");
+      patchWorkflowState({
+        globalError: errorMessage(error),
+        lastAction: "Workflow duplication failed"
+      });
     }
   }
 
@@ -451,7 +572,7 @@ export function EditorShell() {
       ...document,
       workflow: updateWorkflowEdges(document.workflow, nextEdges)
     }));
-    setLastAction("Updated workflow connections");
+    patchWorkflowState({ lastAction: "Updated workflow connections" });
   }
 
   function handlePositionsCommit(nextPositions: Record<string, XYPosition>) {
@@ -462,7 +583,7 @@ export function EditorShell() {
       ...document,
       positions: nextPositions
     }));
-    setLastAction("Updated node positions");
+    patchWorkflowState({ lastAction: "Updated node positions" });
   }
 
   function handleAddStep() {
@@ -477,8 +598,10 @@ export function EditorShell() {
       ...document,
       workflow
     }));
-    setSelectedNodeId(createdNodeId);
-    setLastAction(`Added ${newStepType} step`);
+    patchWorkflowState({
+      lastAction: `Added ${newStepType} step`,
+      selectedNodeId: createdNodeId
+    });
   }
 
   function handleAutoLayout() {
@@ -489,7 +612,7 @@ export function EditorShell() {
       ...document,
       positions: autoLayoutWorkflow(document.workflow)
     }));
-    setLastAction("Auto-arranged workflow nodes");
+    patchWorkflowState({ lastAction: "Auto-arranged workflow nodes" });
   }
 
   async function handleRefresh() {
@@ -501,11 +624,15 @@ export function EditorShell() {
       if (workflowIdToLoad) {
         await loadWorkflowDocument(workflowIdToLoad);
       }
-      setLastAction("Refreshed workflow inventory, tasks, and run history");
-      setGlobalError(null);
+      patchWorkflowState({
+        globalError: null,
+        lastAction: "Refreshed workflow inventory, tasks, and run history"
+      });
     } catch (error) {
-      setGlobalError(errorMessage(error));
-      setLastAction("Refresh failed");
+      patchWorkflowState({
+        globalError: errorMessage(error),
+        lastAction: "Refresh failed"
+      });
     }
   }
 
@@ -513,7 +640,7 @@ export function EditorShell() {
     if (!activeWorkflow) {
       return;
     }
-    setIsRunning(true);
+    patchWorkflowState({ isRunning: true });
     try {
       const response = await fetchEngineJson<RunSummary>(
         `/api/workflows/${activeWorkflow.id}/run`,
@@ -525,21 +652,26 @@ export function EditorShell() {
           method: "POST"
         }
       );
-      setLastRun(response);
-      setRunStatus(`${response.status} • ${response.run_id.slice(0, 8)}`);
+      patchWorkflowState({
+        lastRun: response,
+        runStatus: `${response.status} • ${response.run_id.slice(0, 8)}`
+      });
       await refreshHumanTasks();
       await refreshRunHistory(response.run_id);
-      setLastAction(
-        response.status === "paused"
-          ? `Run paused with ${response.pending_tasks.length} pending task(s)`
-          : `Run completed successfully (${response.completed_steps} steps)`
-      );
-      setGlobalError(null);
+      patchWorkflowState({
+        globalError: null,
+        lastAction:
+          response.status === "paused"
+            ? `Run paused with ${response.pending_tasks.length} pending task(s)`
+            : `Run completed successfully (${response.completed_steps} steps)`
+      });
     } catch (error) {
-      setGlobalError(errorMessage(error));
-      setLastAction("Workflow run failed");
+      patchWorkflowState({
+        globalError: errorMessage(error),
+        lastAction: "Workflow run failed"
+      });
     } finally {
-      setIsRunning(false);
+      patchWorkflowState({ isRunning: false });
     }
   }
 
@@ -547,7 +679,7 @@ export function EditorShell() {
     if (!activeWorkflow) {
       return;
     }
-    setIsSaving(true);
+    patchWorkflowState({ isSaving: true });
     try {
       const response = await fetchEngineJson<WorkflowDocumentResponse>(
         `/api/workflows/${activeWorkflow.id}`,
@@ -560,25 +692,31 @@ export function EditorShell() {
         }
       );
       applyWorkflowResponse(response);
-      setLastAction(`Saved ${response.summary.file_name}`);
-      setGlobalError(null);
+      patchWorkflowState({
+        globalError: null,
+        lastAction: `Saved ${response.summary.file_name}`
+      });
     } catch (error) {
-      setGlobalError(errorMessage(error));
-      setLastAction("Save failed");
+      patchWorkflowState({
+        globalError: errorMessage(error),
+        lastAction: "Save failed"
+      });
     } finally {
-      setIsSaving(false);
+      patchWorkflowState({ isSaving: false });
     }
   }
 
   async function handleSelectWorkflow(workflowId: string) {
-    setActiveWorkflowId(workflowId);
-    setSelectedNodeId(TRIGGER_NODE_ID);
-    setGlobalError(null);
+    patchWorkflowState({
+      activeWorkflowId: workflowId,
+      globalError: null,
+      selectedNodeId: TRIGGER_NODE_ID
+    });
     if (!documents[workflowId]) {
       await loadWorkflowDocument(workflowId);
       return;
     }
-    setLastAction(`Opened ${workflowId}.yaml`);
+    patchWorkflowState({ lastAction: `Opened ${workflowId}.yaml` });
   }
 
   function handleWorkflowNameChange(name: string) {
@@ -589,7 +727,7 @@ export function EditorShell() {
         name
       }
     }));
-    setLastAction("Updated workflow name");
+    patchWorkflowState({ lastAction: "Updated workflow name" });
   }
 
   function handleTriggerTypeChange(triggerType: string) {
@@ -606,14 +744,14 @@ export function EditorShell() {
         }
       }
     }));
-    setTriggerDetailsDraft(
-      formatYaml(defaultTriggerDetailsForType(triggerType, activeWorkflow.id))
-    );
-    setLastAction(`Updated trigger type to ${triggerType}`);
+    patchWorkflowState({
+      lastAction: `Updated trigger type to ${triggerType}`,
+      triggerDetailsDraft: formatYaml(defaultTriggerDetailsForType(triggerType, activeWorkflow.id))
+    });
   }
 
   function handleTriggerDetailsChange(text: string) {
-    setTriggerDetailsDraft(text);
+    patchWorkflowState({ triggerDetailsDraft: text });
     if (!activeWorkflow) {
       return;
     }
@@ -630,9 +768,9 @@ export function EditorShell() {
           }
         }
       }));
-      setInspectorError(null);
+      patchWorkflowState({ inspectorError: null });
     } catch (error) {
-      setInspectorError(errorMessage(error));
+      patchWorkflowState({ inspectorError: errorMessage(error) });
     }
   }
 
@@ -642,7 +780,7 @@ export function EditorShell() {
     }
     const nextId = slugifyIdentifier(value);
     if (!nextId) {
-      setInspectorError("Step ids must not be empty.");
+      patchWorkflowState({ inspectorError: "Step ids must not be empty." });
       return;
     }
     if (
@@ -650,7 +788,7 @@ export function EditorShell() {
         (step) => step.id === nextId && step.id !== selectedNode.id
       )
     ) {
-      setInspectorError(`A step named ${nextId} already exists.`);
+      patchWorkflowState({ inspectorError: `A step named ${nextId} already exists.` });
       return;
     }
 
@@ -668,9 +806,11 @@ export function EditorShell() {
         }))
       }
     }));
-    setSelectedNodeId(nextId);
-    setInspectorError(null);
-    setLastAction(`Renamed step ${selectedNode.id} to ${nextId}`);
+    patchWorkflowState({
+      inspectorError: null,
+      lastAction: `Renamed step ${selectedNode.id} to ${nextId}`,
+      selectedNodeId: nextId
+    });
   }
 
   function handleSelectedNodeTypeChange(typeName: string) {
@@ -685,8 +825,10 @@ export function EditorShell() {
         type: typeName
       }))
     }));
-    setInspectorError(null);
-    setLastAction(`Changed ${selectedNode.id} to ${typeName}`);
+    patchWorkflowState({
+      inspectorError: null,
+      lastAction: `Changed ${selectedNode.id} to ${typeName}`
+    });
   }
 
   function handleSelectedNodeTimeoutChange(value: string) {
@@ -754,7 +896,7 @@ export function EditorShell() {
   }
 
   function handleSelectedNodeParamsChange(text: string) {
-    setStepParamsDraft(text);
+    patchWorkflowState({ stepParamsDraft: text });
     if (!selectedNode || selectedNode.data.kind !== "step") {
       return;
     }
@@ -768,9 +910,9 @@ export function EditorShell() {
           params
         }))
       }));
-      setInspectorError(null);
+      patchWorkflowState({ inspectorError: null });
     } catch (error) {
-      setInspectorError(errorMessage(error));
+      patchWorkflowState({ inspectorError: errorMessage(error) });
     }
   }
 
@@ -784,7 +926,7 @@ export function EditorShell() {
       return;
     }
     if (activeWorkflow.workflow.steps.length === 1) {
-      setInspectorError("Workflows must keep at least one step.");
+      patchWorkflowState({ inspectorError: "Workflows must keep at least one step." });
       return;
     }
 
@@ -793,16 +935,15 @@ export function EditorShell() {
       positions: omitPosition(document.positions, targetStepId),
       workflow: removeStepFromWorkflow(document.workflow, targetStepId)
     }));
-    setSelectedNodeId(TRIGGER_NODE_ID);
-    setInspectorError(null);
-    setLastAction(`Removed step ${targetStepId}`);
+    patchWorkflowState({
+      inspectorError: null,
+      lastAction: `Removed step ${targetStepId}`,
+      selectedNodeId: TRIGGER_NODE_ID
+    });
   }
 
   function handleTaskValueChange(taskId: string, value: string) {
-    setTaskValues((current) => ({
-      ...current,
-      [taskId]: value
-    }));
+    setTaskValue(taskId, value);
   }
 
   async function handleApprovalTask(taskId: string, approved: boolean) {
@@ -812,19 +953,17 @@ export function EditorShell() {
   async function handleManualInputTask(taskId: string) {
     const value = taskValues[taskId] ?? "";
     if (!value.trim()) {
-      setGlobalError("Manual input tasks require a value before resuming the run.");
+      patchWorkflowState({
+        globalError: "Manual input tasks require a value before resuming the run."
+      });
       return;
     }
     await resolveTask(taskId, { value });
-    setTaskValues((current) => {
-      const nextValues = { ...current };
-      delete nextValues[taskId];
-      return nextValues;
-    });
+    clearTaskValue(taskId);
   }
 
   async function resolveTask(taskId: string, payload: Record<string, unknown>) {
-    setIsRefreshingTasks(true);
+    patchWorkflowState({ isRefreshingTasks: true });
     try {
       const response = await fetchEngineJson<RunSummary>(
         `/human-tasks/${taskId}/resolve`,
@@ -836,21 +975,26 @@ export function EditorShell() {
           method: "POST"
         }
       );
-      setLastRun(response);
-      setRunStatus(`${response.status} • ${response.run_id.slice(0, 8)}`);
+      patchWorkflowState({
+        lastRun: response,
+        runStatus: `${response.status} • ${response.run_id.slice(0, 8)}`
+      });
       await refreshHumanTasks();
       await refreshRunHistory(response.run_id);
-      setLastAction(
-        response.status === "paused"
-          ? `Resolved task ${taskId} and the run paused again`
-          : `Resolved task ${taskId} and resumed the run`
-      );
-      setGlobalError(null);
+      patchWorkflowState({
+        globalError: null,
+        lastAction:
+          response.status === "paused"
+            ? `Resolved task ${taskId} and the run paused again`
+            : `Resolved task ${taskId} and resumed the run`
+      });
     } catch (error) {
-      setGlobalError(errorMessage(error));
-      setLastAction(`Failed to resolve task ${taskId}`);
+      patchWorkflowState({
+        globalError: errorMessage(error),
+        lastAction: `Failed to resolve task ${taskId}`
+      });
     } finally {
-      setIsRefreshingTasks(false);
+      patchWorkflowState({ isRefreshingTasks: false });
     }
   }
 
@@ -882,17 +1026,20 @@ export function EditorShell() {
         ) : null}
 
         <section className="grid gap-5 lg:grid-cols-[320px_minmax(0,1fr)_400px]">
-          <WorkflowExplorer
-            activeWorkflowId={activeWorkflowId}
-            connectors={connectorSteps}
-            invalidFiles={invalidFiles}
-            isBusy={isBusy}
-            onCreateWorkflow={() => void handleCreateWorkflow()}
-            onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
-            onDuplicateWorkflow={(workflowId) => void handleDuplicateWorkflow(workflowId)}
-            onSelectWorkflow={(workflowId) => void handleSelectWorkflow(workflowId)}
-            workflows={workflows}
-          />
+          <div className="flex min-h-0 flex-col gap-5">
+            <WorkflowExplorer
+              activeWorkflowId={activeWorkflowId}
+              invalidFiles={invalidFiles}
+              isBusy={isBusy}
+              onCreateWorkflow={() => void handleCreateWorkflow()}
+              onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
+              onDuplicateWorkflow={(workflowId) => void handleDuplicateWorkflow(workflowId)}
+              onSelectWorkflow={(workflowId) => void handleSelectWorkflow(workflowId)}
+              workflows={workflows}
+            />
+
+            <ConnectorManager onCatalogInvalidated={() => refreshNodeCatalog()} />
+          </div>
 
           <div className="panel-surface min-h-[760px] overflow-hidden">
             <div className="flex flex-col gap-4 border-b border-black/10 px-6 py-4 lg:flex-row lg:items-center lg:justify-between">
@@ -905,7 +1052,9 @@ export function EditorShell() {
               <div className="flex flex-wrap items-center gap-3">
                 <select
                   className="ui-input w-auto min-w-[220px]"
-                  onChange={(event) => setNewStepType(event.target.value)}
+                  onChange={(event) =>
+                    patchWorkflowState({ newStepType: event.target.value })
+                  }
                   value={newStepType}
                 >
                   {groupedOptions(stepCatalog).map(([category, entries]) => (
@@ -947,7 +1096,7 @@ export function EditorShell() {
                   onDeleteStep={handleDeleteSelectedNode}
                   onEdgesCommit={handleEdgesCommit}
                   onPositionsCommit={handlePositionsCommit}
-                  onSelectNode={setSelectedNodeId}
+                  onSelectNode={(nodeId) => patchWorkflowState({ selectedNodeId: nodeId })}
                 />
               ) : (
                 <div className="flex h-full items-center justify-center px-10 text-center text-sm leading-7 text-slate">
@@ -999,12 +1148,14 @@ export function EditorShell() {
           logSearch={logSearch}
           logs={runLogs}
           metrics={metrics}
-          onLogLevelFilterChange={setLogLevelFilter}
-          onLogSearchChange={setLogSearch}
+          onLogLevelFilterChange={(value) => patchObservabilityState({ logLevelFilter: value })}
+          onLogSearchChange={(value) => patchObservabilityState({ logSearch: value })}
           onRefresh={() => void refreshRunHistory(selectedRunId)}
-          onRunStatusFilterChange={setRunStatusFilter}
-          onRunWorkflowFilterChange={setRunWorkflowFilter}
-          onSelectRun={setSelectedRunId}
+          onRunStatusFilterChange={(value) => patchObservabilityState({ runStatusFilter: value })}
+          onRunWorkflowFilterChange={(value) =>
+            patchObservabilityState({ runWorkflowFilter: value })
+          }
+          onSelectRun={(runId) => patchObservabilityState({ selectedRunId: runId })}
           runDetail={runDetail}
           runPage={runPage}
           runStatusFilter={runStatusFilter}
@@ -1088,77 +1239,6 @@ function decorateNodesForSelectedRun(
       }
     };
   });
-}
-
-async function fetchEngineJson<T>(
-  path: string,
-  init?: RequestInit
-): Promise<T> {
-  const response = await fetch(`${ENGINE_PROXY_BASE}${path}`, {
-    cache: "no-store",
-    ...init
-  });
-  const body = await response.text();
-  if (!body.trim()) {
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`);
-    }
-    return {} as T;
-  }
-
-  let parsed: { error?: string } & T;
-  try {
-    parsed = JSON.parse(body) as { error?: string } & T;
-  } catch {
-    throw new Error(
-      `Failed to parse JSON response (status ${response.status}): ${body}`
-    );
-  }
-
-  if (!response.ok) {
-    throw new Error(
-      parsed && typeof parsed === "object" && typeof parsed.error === "string"
-        ? parsed.error
-        : `Request failed with status ${response.status}`
-    );
-  }
-
-  return parsed as T;
-}
-
-async function fetchEngineText(
-  path: string,
-  init?: RequestInit
-): Promise<string> {
-  const response = await fetch(`${ENGINE_PROXY_BASE}${path}`, {
-    cache: "no-store",
-    ...init
-  });
-  const body = await response.text();
-  if (!response.ok) {
-    throw new Error(body || `Request failed with status ${response.status}`);
-  }
-  return body;
-}
-
-async function fetchEngineNoContent(
-  path: string,
-  init?: RequestInit
-) {
-  const response = await fetch(`${ENGINE_PROXY_BASE}${path}`, {
-    cache: "no-store",
-    ...init
-  });
-
-  if (!response.ok) {
-    const body = await response.text();
-    const parsed = body ? (JSON.parse(body) as { error?: string }) : undefined;
-    throw new Error(
-      parsed && typeof parsed.error === "string"
-        ? parsed.error
-        : `Request failed with status ${response.status}`
-    );
-  }
 }
 
 function finalizeDocument(document: WorkflowDocument): WorkflowDocument {

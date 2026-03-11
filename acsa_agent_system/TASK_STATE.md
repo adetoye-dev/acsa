@@ -1,13 +1,13 @@
 # Acsa Task State
 
-Last updated: 2026-03-10
+Last updated: 2026-03-11
 
 ## Current Status
 
 - Project stage: Blueprint implementation complete through security hardening
 - Current phase: Phase 10 complete, review gate pending
-- Coding status: Security controls, audit workflow, and hardening docs are in place
-- Approval status: Waiting for user review before any post-blueprint work
+- Coding status: Blueprint implementation is complete, and post-blueprint UX polish is underway in the UI
+- Approval status: User-approved follow-on frontend improvements are in progress
 
 ## Completed This Session
 
@@ -97,6 +97,13 @@ Last updated: 2026-03-10
 - Added a dedicated `docs/security.md` guide plus a checked-in `scripts/security-audit.sh` command for the accepted upstream Extism/Wasmtime audit exceptions
 - Fixed the UI lint workflow so `npm run lint` works on a clean checkout without requiring a prior Next build
 - Verified Phase 10 with `cargo fmt --all`, `cargo test --workspace`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `./scripts/security-audit.sh`, `npm run lint`, and `npm run build`
+- Moved workflow-editor state and observability state into dedicated Zustand stores to reduce `editor-shell.tsx` local state sprawl
+- Added `zustand` as a direct UI dependency and removed the selector deprecation warning by switching to `useShallow`
+- Verified the Zustand refactor with `npm run lint` and `npm run build`
+- Added a local connector manager UI for listing installed connectors, surfacing invalid manifests, scaffolding new connectors, and running sample manifest tests from the editor
+- Added engine HTTP endpoints for connector inventory, connector scaffolding, and connector sample testing
+- Made connector inventory resilient so invalid manifests no longer block valid connectors from loading into the catalog
+- Verified the connector UX work with `cargo fmt --all`, `cargo clippy --workspace --all-targets --all-features -- -D warnings`, `cargo test --workspace`, `npm run lint`, and `npm run build`
 
 ## Current Repository Baseline
 
@@ -118,10 +125,15 @@ Last updated: 2026-03-10
 - Phase 9 public documentation now lives under `docs/` plus root community files such as `CONTRIBUTING.md` and `RELEASING.md`
 - Phase 10 security documentation now includes `docs/security.md`
 - Phase 10 dependency review is enforced through `scripts/security-audit.sh` and the CI workflow
+- The UI now includes a connector manager panel backed by `/api/connectors`
 
 ## Next Action
 
-Wait for user review of Phase 10. Do not start post-blueprint work unless the user explicitly requests it.
+Continue post-blueprint UI polish only when explicitly requested. Current likely follow-ons:
+
+- add a real command palette
+- iterate on connector install/import UX beyond local scaffolding and sample tests
+- revisit edge-level execution overlays only if the user wants them back
 
 ## Non-Negotiable Execution Rules
 

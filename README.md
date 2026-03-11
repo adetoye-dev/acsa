@@ -118,7 +118,7 @@ Node.js 22+ is recommended for the UI.
 
 `dev-stack.sh` injects local webhook secrets automatically unless you override `ACSA_WEBHOOK_SECRET` or `ACSA_WEBHOOK_SIGNATURE_SECRET`.
 
-The UI loads workflows from the engine API, edits YAML-backed workflow state, saves validated changes, starts manual runs, resolves persisted human tasks from the editor inbox, and shows run history, step timelines, log search, and execution metrics. By default the Next.js app proxies `/engine/*` to `http://127.0.0.1:3001/*`; override that with `ACSA_ENGINE_URL` if your engine runs elsewhere.
+The UI loads workflows from the engine API, edits YAML-backed workflow state, saves validated changes, starts manual runs, resolves persisted human tasks from the editor inbox, and shows run history, step timelines, log search, and execution metrics. It also includes a local connector manager for listing installed connectors, surfacing invalid manifests, scaffolding new connectors, and running sample manifest tests without leaving the editor. By default the Next.js app proxies `/engine/*` to `http://127.0.0.1:3001/*`; override that with `ACSA_ENGINE_URL` if your engine runs elsewhere.
 
 The production UI is configured for Next.js standalone output so it can ship inside the Acsa container image or a packaged bundle.
 
@@ -175,7 +175,7 @@ The production UI is configured for Next.js standalone output so it can ship ins
 - AI primitives for completion, classification, extraction, embedding, and retrieval
 - process and WASM connector loading from `connectors/`
 - connector scaffolding and local manifest testing commands
-- a React Flow editor with workflow explorer, node inspector, YAML preview, human-task inbox, and run history panel
+- a React Flow editor with workflow explorer, connector manager, node inspector, YAML preview, human-task inbox, and run history panel
 - release profile tuning, embedded version metadata, and a `--version` CLI surface
 - standalone UI packaging plus Docker Compose, Kubernetes, installer, and release workflow assets
 
