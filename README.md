@@ -42,13 +42,14 @@ acsa/
 └─ examples/
 ```
 
-## Quick Start
-
 ## First 5 Minutes
 
 Run the fastest happy-path commands first:
 
 ```bash
+# 0. Prepare the workspace once
+./scripts/bootstrap-dev.sh
+
 # 1. Validate the smallest workflow
 cargo run -p acsa-core -- validate workflows/hello.yaml
 
@@ -60,6 +61,12 @@ cargo run -p acsa-core -- connector-test
 ```
 
 Those three commands cover schema validation, workflow execution, and connector execution with working defaults.
+
+For the full local stack, run:
+
+```bash
+./scripts/dev-stack.sh
+```
 
 ### Engine
 
@@ -78,6 +85,8 @@ cargo run -p acsa-core -- connector-test
 
 The current CLI can validate workflows, list workflow files, print build metadata, manually execute DAG workflows, serve cron plus webhook triggers, persist and resume human review tasks, scaffold connectors, and test connector manifests locally.
 
+`validate`, `list`, and `run` also support `--json` for automation-friendly output.
+
 The HTTP server now also exposes:
 
 - `/metrics` for Prometheus-style metrics
@@ -89,6 +98,8 @@ The HTTP server now also exposes:
 
 Included distribution assets:
 
+- `scripts/bootstrap-dev.sh` for one-command local setup
+- `scripts/dev-stack.sh` for running engine + UI together
 - `scripts/install.sh` for GitHub release installs with checksum verification
 - `scripts/package-release.sh` for local artifact packaging
 - `deploy/docker/Dockerfile` and `deploy/docker-compose.yml` for containerized self-hosting
@@ -101,11 +112,11 @@ Included distribution assets:
 Node.js 22+ is recommended for the UI.
 
 ```bash
-ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
-cd ui
-npm install
-npm run dev
+./scripts/bootstrap-dev.sh
+./scripts/dev-stack.sh
 ```
+
+`dev-stack.sh` injects local webhook secrets automatically unless you override `ACSA_WEBHOOK_SECRET` or `ACSA_WEBHOOK_SIGNATURE_SECRET`.
 
 The UI loads workflows from the engine API, edits YAML-backed workflow state, saves validated changes, starts manual runs, resolves persisted human tasks from the editor inbox, and shows run history, step timelines, log search, and execution metrics. By default the Next.js app proxies `/engine/*` to `http://127.0.0.1:3001/*`; override that with `ACSA_ENGINE_URL` if your engine runs elsewhere.
 

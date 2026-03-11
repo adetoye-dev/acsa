@@ -15,6 +15,9 @@
 Use these commands in order if you are trying Acsa for the first time:
 
 ```bash
+# Prepare the workspace once
+./scripts/bootstrap-dev.sh
+
 # Validate the smallest workflow
 cargo run -p acsa-core -- validate workflows/hello.yaml
 
@@ -23,6 +26,12 @@ cargo run -p acsa-core -- run workflows/manual-demo.yaml --db ./acsa.db
 
 # Run the built-in connector example with working defaults
 cargo run -p acsa-core -- connector-test
+```
+
+If you want the full engine + UI stack immediately:
+
+```bash
+./scripts/dev-stack.sh
 ```
 
 ## Run the Current CLI
@@ -47,6 +56,14 @@ Expected behavior:
 - runs connector manifests locally for subprocess development
 - runs WASM connector manifests only when `ACSA_ENABLE_WASM_CONNECTORS=1`
 
+Automation-friendly variants:
+
+```bash
+cargo run -p acsa-core -- validate workflows/hello.yaml --json
+cargo run -p acsa-core -- list workflows --json
+cargo run -p acsa-core -- run workflows/manual-demo.yaml --db ./acsa.db --json
+```
+
 ## Install a packaged binary
 
 ```bash
@@ -63,11 +80,11 @@ For local packaging instead of downloading a release:
 ## Run the UI
 
 ```bash
-ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
-cd ui
-npm install
-npm run dev
+./scripts/bootstrap-dev.sh
+./scripts/dev-stack.sh
 ```
+
+`dev-stack.sh` injects local webhook secrets automatically unless you override `ACSA_WEBHOOK_SECRET` or `ACSA_WEBHOOK_SIGNATURE_SECRET`.
 
 The current editor is live against the engine API. It includes:
 
@@ -84,7 +101,7 @@ Example:
 
 ```bash
 cd ui
-ACSA_ENGINE_URL=http://127.0.0.1:3010 npm run dev
+ACSA_ENGINE_URL=http://127.0.0.1:3010 ./node_modules/.bin/next dev --port 3010
 ```
 
 ## Observability Example

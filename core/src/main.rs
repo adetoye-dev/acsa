@@ -81,20 +81,41 @@ async fn run() -> Result<(), MainError> {
                 .map_err(|error| -> MainError { Box::new(error) })?;
             println!("{}", serde_json::to_string_pretty(&output)?);
         }
-        Command::List { workflows_dir } => {
+        Command::List { json, workflows_dir } => {
             let workflows = load_workflows_from_dir(&workflows_dir)
                 .map_err(|error| -> MainError { Box::new(error) })?;
-            println!("Loaded {} workflow(s) from {}", workflows.len(), workflows_dir.display());
-            for workflow in workflows {
+            if json {
+                let items = workflows
+                    .into_iter()
+                    .map(|workflow| {
+                        json!({
+                            "name": workflow.name,
+                            "trigger_type": workflow.trigger.r#type,
+                            "step_count": workflow.steps.len(),
+                        })
+                    })
+                    .collect::<Vec<_>>();
                 println!(
-                    "- {} (trigger: {}, steps: {})",
-                    workflow.name,
-                    workflow.trigger.r#type,
-                    workflow.steps.len()
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "count": items.len(),
+                        "workflows_dir": workflows_dir.display().to_string(),
+                        "workflows": items,
+                    }))?
                 );
+            } else {
+                println!("Loaded {} workflow(s) from {}", workflows.len(), workflows_dir.display());
+                for workflow in workflows {
+                    println!(
+                        "- {} (trigger: {}, steps: {})",
+                        workflow.name,
+                        workflow.trigger.r#type,
+                        workflow.steps.len()
+                    );
+                }
             }
         }
-        Command::Run { database_path, max_concurrency, workflow_path } => {
+        Command::Run { database_path, json, max_concurrency, workflow_path } => {
             let config = ExecutionConfig { max_concurrency, ..ExecutionConfig::default() };
             let engine = WorkflowEngine::new(&database_path, config)
                 .await
@@ -110,25 +131,40 @@ async fn run() -> Result<(), MainError> {
                 .await
                 .map_err(|error| -> MainError { Box::new(error) })?;
 
-            match summary.status {
-                acsa_core::engine::ExecutionStatus::Success => {
-                    println!(
-                        "Run {} completed for '{}' with {} step(s)",
-                        summary.run_id, summary.workflow_name, summary.completed_steps
-                    );
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "completed_steps": summary.completed_steps,
+                        "database_path": database_path.display().to_string(),
+                        "outputs": summary.outputs,
+                        "pending_tasks": summary.pending_tasks,
+                        "run_id": summary.run_id,
+                        "status": execution_status_name(summary.status),
+                        "workflow_name": summary.workflow_name,
+                    }))?
+                );
+            } else {
+                match summary.status {
+                    acsa_core::engine::ExecutionStatus::Success => {
+                        println!(
+                            "Run {} completed for '{}' with {} step(s)",
+                            summary.run_id, summary.workflow_name, summary.completed_steps
+                        );
+                    }
+                    acsa_core::engine::ExecutionStatus::Paused => {
+                        println!(
+                            "Run {} paused for '{}' after {} completed step(s)",
+                            summary.run_id, summary.workflow_name, summary.completed_steps
+                        );
+                        println!(
+                            "Pending human tasks: {}",
+                            serde_json::to_string_pretty(&summary.pending_tasks)?
+                        );
+                    }
                 }
-                acsa_core::engine::ExecutionStatus::Paused => {
-                    println!(
-                        "Run {} paused for '{}' after {} completed step(s)",
-                        summary.run_id, summary.workflow_name, summary.completed_steps
-                    );
-                    println!(
-                        "Pending human tasks: {}",
-                        serde_json::to_string_pretty(&summary.pending_tasks)?
-                    );
-                }
+                println!("SQLite state written to {}", database_path.display());
             }
-            println!("SQLite state written to {}", database_path.display());
         }
         Command::Serve { database_path, host, max_concurrency, port, workflows_dir } => {
             let config = ExecutionConfig { max_concurrency, ..ExecutionConfig::default() };
@@ -146,19 +182,32 @@ async fn run() -> Result<(), MainError> {
                 .await
                 .map_err(|error| -> MainError { Box::new(error) })?;
         }
-        Command::Validate { workflow_path } => {
+        Command::Validate { json, workflow_path } => {
             let workflow = load_workflow_from_path(&workflow_path)
                 .map_err(|error| -> MainError { Box::new(error) })?;
             let plan =
                 compile_workflow(workflow).map_err(|error| -> MainError { Box::new(error) })?;
-            println!(
-                "Validated workflow '{}' (trigger: {}, steps: {}, order: {:?}) from {}",
-                plan.workflow.name,
-                plan.workflow.trigger.r#type,
-                plan.workflow.steps.len(),
-                plan.order(),
-                workflow_path.display()
-            );
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "order": plan.order(),
+                        "step_count": plan.workflow.steps.len(),
+                        "trigger_type": plan.workflow.trigger.r#type,
+                        "workflow_name": plan.workflow.name,
+                        "workflow_path": workflow_path.display().to_string(),
+                    }))?
+                );
+            } else {
+                println!(
+                    "Validated workflow '{}' (trigger: {}, steps: {}, order: {:?}) from {}",
+                    plan.workflow.name,
+                    plan.workflow.trigger.r#type,
+                    plan.workflow.steps.len(),
+                    plan.order(),
+                    workflow_path.display()
+                );
+            }
         }
         Command::Version => {
             println!("{}", version::release_string());
@@ -217,5 +266,12 @@ const fn runtime_name(runtime: ConnectorRuntime) -> &'static str {
     match runtime {
         ConnectorRuntime::Process => "process",
         ConnectorRuntime::Wasm => "wasm",
+    }
+}
+
+const fn execution_status_name(status: acsa_core::engine::ExecutionStatus) -> &'static str {
+    match status {
+        acsa_core::engine::ExecutionStatus::Paused => "paused",
+        acsa_core::engine::ExecutionStatus::Success => "success",
     }
 }

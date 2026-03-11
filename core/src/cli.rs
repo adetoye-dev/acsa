@@ -37,10 +37,12 @@ pub enum Command {
         params_path: Option<PathBuf>,
     },
     List {
+        json: bool,
         workflows_dir: PathBuf,
     },
     Run {
         database_path: PathBuf,
+        json: bool,
         max_concurrency: usize,
         workflow_path: PathBuf,
     },
@@ -52,6 +54,7 @@ pub enum Command {
         workflows_dir: PathBuf,
     },
     Validate {
+        json: bool,
         workflow_path: PathBuf,
     },
     Version,
@@ -62,7 +65,10 @@ impl Cli {
         let args: Vec<String> = env::args().skip(1).collect();
         match args.as_slice() {
             [] => Ok(Self {
-                command: Command::Validate { workflow_path: PathBuf::from("workflows/hello.yaml") },
+                command: Command::Validate {
+                    json: false,
+                    workflow_path: PathBuf::from("workflows/hello.yaml"),
+                },
             }),
             [flag] if flag == "--help" || flag == "-h" => Err(CliError::HelpRequested),
             [flag] if flag == "--version" || flag == "-V" => Ok(Self { command: Command::Version }),
@@ -85,7 +91,7 @@ impl Cli {
     }
 
     pub const fn usage() -> &'static str {
-        "Usage:\n  acsa-core validate [workflow-file]\n  acsa-core list [workflows-dir]\n  acsa-core run [workflow-file] [--db path] [--max-concurrency N]\n  acsa-core serve [workflows-dir] [--db path] [--host HOST] [--port PORT] [--max-concurrency N]\n  acsa-core connector-new NAME --type TYPE --runtime process|wasm [--dir connectors]\n  acsa-core connector-test [manifest-file] [--inputs path] [--params path]\n  acsa-core version\n  acsa-core --version\n\nDefaults:\n  validate        workflows/hello.yaml\n  list            workflows/\n  run             workflows/manual-demo.yaml --db acsa.db\n  serve           workflows/ --db acsa.db --host 127.0.0.1 --port 3001\n  connector-test  examples/process-connector/manifest.json --inputs examples/process-connector/sample-input.json\n\nExamples:\n  acsa-core run workflows/manual-demo.yaml --db acsa.db\n  acsa-core serve workflows --db acsa.db --port 3001\n  acsa-core connector-test\n  acsa-core connector-new sample-echo --type sample_echo --runtime process --dir ./connectors"
+        "Usage:\n  acsa-core validate [workflow-file] [--json]\n  acsa-core list [workflows-dir] [--json]\n  acsa-core run [workflow-file] [--db path] [--max-concurrency N] [--json]\n  acsa-core serve [workflows-dir] [--db path] [--host HOST] [--port PORT] [--max-concurrency N]\n  acsa-core connector-new NAME --type TYPE --runtime process|wasm [--dir connectors]\n  acsa-core connector-test [manifest-file] [--inputs path] [--params path]\n  acsa-core version\n  acsa-core --version\n\nDefaults:\n  validate        workflows/hello.yaml\n  list            workflows/\n  run             workflows/manual-demo.yaml --db acsa.db\n  serve           workflows/ --db acsa.db --host 127.0.0.1 --port 3001\n  connector-test  examples/process-connector/manifest.json --inputs examples/process-connector/sample-input.json\n\nExamples:\n  acsa-core run workflows/manual-demo.yaml --db acsa.db\n  acsa-core run workflows/manual-demo.yaml --db acsa.db --json\n  acsa-core list workflows --json\n  acsa-core serve workflows --db acsa.db --port 3001\n  acsa-core connector-test\n  acsa-core connector-new sample-echo --type sample_echo --runtime process --dir ./connectors"
     }
 }
 
@@ -104,16 +110,33 @@ pub enum CliError {
 }
 
 fn parse_list(args: &[String]) -> Result<Command, CliError> {
-    match args {
-        [] => Ok(Command::List { workflows_dir: PathBuf::from("workflows") }),
-        [path] => Ok(Command::List { workflows_dir: PathBuf::from(path) }),
-        [unexpected, ..] => Err(CliError::UnexpectedArgument { argument: unexpected.clone() }),
+    let mut workflows_dir = PathBuf::from("workflows");
+    let mut json = false;
+    let mut path_assigned = false;
+
+    for argument in args {
+        match argument.as_str() {
+            "--json" => json = true,
+            value => {
+                if value.starts_with('-') {
+                    return Err(CliError::UnexpectedArgument { argument: value.to_string() });
+                }
+                if path_assigned {
+                    return Err(CliError::UnexpectedArgument { argument: value.to_string() });
+                }
+                workflows_dir = PathBuf::from(value);
+                path_assigned = true;
+            }
+        }
     }
+
+    Ok(Command::List { json, workflows_dir })
 }
 
 fn parse_run(args: &[String]) -> Result<Command, CliError> {
     let mut workflow_path = PathBuf::from("workflows/manual-demo.yaml");
     let mut database_path = PathBuf::from("acsa.db");
+    let mut json = false;
     let mut max_concurrency = 4usize;
     let mut path_assigned = false;
     let mut index = 0usize;
@@ -137,6 +160,10 @@ fn parse_run(args: &[String]) -> Result<Command, CliError> {
                 })?;
                 index += 2;
             }
+            "--json" => {
+                json = true;
+                index += 1;
+            }
             argument => {
                 if path_assigned {
                     return Err(CliError::UnexpectedArgument { argument: argument.to_string() });
@@ -148,15 +175,28 @@ fn parse_run(args: &[String]) -> Result<Command, CliError> {
         }
     }
 
-    Ok(Command::Run { database_path, max_concurrency, workflow_path })
+    Ok(Command::Run { database_path, json, max_concurrency, workflow_path })
 }
 
 fn parse_validate(args: &[String]) -> Result<Command, CliError> {
-    match args {
-        [] => Ok(Command::Validate { workflow_path: PathBuf::from("workflows/hello.yaml") }),
-        [path] => Ok(Command::Validate { workflow_path: PathBuf::from(path) }),
-        [unexpected, ..] => Err(CliError::UnexpectedArgument { argument: unexpected.clone() }),
+    let mut workflow_path = PathBuf::from("workflows/hello.yaml");
+    let mut json = false;
+    let mut path_assigned = false;
+
+    for argument in args {
+        match argument.as_str() {
+            "--json" => json = true,
+            value => {
+                if path_assigned {
+                    return Err(CliError::UnexpectedArgument { argument: value.to_string() });
+                }
+                workflow_path = PathBuf::from(value);
+                path_assigned = true;
+            }
+        }
     }
+
+    Ok(Command::Validate { json, workflow_path })
 }
 
 fn parse_connector_new(args: &[String]) -> Result<Command, CliError> {
@@ -337,5 +377,48 @@ mod tests {
         assert!(usage.contains("Defaults:"));
         assert!(usage.contains("Examples:"));
         assert!(usage.contains("acsa-core connector-test"));
+    }
+
+    #[test]
+    fn parse_list_accepts_json_flag() {
+        let command = super::parse_list(&["workflows".to_string(), "--json".to_string()])
+            .expect("list should parse");
+
+        assert_eq!(
+            command,
+            Command::List { json: true, workflows_dir: PathBuf::from("workflows") }
+        );
+    }
+
+    #[test]
+    fn parse_run_accepts_json_flag() {
+        let command = super::parse_run(&[
+            "workflows/manual-demo.yaml".to_string(),
+            "--db".to_string(),
+            "acsa.db".to_string(),
+            "--json".to_string(),
+        ])
+        .expect("run should parse");
+
+        assert_eq!(
+            command,
+            Command::Run {
+                database_path: PathBuf::from("acsa.db"),
+                json: true,
+                max_concurrency: 4,
+                workflow_path: PathBuf::from("workflows/manual-demo.yaml"),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_validate_accepts_json_flag() {
+        let command =
+            super::parse_validate(&["--json".to_string()]).expect("validate should parse");
+
+        assert_eq!(
+            command,
+            Command::Validate { json: true, workflow_path: PathBuf::from("workflows/hello.yaml") }
+        );
     }
 }
