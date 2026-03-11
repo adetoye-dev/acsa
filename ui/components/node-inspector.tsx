@@ -26,7 +26,6 @@ type NodeInspectorProps = {
   activeWorkflow: WorkflowDocument | null;
   embedded?: boolean;
   inspectorError: string | null;
-  onDeleteSelectedNode: () => void;
   onSelectedNodeIdChange: (value: string) => void;
   onSelectedNodeParamsChange: (value: string) => void;
   onSelectedNodeRetryAttemptsChange: (value: string) => void;
@@ -49,7 +48,6 @@ export function NodeInspector({
   activeWorkflow,
   embedded = false,
   inspectorError,
-  onDeleteSelectedNode,
   onSelectedNodeIdChange,
   onSelectedNodeParamsChange,
   onSelectedNodeRetryAttemptsChange,
@@ -71,6 +69,9 @@ export function NodeInspector({
     selectedNode?.data.kind === "step"
       ? activeWorkflow?.workflow.steps.find((step) => step.id === selectedNode.id) ?? null
       : null;
+  const selectedStepIsDetached =
+    selectedStep !== null &&
+    (activeWorkflow?.workflow.ui?.detached_steps ?? []).includes(selectedStep.id);
   const triggerSelected = selectedNode?.data.kind === "trigger" || !selectedNode;
   const showWorkflowSection = !embedded || !selectedStep;
   const showSecretPolicy = !embedded;
@@ -153,17 +154,11 @@ export function NodeInspector({
               <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62">
                 Selected step
               </div>
-              <div className="mt-1 text-base font-semibold text-ink">
-                {selectedStep.id}
+              <div className="mt-1 flex items-center gap-2">
+                <div className="text-base font-semibold text-ink">{selectedStep.id}</div>
+                {selectedStepIsDetached ? <span className="ui-badge">Detached</span> : null}
               </div>
             </div>
-            <button
-              className="ui-button ui-button-danger !px-2.5 !py-1.5 !text-[10px]"
-              onClick={onDeleteSelectedNode}
-              type="button"
-            >
-              Delete
-            </button>
           </div>
 
           <div className="mt-4 grid gap-3">

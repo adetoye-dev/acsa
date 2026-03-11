@@ -43,6 +43,7 @@ import {
   type Connection,
   type Edge,
   type EdgeChange,
+  type EdgeTypes,
   type NodeChange,
   type NodeTypes,
   type XYPosition
@@ -53,6 +54,7 @@ import {
   EDGE_STROKE,
   TRIGGER_NODE_ID
 } from "../lib/workflow-editor";
+import { WorkflowEdge } from "./workflow-edge";
 import { WorkflowNode } from "./workflow-node";
 
 type WorkflowCanvasProps = {
@@ -82,12 +84,18 @@ export function WorkflowCanvas({
   showMiniMap = true,
   showViewportPanel = true
 }: WorkflowCanvasProps) {
-  const [localNodes, setLocalNodes] = useState<CanvasNode[]>(nodes);
+  const [localNodes, setLocalNodes] = useState<CanvasNode[]>(() =>
+    attachNodeActions(nodes, onDeleteStep)
+  );
   const [localEdges, setLocalEdges] = useState<Edge[]>(edges);
   const localNodesRef = useRef<CanvasNode[]>(nodes);
   const localEdgesRef = useRef<Edge[]>(edges);
   const nodeTypes = useMemo<NodeTypes>(
     () => ({ workflowNode: WorkflowNode as NodeTypes[string] }),
+    []
+  );
+  const edgeTypes = useMemo<EdgeTypes>(
+    () => ({ workflowEdge: WorkflowEdge as EdgeTypes[string] }),
     []
   );
 
@@ -100,8 +108,8 @@ export function WorkflowCanvas({
   }, [localEdges]);
 
   useEffect(() => {
-    setLocalNodes(nodes);
-  }, [nodes]);
+    setLocalNodes(attachNodeActions(nodes, onDeleteStep));
+  }, [nodes, onDeleteStep]);
 
   useEffect(() => {
     setLocalEdges(edges);
@@ -135,6 +143,16 @@ export function WorkflowCanvas({
     }
   }
 
+  function handleDeleteEdges(edgeIds: string[]) {
+    if (edgeIds.length === 0) {
+      return;
+    }
+
+    const nextEdges = localEdgesRef.current.filter((edge) => !edgeIds.includes(edge.id));
+    setLocalEdges(nextEdges);
+    onEdgesCommit(nextEdges);
+  }
+
   function handleConnect(connection: Connection) {
     if (
       !connection.source ||
@@ -164,13 +182,52 @@ export function WorkflowCanvas({
           stroke: EDGE_STROKE,
           strokeWidth: 2
         },
-        type: "step"
+        type: "workflowEdge"
       },
       localEdgesRef.current
     );
     setLocalEdges(nextEdges);
     onEdgesCommit(nextEdges);
   }
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.closest("input, textarea, select, [contenteditable='true']") !== null ||
+          target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT")
+      ) {
+        return;
+      }
+
+      if (event.key !== "Backspace" && event.key !== "Delete") {
+        return;
+      }
+
+      const selectedEdgeIds = localEdgesRef.current
+        .filter((edge) => edge.selected)
+        .map((edge) => edge.id);
+      if (selectedEdgeIds.length > 0) {
+        event.preventDefault();
+        handleDeleteEdges(selectedEdgeIds);
+        return;
+      }
+
+      const selectedStepIds = localNodesRef.current
+        .filter((node) => node.selected && node.id !== TRIGGER_NODE_ID)
+        .map((node) => node.id);
+      if (selectedStepIds.length > 0) {
+        event.preventDefault();
+        selectedStepIds.forEach((stepId) => onDeleteStep(stepId));
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onDeleteStep]);
 
   return (
     <ReactFlowProvider>
@@ -187,11 +244,13 @@ export function WorkflowCanvas({
             stroke: EDGE_STROKE,
             strokeWidth: 2
           },
-          type: "step"
+          type: "workflowEdge"
         }}
+        deleteKeyCode={null}
         defaultViewport={{ x: 0, y: 0, zoom: 0.92 }}
         edges={localEdges}
         edgesReconnectable={false}
+        edgeTypes={edgeTypes}
         maxZoom={1.6}
         minZoom={0.35}
         nodeTypes={nodeTypes}
@@ -273,6 +332,19 @@ function InitialFrame({
   }, [frameRequestKey, nodesInitialized, reactFlow]);
 
   return null;
+}
+
+function attachNodeActions(
+  nodes: CanvasNode[],
+  onDeleteStep: (stepId: string) => void
+) {
+  return nodes.map((node) => ({
+    ...node,
+    data: {
+      ...node.data,
+      onDelete: node.data.kind === "step" ? onDeleteStep : null
+    }
+  }));
 }
 
 function positionsFromNodes(

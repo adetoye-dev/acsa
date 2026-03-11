@@ -993,19 +993,7 @@ export function EditorShell() {
     applyActiveWorkflowUpdate((document) => ({
       ...document,
       positions: omitPosition(document.positions, targetStepId),
-      workflow: {
-        ...removeStepFromWorkflow(document.workflow, targetStepId),
-        ...(document.workflow.ui?.detached_steps?.includes(targetStepId)
-          ? {
-              ui: {
-                ...document.workflow.ui,
-                detached_steps: (document.workflow.ui?.detached_steps ?? []).filter(
-                  (stepId) => stepId !== targetStepId
-                )
-              }
-            }
-          : {})
-      }
+      workflow: removeStepFromWorkflow(document.workflow, targetStepId)
     }));
     patchWorkflowState({
       inspectorError: null,
@@ -1334,7 +1322,6 @@ export function EditorShell() {
                     activeWorkflow={activeWorkflow}
                     embedded
                     inspectorError={inspectorError}
-                    onDeleteSelectedNode={() => handleDeleteSelectedNode()}
                     onSelectedNodeIdChange={handleSelectedNodeIdChange}
                     onSelectedNodeParamsChange={handleSelectedNodeParamsChange}
                     onSelectedNodeRetryAttemptsChange={handleSelectedNodeRetryAttemptsChange}

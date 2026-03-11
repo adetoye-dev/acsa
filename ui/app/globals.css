@@ -73,10 +73,6 @@ a {
   stroke-width: 2;
 }
 
-.react-flow__edge.selected .react-flow__edge-path {
-  stroke: rgba(15, 108, 115, 0.8);
-}
-
 .react-flow__connection-path {
   fill: none;
   stroke: rgba(16, 26, 29, 0.5);

@@ -136,12 +136,14 @@ export type NodeExecutionState =
 
 export type CanvasNodeData = {
   description: string;
+  detached?: boolean;
   executionLabel?: string | null;
   executionMeta?: string | null;
   executionState?: NodeExecutionState;
   kind: "step" | "trigger";
   label: string;
   nodeId: string;
+  onDelete?: ((nodeId: string) => void) | null;
   runtime?: string | null;
   source?: string;
   typeName: string;
@@ -265,15 +267,55 @@ export function removeStepFromWorkflow(
   workflow: WorkflowDefinition,
   stepId: string
 ): WorkflowDefinition {
-  return {
+  const removedStep = workflow.steps.find((step) => step.id === stepId);
+  if (!removedStep) {
+    return workflow;
+  }
+
+  const successorIds = removedStep.next.filter((candidate) => candidate !== stepId);
+  const positions = normalizePositions(workflow.ui?.positions);
+  if (positions) {
+    delete positions[stepId];
+  }
+
+  const detachedSteps = (workflow.ui?.detached_steps ?? []).filter(
+    (candidate) => candidate !== stepId
+  );
+
+  return cleanWorkflow({
     ...workflow,
     steps: workflow.steps
       .filter((step) => step.id !== stepId)
-      .map((step) => ({
-        ...step,
-        next: step.next.filter((candidate) => candidate !== stepId)
-      }))
-  };
+      .map((step) => {
+        if (!step.next.includes(stepId)) {
+          return step;
+        }
+
+        return {
+          ...step,
+          next: Array.from(
+            new Set(
+              step.next
+                .flatMap((candidate) =>
+                  candidate === stepId ? successorIds : [candidate]
+                )
+                .filter(
+                  (candidate) => candidate !== stepId && candidate !== step.id
+                )
+            )
+          )
+        };
+      }),
+    ui:
+      positions || detachedSteps.length > 0
+        ? {
+            ...(positions ? { positions } : {}),
+            ...(detachedSteps.length > 0
+              ? { detached_steps: detachedSteps }
+              : {})
+          }
+        : undefined
+  });
 }
 
 export function slugifyIdentifier(value: string): string {
@@ -327,10 +369,16 @@ export function updateWorkflowEdges(
       .filter((edge) => edge.source !== TRIGGER_NODE_ID && edge.target !== TRIGGER_NODE_ID)
       .map((edge) => edge.target)
   );
-  const detachedSteps = (workflow.ui?.detached_steps ?? []).filter(
-    (stepId) =>
-      workflow.steps.some((step) => step.id === stepId) && !connectedTargets.has(stepId)
+  const triggerAttachedTargets = new Set(
+    edges
+      .filter((edge) => edge.source === TRIGGER_NODE_ID && edge.target !== TRIGGER_NODE_ID)
+      .map((edge) => edge.target)
   );
+  const detachedSteps = workflow.steps
+    .map((step) => step.id)
+    .filter(
+      (stepId) => !connectedTargets.has(stepId) && !triggerAttachedTargets.has(stepId)
+    );
   const positions = normalizePositions(workflow.ui?.positions);
 
   return {
@@ -409,9 +457,11 @@ export function workflowToCanvas(
       type: "workflowNode",
       data: {
         description: "Workflow trigger definition. Edit trigger settings in the inspector.",
+        detached: false,
         kind: "trigger",
         label: workflow.name,
         nodeId: TRIGGER_NODE_ID,
+        onDelete: null,
         typeName: workflow.trigger.type
       }
     }
@@ -432,9 +482,11 @@ export function workflowToCanvas(
       type: "workflowNode",
       data: {
         description: catalogEntry?.description ?? "Connector or custom step.",
+        detached: detachedSteps.has(step.id),
         kind: "step",
         label: step.id,
         nodeId: step.id,
+        onDelete: null,
         runtime: catalogEntry?.runtime ?? null,
         source: catalogEntry?.source ?? "workflow",
         typeName: step.type
@@ -458,7 +510,7 @@ export function workflowToCanvas(
           type: MarkerType.ArrowClosed,
           width: 18
         },
-        type: "step",
+        type: "workflowEdge",
         style: {
           stroke: TRIGGER_EDGE_STROKE,
           strokeDasharray: "6 4",
@@ -481,7 +533,7 @@ export function workflowToCanvas(
           stroke: EDGE_STROKE,
           strokeWidth: 2
         },
-        type: "step"
+        type: "workflowEdge"
       });
     }
   }

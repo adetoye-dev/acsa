@@ -44,6 +44,23 @@ export const WorkflowNode = memo(function WorkflowNode({
 
   return (
     <div className={containerClassName(data.kind, selected, state)}>
+      {selected && data.kind === "step" ? (
+        <div className="mb-2 flex justify-end">
+          <button
+            aria-label={`Delete ${data.label}`}
+            className="flex h-7 w-7 items-center justify-center rounded-lg border border-black/10 bg-black/[0.03] text-slate/70 transition hover:border-ember/25 hover:bg-ember/5 hover:text-ember"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              data.onDelete?.(data.nodeId);
+            }}
+            type="button"
+          >
+            <TrashIcon />
+          </button>
+        </div>
+      ) : null}
+
       <div className="node-drag-handle mb-3 flex cursor-grab items-center justify-between rounded-xl border border-black/10 bg-black/[0.03] px-3 py-2 active:cursor-grabbing">
         <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate/60">
           {data.kind === "trigger" ? "Trigger" : "Step"}
@@ -61,8 +78,15 @@ export const WorkflowNode = memo(function WorkflowNode({
 
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate/70">
-            {data.kind === "trigger" ? "Entrypoint" : formatToken(data.typeName)}
+          <div className="flex items-center gap-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate/70">
+              {data.kind === "trigger" ? "Entrypoint" : formatToken(data.typeName)}
+            </div>
+            {data.detached ? (
+              <span className="rounded-md bg-black/[0.04] px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-slate/60">
+                Draft
+              </span>
+            ) : null}
           </div>
           <div className="mt-2 truncate text-base font-semibold tracking-tight text-ink">
             {data.label}
@@ -146,4 +170,24 @@ function formatToken(value?: string | null) {
     return "built in";
   }
   return value.replace(/[_-]+/g, " ");
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-3.5 w-3.5"
+      fill="none"
+      viewBox="0 0 16 16"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M3.5 4.5H12.5M6 2.75H10M5 4.5V11.25C5 11.9404 5.55964 12.5 6.25 12.5H9.75C10.4404 12.5 11 11.9404 11 11.25V4.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.25"
+      />
+    </svg>
+  );
 }
