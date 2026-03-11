@@ -423,6 +423,7 @@ impl WorkflowEngine {
 
 #[derive(Debug, Clone)]
 pub struct WorkflowPlan {
+    detached_steps: HashSet<String>,
     order: Vec<String>,
     predecessors: HashMap<String, Vec<String>>,
     steps: HashMap<String, Step>,
@@ -438,7 +439,10 @@ impl WorkflowPlan {
     pub fn root_steps(&self) -> Vec<String> {
         self.steps
             .keys()
-            .filter(|step_id| self.predecessors.get(*step_id).is_none_or(Vec::is_empty))
+            .filter(|step_id| {
+                self.predecessors.get(*step_id).is_none_or(Vec::is_empty)
+                    && !self.detached_steps.contains(*step_id)
+            })
             .cloned()
             .collect()
     }
@@ -509,7 +513,9 @@ pub fn compile_workflow(workflow: Workflow) -> Result<WorkflowPlan, EngineError>
     let predecessors = build_neighbour_map(&graph, &node_indices, Direction::Incoming);
     let successors = build_neighbour_map(&graph, &node_indices, Direction::Outgoing);
 
-    Ok(WorkflowPlan { order, predecessors, steps, successors, workflow })
+    let detached_steps = workflow.ui.detached_steps.iter().cloned().collect();
+
+    Ok(WorkflowPlan { detached_steps, order, predecessors, steps, successors, workflow })
 }
 
 pub fn load_workflow_from_path(path: impl AsRef<Path>) -> Result<Workflow, EngineError> {
@@ -602,6 +608,12 @@ pub fn validate_workflow(workflow: &Workflow) -> Result<(), EngineError> {
         }
     }
 
+    for detached_step in &workflow.ui.detached_steps {
+        if !step_ids.contains(detached_step) {
+            return Err(EngineError::UnknownDetachedStep { step_id: detached_step.clone() });
+        }
+    }
+
     Ok(())
 }
 
@@ -655,6 +667,8 @@ pub enum EngineError {
     InvalidRetryAttempts { step_id: String },
     #[error("step {step_id} points to unknown downstream step {next_step}")]
     UnknownNextStep { step_id: String, next_step: String },
+    #[error("ui.detached_steps references unknown step {step_id}")]
+    UnknownDetachedStep { step_id: String },
     #[error("workflow graph contains a cycle near step {step_id}")]
     GraphCycleDetected { step_id: String },
     #[error("workflow planning could not find step definition {step_id}")]
@@ -1231,7 +1245,7 @@ mod tests {
         EngineError, ExecutionConfig, WorkflowEngine,
     };
     use crate::{
-        models::{RetryPolicy, Step, Trigger, Workflow},
+        models::{RetryPolicy, Step, Trigger, Workflow, WorkflowUi},
         nodes::{BuiltInNodeConfig, Node, NodeError, NodeRegistry},
         storage::{LogQuery, RunStore},
     };
@@ -1312,6 +1326,7 @@ steps:
                     timeout_ms: None,
                 },
             ],
+            ui: Default::default(),
         };
 
         let error = validate_workflow(&workflow).expect_err("duplicate ids should fail");
@@ -1320,6 +1335,65 @@ steps:
             error,
             EngineError::DuplicateStepId { step_id } if step_id == "shared"
         ));
+    }
+
+    #[test]
+    fn rejects_unknown_detached_steps() {
+        let workflow = Workflow {
+            version: "v1".to_string(),
+            name: "unknown-detached".to_string(),
+            trigger: Trigger { r#type: "manual".to_string(), details: Default::default() },
+            steps: vec![Step {
+                id: "start".to_string(),
+                r#type: "constant".to_string(),
+                params: serde_yaml::Value::Null,
+                next: vec![],
+                retry: None,
+                timeout_ms: None,
+            }],
+            ui: WorkflowUi { detached_steps: vec!["missing".to_string()] },
+        };
+
+        let error = validate_workflow(&workflow).expect_err("unknown detached step should fail");
+
+        assert!(matches!(
+            error,
+            EngineError::UnknownDetachedStep { step_id } if step_id == "missing"
+        ));
+    }
+
+    #[test]
+    fn detached_root_steps_are_not_planned_as_entry_steps() {
+        let workflow = Workflow {
+            version: "v1".to_string(),
+            name: "detached-root".to_string(),
+            trigger: Trigger { r#type: "manual".to_string(), details: Default::default() },
+            steps: vec![
+                Step {
+                    id: "draft".to_string(),
+                    r#type: "constant".to_string(),
+                    params: serde_yaml::Value::Null,
+                    next: vec![],
+                    retry: None,
+                    timeout_ms: None,
+                },
+                Step {
+                    id: "start".to_string(),
+                    r#type: "constant".to_string(),
+                    params: serde_yaml::Value::Null,
+                    next: vec![],
+                    retry: None,
+                    timeout_ms: None,
+                },
+            ],
+            ui: WorkflowUi { detached_steps: vec!["draft".to_string()] },
+        };
+
+        let plan = compile_workflow(workflow).expect("workflow should plan");
+
+        let root_steps = plan.root_steps();
+        assert_eq!(root_steps.len(), 1);
+        assert!(root_steps.iter().any(|step_id| step_id == "start"));
     }
 
     #[test]
@@ -1337,6 +1411,7 @@ steps:
                 retry: None,
                 timeout_ms: None,
             }],
+            ui: Default::default(),
         };
 
         let error = validate_workflow(&workflow).expect_err("webhook trigger should be rejected");
@@ -1374,6 +1449,7 @@ steps:
                 retry: None,
                 timeout_ms: None,
             }],
+            ui: Default::default(),
         };
 
         validate_workflow(&workflow).expect("signature-only webhook should validate");
@@ -1403,6 +1479,7 @@ steps:
                     timeout_ms: None,
                 },
             ],
+            ui: Default::default(),
         };
 
         let error = compile_workflow(workflow).expect_err("cycles should be rejected");
@@ -1427,6 +1504,7 @@ steps:
                 step("right", "echo", json!({}), vec!["join"]),
                 step("join", "echo", json!({}), vec![]),
             ],
+            ui: Default::default(),
         };
         let plan = compile_workflow(workflow).expect("workflow should plan");
         let temp_db = temp_db_path("branching");
@@ -1478,6 +1556,7 @@ steps:
                 step("low", "echo", json!({ "branch": "low" }), vec!["join"]),
                 step("join", "echo", json!({}), vec![]),
             ],
+            ui: Default::default(),
         };
         let plan = compile_workflow(workflow).expect("workflow should plan");
         let temp_db = temp_db_path("conditional");
@@ -1529,6 +1608,7 @@ steps:
                 },
                 step("finish", "echo", json!({}), vec![]),
             ],
+            ui: Default::default(),
         };
         let plan = compile_workflow(workflow).expect("workflow should plan");
         let temp_db = temp_db_path("approval");
@@ -1581,6 +1661,7 @@ steps:
                 retry: Some(RetryPolicy { attempts: 2, backoff_ms: 1 }),
                 timeout_ms: Some(1_000),
             }],
+            ui: Default::default(),
         };
         let plan = compile_workflow(workflow).expect("workflow should plan");
         let temp_db = temp_db_path("retries");
@@ -1613,6 +1694,7 @@ steps:
             name: "observability".to_string(),
             trigger: Trigger { r#type: "manual".to_string(), details: Default::default() },
             steps: vec![step("seed", "constant", json!({ "value": { "ok": true } }), vec![])],
+            ui: Default::default(),
         };
         let plan = compile_workflow(workflow).expect("workflow should plan");
         let temp_db = temp_db_path("observability");

@@ -26,6 +26,20 @@ pub struct Workflow {
     pub trigger: Trigger,
     #[serde(default)]
     pub steps: Vec<Step>,
+    #[serde(default, skip_serializing_if = "WorkflowUi::is_empty")]
+    pub ui: WorkflowUi,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct WorkflowUi {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub detached_steps: Vec<String>,
+}
+
+impl WorkflowUi {
+    pub fn is_empty(&self) -> bool {
+        self.detached_steps.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]

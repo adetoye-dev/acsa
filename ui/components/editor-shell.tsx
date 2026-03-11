@@ -109,7 +109,6 @@ export function EditorShell() {
     isRunning,
     isSaving,
     lastRun,
-    newStepType,
     pendingTasks,
     runStatus,
     selectedNodeId,
@@ -132,7 +131,6 @@ export function EditorShell() {
       isRunning: state.isRunning,
       isSaving: state.isSaving,
       lastRun: state.lastRun,
-      newStepType: state.newStepType,
       pendingTasks: state.pendingTasks,
       runStatus: state.runStatus,
       selectedNodeId: state.selectedNodeId,
@@ -174,6 +172,8 @@ export function EditorShell() {
   const activeWorkflow = activeWorkflowId ? documents[activeWorkflowId] ?? null : null;
   const [centerView, setCenterView] = useState<WorkspaceView>("canvas");
   const [frameRequestKey, setFrameRequestKey] = useState(0);
+  const [isAddStepMenuOpen, setIsAddStepMenuOpen] = useState(false);
+  const addStepMenuRef = useRef<HTMLDivElement | null>(null);
   const canvas = useMemo(
     () =>
       activeWorkflow
@@ -200,6 +200,31 @@ export function EditorShell() {
   useEffect(() => {
     void bootstrap();
   }, []);
+
+  useEffect(() => {
+    if (!isAddStepMenuOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (!addStepMenuRef.current?.contains(event.target as Node)) {
+        setIsAddStepMenuOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsAddStepMenuOpen(false);
+      }
+    }
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isAddStepMenuOpen]);
 
   useEffect(() => {
     if (isBooting) {
@@ -571,6 +596,30 @@ export function EditorShell() {
     patchWorkflowState({ lastAction: "Updated workflow connections" });
   }
 
+  function handleAttachStepToTrigger(stepId: string) {
+    if (!activeWorkflow) {
+      return;
+    }
+
+    applyActiveWorkflowUpdate((document) => ({
+      ...document,
+      workflow: {
+        ...document.workflow,
+        ...(document.workflow.ui?.detached_steps?.includes(stepId)
+          ? {
+              ui: {
+                ...document.workflow.ui,
+                detached_steps: (document.workflow.ui?.detached_steps ?? []).filter(
+                  (candidate) => candidate !== stepId
+                )
+              }
+            }
+          : {})
+      }
+    }));
+    patchWorkflowState({ lastAction: `Attached ${stepId} to the workflow trigger` });
+  }
+
   function handlePositionsCommit(nextPositions: Record<string, XYPosition>) {
     if (!activeWorkflow) {
       return;
@@ -582,12 +631,10 @@ export function EditorShell() {
     patchWorkflowState({ lastAction: "Updated node positions" });
   }
 
-  function handleAddStep() {
+  function handleAddStep(typeName: string) {
     if (!activeWorkflow) {
       return;
     }
-    const typeName =
-      selectedNode?.data.kind === "step" ? selectedNode.data.typeName : newStepType;
     const { selectedNodeId: createdNodeId, workflow } = addStepToWorkflow(
       activeWorkflow.workflow,
       typeName
@@ -597,9 +644,10 @@ export function EditorShell() {
       workflow
     }));
     patchWorkflowState({
-      lastAction: `Added ${typeName} step`,
+      lastAction: `Added ${typeName.replace(/_/g, " ")} step`,
       selectedNodeId: createdNodeId
     });
+    setIsAddStepMenuOpen(false);
   }
 
   function handleAutoLayout() {
@@ -799,6 +847,16 @@ export function EditorShell() {
       positions: renamePositionKey(document.positions, selectedNode.id, nextId),
       workflow: {
         ...document.workflow,
+        ...(document.workflow.ui?.detached_steps?.includes(selectedNode.id)
+          ? {
+              ui: {
+                ...document.workflow.ui,
+                detached_steps: (document.workflow.ui?.detached_steps ?? []).map((stepId) =>
+                  stepId === selectedNode.id ? nextId : stepId
+                )
+              }
+            }
+          : {}),
         steps: document.workflow.steps.map((step) => ({
           ...step,
           id: step.id === selectedNode.id ? nextId : step.id,
@@ -935,7 +993,19 @@ export function EditorShell() {
     applyActiveWorkflowUpdate((document) => ({
       ...document,
       positions: omitPosition(document.positions, targetStepId),
-      workflow: removeStepFromWorkflow(document.workflow, targetStepId)
+      workflow: {
+        ...removeStepFromWorkflow(document.workflow, targetStepId),
+        ...(document.workflow.ui?.detached_steps?.includes(targetStepId)
+          ? {
+              ui: {
+                ...document.workflow.ui,
+                detached_steps: (document.workflow.ui?.detached_steps ?? []).filter(
+                  (stepId) => stepId !== targetStepId
+                )
+              }
+            }
+          : {})
+      }
     }));
     patchWorkflowState({
       inspectorError: null,
@@ -1128,6 +1198,7 @@ export function EditorShell() {
                       edges={canvas.edges}
                       frameRequestKey={frameRequestKey}
                       nodes={displayNodes}
+                      onAttachStepToTrigger={handleAttachStepToTrigger}
                       onDeleteStep={handleDeleteSelectedNode}
                       onEdgesCommit={handleEdgesCommit}
                       onPositionsCommit={handlePositionsCommit}
@@ -1154,14 +1225,31 @@ export function EditorShell() {
                         </button>
                       </div>
                     </div>
-                    <button
-                      aria-label="Add step"
-                      className="absolute bottom-4 right-4 flex h-11 w-11 items-center justify-center rounded-2xl border border-black/10 bg-ink text-xl text-white shadow-panel transition hover:bg-slate"
-                      onClick={handleAddStep}
-                      type="button"
+                    <div
+                      className="absolute bottom-4 right-4 z-20"
+                      ref={addStepMenuRef}
                     >
-                      +
-                    </button>
+                      <button
+                        aria-expanded={isAddStepMenuOpen}
+                        aria-haspopup="menu"
+                        aria-label="Add step"
+                        className={`flex h-11 w-11 items-center justify-center rounded-2xl border text-xl text-white shadow-panel transition ${
+                          isAddStepMenuOpen
+                            ? "border-black/10 bg-slate"
+                            : "border-black/10 bg-ink hover:bg-slate"
+                        }`}
+                        onClick={() => setIsAddStepMenuOpen((current) => !current)}
+                        type="button"
+                      >
+                        +
+                      </button>
+                      {isAddStepMenuOpen ? (
+                        <AddStepMenu
+                          groupedStepCatalog={groupedOptions(stepCatalog)}
+                          onSelectType={handleAddStep}
+                        />
+                      ) : null}
+                    </div>
                   </>
                 ) : (
                   <div className="flex h-full items-center justify-center px-10 text-center text-sm leading-7 text-slate">
@@ -1330,6 +1418,51 @@ function AccordionCard({
       </summary>
       <div className="mt-3">{children}</div>
     </details>
+  );
+}
+
+function AddStepMenu({
+  groupedStepCatalog,
+  onSelectType
+}: {
+  groupedStepCatalog: [string, StepTypeEntry[]][];
+  onSelectType: (typeName: string) => void;
+}) {
+  return (
+    <div className="absolute bottom-[calc(100%+0.75rem)] right-0 z-30 w-[320px] rounded-2xl border border-black/10 bg-white p-2 shadow-panel">
+      <div className="sleek-scroll max-h-[360px] space-y-3 overflow-y-auto pr-1">
+        {groupedStepCatalog.map(([category, entries]) => (
+          <section key={category}>
+            <div className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/55">
+              {titleCase(category)}
+            </div>
+            <div className="space-y-1.5">
+              {entries.map((entry) => (
+                <button
+                  key={entry.type_name}
+                  className="group w-full rounded-xl border border-transparent bg-white px-3 py-2 text-left transition hover:border-black/10 hover:bg-black/[0.02]"
+                  onClick={() => onSelectType(entry.type_name)}
+                  title={entry.description}
+                  type="button"
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-medium text-ink">{entry.label}</div>
+                    {entry.runtime ? (
+                      <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-slate/58">
+                        {entry.runtime}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="max-h-0 overflow-hidden text-xs leading-5 text-slate opacity-0 transition-all duration-150 group-hover:mt-1 group-hover:max-h-16 group-hover:opacity-100">
+                    {entry.description}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </section>
+        ))}
+      </div>
+    </div>
   );
 }
 

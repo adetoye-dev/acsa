@@ -54,6 +54,7 @@ export type WorkflowDefinition = {
 };
 
 export type WorkflowUiDefinition = {
+  detached_steps?: string[];
   positions?: Record<string, XYPosition>;
 };
 
@@ -176,7 +177,13 @@ export function addStepToWorkflow(
     selectedNodeId: stepId,
     workflow: {
       ...workflow,
-      steps: [...workflow.steps, createdStep]
+      steps: [...workflow.steps, createdStep],
+      ui: {
+        ...workflow.ui,
+        detached_steps: Array.from(
+          new Set([...(workflow.ui?.detached_steps ?? []), stepId])
+        )
+      }
     }
   };
 }
@@ -315,12 +322,31 @@ export function updateWorkflowEdges(
     }
   }
 
+  const connectedTargets = new Set(
+    edges
+      .filter((edge) => edge.source !== TRIGGER_NODE_ID && edge.target !== TRIGGER_NODE_ID)
+      .map((edge) => edge.target)
+  );
+  const detachedSteps = (workflow.ui?.detached_steps ?? []).filter(
+    (stepId) =>
+      workflow.steps.some((step) => step.id === stepId) && !connectedTargets.has(stepId)
+  );
+  const positions = normalizePositions(workflow.ui?.positions);
+
   return {
     ...workflow,
     steps: workflow.steps.map((step) => ({
       ...step,
       next: nextByStep.get(step.id) ?? []
-    }))
+    })),
+    ...(positions || detachedSteps.length > 0
+      ? {
+          ui: {
+            ...(positions ? { positions } : {}),
+            ...(detachedSteps.length > 0 ? { detached_steps: detachedSteps } : {})
+          }
+        }
+      : {})
   };
 }
 
@@ -362,6 +388,7 @@ export function workflowToCanvas(
   stepCatalog: StepTypeEntry[]
 ): { edges: Edge[]; nodes: CanvasNode[]; positions: Record<string, XYPosition> } {
   const stepLookup = new Map(stepCatalog.map((entry) => [entry.type_name, entry]));
+  const detachedSteps = new Set(workflow.ui?.detached_steps ?? []);
   const predecessorCounts = new Map<string, number>(workflow.steps.map((step) => [step.id, 0]));
   for (const step of workflow.steps) {
     for (const target of step.next) {
@@ -418,7 +445,7 @@ export function workflowToCanvas(
 
   const edges: Edge[] = [];
   for (const step of workflow.steps) {
-    if ((predecessorCounts.get(step.id) ?? 0) === 0) {
+    if ((predecessorCounts.get(step.id) ?? 0) === 0 && !detachedSteps.has(step.id)) {
       edges.push({
         id: `${TRIGGER_NODE_ID}->${step.id}`,
         source: TRIGGER_NODE_ID,
@@ -579,6 +606,10 @@ export function withStepUpdated(
 
 function cleanWorkflow(workflow: WorkflowDefinition): WorkflowDefinition {
   const positions = normalizePositions(workflow.ui?.positions);
+  const detachedSteps =
+    workflow.ui?.detached_steps?.filter((stepId) =>
+      workflow.steps.some((step) => step.id === stepId)
+    ) ?? [];
   return {
     name: workflow.name.trim(),
     steps: workflow.steps.map((step) => ({
@@ -590,7 +621,14 @@ function cleanWorkflow(workflow: WorkflowDefinition): WorkflowDefinition {
       type: workflow.trigger.type,
       ...extractTriggerDetails(workflow.trigger)
     },
-    ...(positions ? { ui: { positions } } : {}),
+    ...(positions || detachedSteps.length > 0
+      ? {
+          ui: {
+            ...(positions ? { positions } : {}),
+            ...(detachedSteps.length > 0 ? { detached_steps: detachedSteps } : {})
+          }
+        }
+      : {}),
     version: workflow.version || "v1"
   };
 }
@@ -751,7 +789,15 @@ function normalizeWorkflow(input: unknown): WorkflowDefinition {
 
 function normalizeUi(value: Record<string, unknown>): WorkflowUiDefinition {
   const positions = normalizePositions(value.positions);
-  return positions ? { positions } : {};
+  const detachedSteps = Array.isArray(value.detached_steps)
+    ? value.detached_steps
+        .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
+        .map((entry) => entry.trim())
+    : [];
+  return {
+    ...(positions ? { positions } : {}),
+    ...(detachedSteps.length > 0 ? { detached_steps: Array.from(new Set(detachedSteps)) } : {})
+  };
 }
 
 function nextStepIndex(steps: StepDefinition[], typeName: string): number {

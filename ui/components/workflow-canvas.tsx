@@ -59,6 +59,7 @@ type WorkflowCanvasProps = {
   edges: Edge[];
   frameRequestKey?: number;
   nodes: CanvasNode[];
+  onAttachStepToTrigger: (stepId: string) => void;
   onDeleteStep: (stepId: string) => void;
   onEdgesCommit: (edges: Edge[]) => void;
   onPositionsCommit: (positions: Record<string, XYPosition>) => void;
@@ -72,6 +73,7 @@ export function WorkflowCanvas({
   edges,
   frameRequestKey = 0,
   nodes,
+  onAttachStepToTrigger,
   onDeleteStep,
   onEdgesCommit,
   onPositionsCommit,
@@ -83,6 +85,7 @@ export function WorkflowCanvas({
   const [localNodes, setLocalNodes] = useState<CanvasNode[]>(nodes);
   const [localEdges, setLocalEdges] = useState<Edge[]>(edges);
   const localNodesRef = useRef<CanvasNode[]>(nodes);
+  const localEdgesRef = useRef<Edge[]>(edges);
   const nodeTypes = useMemo<NodeTypes>(
     () => ({ workflowNode: WorkflowNode as NodeTypes[string] }),
     []
@@ -91,6 +94,10 @@ export function WorkflowCanvas({
   useEffect(() => {
     localNodesRef.current = localNodes;
   }, [localNodes]);
+
+  useEffect(() => {
+    localEdgesRef.current = localEdges;
+  }, [localEdges]);
 
   useEffect(() => {
     setLocalNodes(nodes);
@@ -121,48 +128,48 @@ export function WorkflowCanvas({
   }
 
   function handleEdgesChange(changes: EdgeChange<Edge>[]) {
-    setLocalEdges((current) => {
-      const nextEdges = applyEdgeChanges(changes, current);
-      if (changes.some((change) => change.type === "remove")) {
-        onEdgesCommit(nextEdges);
-      }
-      return nextEdges;
-    });
+    const nextEdges = applyEdgeChanges(changes, localEdgesRef.current);
+    setLocalEdges(nextEdges);
+    if (changes.some((change) => change.type === "remove")) {
+      onEdgesCommit(nextEdges);
+    }
   }
 
   function handleConnect(connection: Connection) {
     if (
       !connection.source ||
       !connection.target ||
-      connection.source === TRIGGER_NODE_ID ||
       connection.target === TRIGGER_NODE_ID ||
       connection.source === connection.target
     ) {
       return;
     }
 
-    setLocalEdges((current) => {
-      const nextEdges = addEdge(
-        {
-          ...connection,
-          id: `${connection.source}->${connection.target}`,
-          markerEnd: {
-            color: EDGE_STROKE,
-            height: 18,
-            type: MarkerType.ArrowClosed,
-            width: 18
-          },
-          style: {
-            stroke: EDGE_STROKE,
-            strokeWidth: 2
-          },
-          type: "step"
+    if (connection.source === TRIGGER_NODE_ID) {
+      onAttachStepToTrigger(connection.target);
+      return;
+    }
+
+    const nextEdges = addEdge(
+      {
+        ...connection,
+        id: `${connection.source}->${connection.target}`,
+        markerEnd: {
+          color: EDGE_STROKE,
+          height: 18,
+          type: MarkerType.ArrowClosed,
+          width: 18
         },
-        current
-      );
-      onEdgesCommit(nextEdges);
-      return nextEdges;
-    });
+        style: {
+          stroke: EDGE_STROKE,
+          strokeWidth: 2
+        },
+        type: "step"
+      },
+      localEdgesRef.current
+    );
+    setLocalEdges(nextEdges);
+    onEdgesCommit(nextEdges);
   }
 
   return (

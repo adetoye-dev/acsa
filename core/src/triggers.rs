@@ -187,6 +187,7 @@ struct WorkflowDocumentResponse {
 
 #[derive(Debug, Clone)]
 struct WorkflowDocumentState {
+    ui_detached_steps: Vec<String>,
     ui_positions: BTreeMap<String, WorkflowNodePosition>,
     workflow: Workflow,
 }
@@ -1237,7 +1238,11 @@ fn parse_workflow_document_state(yaml: &str) -> Result<WorkflowDocumentState, Tr
     let document = serde_yaml::from_str::<YamlValue>(yaml)
         .map_err(|error| TriggerError::InvalidWorkflowYaml { message: error.to_string() })?;
     let workflow = parse_workflow_yaml(yaml)?;
-    Ok(WorkflowDocumentState { ui_positions: extract_ui_positions(&document)?, workflow })
+    Ok(WorkflowDocumentState {
+        ui_detached_steps: extract_ui_detached_steps(&document)?,
+        ui_positions: extract_ui_positions(&document)?,
+        workflow,
+    })
 }
 
 fn read_workflow_document(
@@ -1254,7 +1259,11 @@ fn read_workflow_document(
     Ok(WorkflowDocumentResponse {
         id: workflow_id.to_string(),
         summary: build_workflow_summary(workflow_id.to_string(), &document_state.workflow),
-        yaml: serialize_workflow_yaml(&document_state.workflow, &document_state.ui_positions)?,
+        yaml: serialize_workflow_yaml(
+            &document_state.workflow,
+            &document_state.ui_positions,
+            &document_state.ui_detached_steps,
+        )?,
     })
 }
 
@@ -1271,12 +1280,13 @@ fn save_workflow_document(
 fn serialize_workflow_yaml(
     workflow: &Workflow,
     ui_positions: &BTreeMap<String, WorkflowNodePosition>,
+    ui_detached_steps: &[String],
 ) -> Result<String, TriggerError> {
     let mut document = serde_yaml::to_value(workflow)
         .map_err(|error| TriggerError::SerializeWorkflowYaml { message: error.to_string() })?;
 
-    if !ui_positions.is_empty() {
-        insert_ui_positions(&mut document, ui_positions)?;
+    if !ui_positions.is_empty() || !ui_detached_steps.is_empty() {
+        insert_ui_state(&mut document, ui_positions, ui_detached_steps)?;
     }
 
     serde_yaml::to_string(&document)
@@ -1318,9 +1328,44 @@ fn extract_ui_positions(
     Ok(positions)
 }
 
-fn insert_ui_positions(
+fn extract_ui_detached_steps(document: &YamlValue) -> Result<Vec<String>, TriggerError> {
+    let Some(mapping) = document.as_mapping() else {
+        return Ok(Vec::new());
+    };
+    let Some(ui_value) = mapping.get(YamlValue::String("ui".to_string())) else {
+        return Ok(Vec::new());
+    };
+    let Some(ui_mapping) = ui_value.as_mapping() else {
+        return Ok(Vec::new());
+    };
+    let Some(detached_steps_value) =
+        ui_mapping.get(YamlValue::String("detached_steps".to_string()))
+    else {
+        return Ok(Vec::new());
+    };
+    let Some(detached_steps_sequence) = detached_steps_value.as_sequence() else {
+        return Ok(Vec::new());
+    };
+
+    let mut detached_steps = Vec::new();
+    for detached_step in detached_steps_sequence {
+        let Some(step_id) = detached_step.as_str() else {
+            continue;
+        };
+        let step_id = step_id.trim();
+        if step_id.is_empty() || detached_steps.iter().any(|existing| existing == step_id) {
+            continue;
+        }
+        detached_steps.push(step_id.to_string());
+    }
+
+    Ok(detached_steps)
+}
+
+fn insert_ui_state(
     document: &mut YamlValue,
     ui_positions: &BTreeMap<String, WorkflowNodePosition>,
+    ui_detached_steps: &[String],
 ) -> Result<(), TriggerError> {
     let Some(document_mapping) = document.as_mapping_mut() else {
         return Err(TriggerError::SerializeWorkflowYaml {
@@ -1339,8 +1384,20 @@ fn insert_ui_positions(
     }
 
     let mut ui_mapping = serde_yaml::Mapping::new();
-    ui_mapping
-        .insert(YamlValue::String("positions".to_string()), YamlValue::Mapping(positions_mapping));
+    if !ui_positions.is_empty() {
+        ui_mapping.insert(
+            YamlValue::String("positions".to_string()),
+            YamlValue::Mapping(positions_mapping),
+        );
+    }
+    if !ui_detached_steps.is_empty() {
+        ui_mapping.insert(
+            YamlValue::String("detached_steps".to_string()),
+            serde_yaml::to_value(ui_detached_steps).map_err(|error| {
+                TriggerError::SerializeWorkflowYaml { message: error.to_string() }
+            })?,
+        );
+    }
     document_mapping.insert(YamlValue::String("ui".to_string()), YamlValue::Mapping(ui_mapping));
     Ok(())
 }
@@ -1558,7 +1615,11 @@ fn write_workflow_file(
     workflow_path: &Path,
     document_state: &WorkflowDocumentState,
 ) -> Result<WorkflowDocumentResponse, TriggerError> {
-    let yaml = serialize_workflow_yaml(&document_state.workflow, &document_state.ui_positions)?;
+    let yaml = serialize_workflow_yaml(
+        &document_state.workflow,
+        &document_state.ui_positions,
+        &document_state.ui_detached_steps,
+    )?;
     fs::create_dir_all(workflow_path.parent().ok_or_else(|| {
         TriggerError::InvalidWorkflowYaml {
             message: format!("workflow path {} has no parent directory", workflow_path.display()),
@@ -1984,13 +2045,51 @@ ui:
         )
         .expect("document state should parse");
 
-        let yaml = serialize_workflow_yaml(&document_state.workflow, &document_state.ui_positions)
-            .expect("workflow yaml should serialize");
+        let yaml = serialize_workflow_yaml(
+            &document_state.workflow,
+            &document_state.ui_positions,
+            &document_state.ui_detached_steps,
+        )
+        .expect("workflow yaml should serialize");
 
         assert!(yaml.contains("ui:"));
         assert!(yaml.contains("positions:"));
         assert!(yaml.contains("start:"));
         assert!(yaml.contains("x: 512.0"));
+    }
+
+    #[test]
+    fn preserves_detached_steps_in_workflow_ui_state() {
+        let document_state = parse_workflow_document_state(
+            r#"
+version: v1
+name: detached-demo
+trigger:
+  type: manual
+steps:
+  - id: start
+    type: constant
+    params:
+      value: true
+    next: []
+ui:
+  detached_steps:
+    - start
+"#,
+        )
+        .expect("document state should parse");
+
+        assert_eq!(document_state.ui_detached_steps, vec!["start".to_string()]);
+
+        let yaml = serialize_workflow_yaml(
+            &document_state.workflow,
+            &document_state.ui_positions,
+            &document_state.ui_detached_steps,
+        )
+        .expect("workflow yaml should serialize");
+
+        assert!(yaml.contains("detached_steps:"));
+        assert!(yaml.contains("- start"));
     }
 
     fn signed_webhook(secret: &str) -> WebhookWorkflow {
@@ -2007,6 +2106,7 @@ ui:
                 retry: None,
                 timeout_ms: None,
             }],
+            ui: Default::default(),
         })
         .expect("workflow plan should compile");
 
