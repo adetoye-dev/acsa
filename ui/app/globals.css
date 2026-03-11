@@ -36,11 +36,19 @@ body {
   margin: 0;
   min-height: 100%;
   background:
-    radial-gradient(circle at top left, rgba(233, 129, 51, 0.18), transparent 28%),
-    radial-gradient(circle at bottom right, rgba(15, 108, 115, 0.18), transparent 32%),
+    linear-gradient(rgba(16, 26, 29, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(16, 26, 29, 0.04) 1px, transparent 1px),
+    radial-gradient(circle at top left, rgba(233, 129, 51, 0.15), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(15, 108, 115, 0.14), transparent 32%),
     linear-gradient(180deg, #f8f4eb 0%, #e6f1f0 100%);
+  background-size:
+    28px 28px,
+    28px 28px,
+    auto,
+    auto,
+    auto;
   color: var(--foreground);
-  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-family: Inter, "IBM Plex Sans", "Segoe UI", sans-serif;
 }
 
 body {
@@ -56,16 +64,110 @@ a {
   display: none;
 }
 
+.react-flow__edge-path {
+  fill: none;
+  filter: none;
+  stroke: rgba(16, 26, 29, 0.64);
+  stroke-linecap: square;
+  stroke-linejoin: round;
+  stroke-width: 2;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: rgba(15, 108, 115, 0.8);
+}
+
+.react-flow__connection-path {
+  fill: none;
+  stroke: rgba(16, 26, 29, 0.5);
+  stroke-width: 2;
+}
+
+.react-flow__edge-interaction {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 24;
+}
+
+.react-flow__background path {
+  stroke: rgba(16, 26, 29, 0.035);
+}
+
+.react-flow__controls,
+.react-flow__minimap {
+  box-shadow: none;
+}
+
+.yaml-editor .cm-editor {
+  border-radius: 1rem;
+  border: 1px solid rgba(16, 26, 29, 0.12);
+  background: rgba(16, 26, 29, 0.97);
+}
+
+.yaml-editor .cm-scroller {
+  min-height: inherit;
+  font-family:
+    "JetBrains Mono",
+    "Fira Code",
+    ui-monospace,
+    SFMono-Regular,
+    monospace;
+}
+
+.yaml-editor .cm-focused {
+  outline: none;
+  border-color: rgba(15, 108, 115, 0.4);
+  box-shadow: 0 0 0 1px rgba(15, 108, 115, 0.22);
+}
+
+.yaml-editor .cm-gutters {
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(16, 26, 29, 0.82);
+  color: rgba(229, 240, 239, 0.45);
+}
+
 @layer components {
   .panel-surface {
-    @apply rounded-3xl border border-black/10 bg-white/75 shadow-panel backdrop-blur;
+    @apply rounded-2xl border border-black/10 bg-white/75 shadow-panel backdrop-blur;
   }
 
   .section-kicker {
-    @apply text-[11px] font-semibold uppercase tracking-[0.22em] text-slate/70;
+    @apply text-[11px] font-semibold uppercase tracking-[0.24em] text-slate/70;
   }
 
   .section-title {
-    @apply font-display text-lg font-semibold text-ink;
+    @apply font-display text-lg font-semibold tracking-tight text-ink;
+  }
+
+  .ui-button {
+    @apply inline-flex items-center gap-2 rounded-md border border-black/10 bg-white px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-ink transition hover:border-black/20 hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60;
+  }
+
+  .ui-button-primary {
+    @apply border-transparent bg-ink text-white hover:border-transparent hover:bg-slate;
+  }
+
+  .ui-button-tide {
+    @apply border-transparent bg-tide text-white hover:border-transparent hover:bg-[#0d5b61];
+  }
+
+  .ui-button-danger {
+    @apply border-ember/20 text-ember hover:border-ember/40 hover:bg-ember/5;
+  }
+
+  .ui-input {
+    @apply w-full rounded-xl border border-black/10 bg-white px-3 py-2.5 text-sm text-ink outline-none transition focus:border-tide/40;
+  }
+
+  .ui-panel-card {
+    @apply rounded-2xl border border-black/10 bg-white/70;
+  }
+
+  .ui-badge {
+    @apply rounded-md bg-sand px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-ember;
+  }
+
+  .ui-meta {
+    @apply font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65;
   }
 }

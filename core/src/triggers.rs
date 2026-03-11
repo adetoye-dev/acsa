@@ -15,7 +15,7 @@
 #![deny(warnings)]
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     env, fs,
     net::SocketAddr,
     path::{Path, PathBuf},
@@ -163,6 +163,18 @@ struct WorkflowDocumentResponse {
     id: String,
     summary: WorkflowSummary,
     yaml: String,
+}
+
+#[derive(Debug, Clone)]
+struct WorkflowDocumentState {
+    ui_positions: BTreeMap<String, WorkflowNodePosition>,
+    workflow: Workflow,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+struct WorkflowNodePosition {
+    x: f64,
+    y: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -713,17 +725,17 @@ fn create_workflow_document(
     workflows_dir: &Path,
     request: CreateWorkflowRequest,
 ) -> Result<WorkflowDocumentResponse, TriggerError> {
-    let workflow = parse_workflow_yaml(&request.yaml)?;
+    let document_state = parse_workflow_document_state(&request.yaml)?;
     let workflow_id = request
         .id
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| slugify_workflow_name(&workflow.name));
+        .unwrap_or_else(|| slugify_workflow_name(&document_state.workflow.name));
     let workflow_path = workflow_file_path(workflows_dir, &workflow_id)?;
     if workflow_path.exists() {
         return Err(TriggerError::WorkflowAlreadyExists { workflow_id });
     }
 
-    write_workflow_file(&workflow_path, &workflow)
+    write_workflow_file(&workflow_path, &document_state)
 }
 
 fn delete_workflow_document(workflows_dir: &Path, workflow_id: &str) -> Result<(), TriggerError> {
@@ -741,15 +753,15 @@ fn duplicate_workflow_document(
     target_id: &str,
 ) -> Result<WorkflowDocumentResponse, TriggerError> {
     let source_document = read_workflow_document(workflows_dir, workflow_id)?;
-    let mut workflow = parse_workflow_yaml(&source_document.yaml)?;
-    workflow.name = format!("{} copy", workflow.name);
+    let mut document_state = parse_workflow_document_state(&source_document.yaml)?;
+    document_state.workflow.name = format!("{} copy", document_state.workflow.name);
 
     let target_path = workflow_file_path(workflows_dir, target_id)?;
     if target_path.exists() {
         return Err(TriggerError::WorkflowAlreadyExists { workflow_id: target_id.to_string() });
     }
 
-    write_workflow_file(&target_path, &workflow)
+    write_workflow_file(&target_path, &document_state)
 }
 
 fn is_builtin_step_type(type_name: &str) -> bool {
@@ -966,6 +978,13 @@ fn parse_workflow_yaml(yaml: &str) -> Result<Workflow, TriggerError> {
     Ok(workflow)
 }
 
+fn parse_workflow_document_state(yaml: &str) -> Result<WorkflowDocumentState, TriggerError> {
+    let document = serde_yaml::from_str::<YamlValue>(yaml)
+        .map_err(|error| TriggerError::InvalidWorkflowYaml { message: error.to_string() })?;
+    let workflow = parse_workflow_yaml(yaml)?;
+    Ok(WorkflowDocumentState { ui_positions: extract_ui_positions(&document)?, workflow })
+}
+
 fn read_workflow_document(
     workflows_dir: &Path,
     workflow_id: &str,
@@ -975,12 +994,12 @@ fn read_workflow_document(
         return Err(TriggerError::WorkflowNotFound { workflow_id: workflow_id.to_string() });
     }
     let yaml = fs::read_to_string(&workflow_path)?;
-    let workflow = parse_workflow_yaml(&yaml)?;
+    let document_state = parse_workflow_document_state(&yaml)?;
 
     Ok(WorkflowDocumentResponse {
         id: workflow_id.to_string(),
-        summary: build_workflow_summary(workflow_id.to_string(), &workflow),
-        yaml: serialize_workflow_yaml(&workflow)?,
+        summary: build_workflow_summary(workflow_id.to_string(), &document_state.workflow),
+        yaml: serialize_workflow_yaml(&document_state.workflow, &document_state.ui_positions)?,
     })
 }
 
@@ -990,13 +1009,104 @@ fn save_workflow_document(
     yaml: &str,
 ) -> Result<WorkflowDocumentResponse, TriggerError> {
     let workflow_path = workflow_file_path(workflows_dir, workflow_id)?;
-    let workflow = parse_workflow_yaml(yaml)?;
-    write_workflow_file(&workflow_path, &workflow)
+    let document_state = parse_workflow_document_state(yaml)?;
+    write_workflow_file(&workflow_path, &document_state)
 }
 
-fn serialize_workflow_yaml(workflow: &Workflow) -> Result<String, TriggerError> {
-    serde_yaml::to_string(workflow)
+fn serialize_workflow_yaml(
+    workflow: &Workflow,
+    ui_positions: &BTreeMap<String, WorkflowNodePosition>,
+) -> Result<String, TriggerError> {
+    let mut document = serde_yaml::to_value(workflow)
+        .map_err(|error| TriggerError::SerializeWorkflowYaml { message: error.to_string() })?;
+
+    if !ui_positions.is_empty() {
+        insert_ui_positions(&mut document, ui_positions)?;
+    }
+
+    serde_yaml::to_string(&document)
         .map_err(|error| TriggerError::SerializeWorkflowYaml { message: error.to_string() })
+}
+
+fn extract_ui_positions(
+    document: &YamlValue,
+) -> Result<BTreeMap<String, WorkflowNodePosition>, TriggerError> {
+    let Some(mapping) = document.as_mapping() else {
+        return Ok(BTreeMap::new());
+    };
+    let Some(ui_value) = mapping.get(YamlValue::String("ui".to_string())) else {
+        return Ok(BTreeMap::new());
+    };
+    let Some(ui_mapping) = ui_value.as_mapping() else {
+        return Ok(BTreeMap::new());
+    };
+    let Some(positions_value) = ui_mapping.get(YamlValue::String("positions".to_string())) else {
+        return Ok(BTreeMap::new());
+    };
+    let Some(positions_mapping) = positions_value.as_mapping() else {
+        return Ok(BTreeMap::new());
+    };
+
+    let mut positions = BTreeMap::new();
+    for (node_id, position_value) in positions_mapping {
+        let Some(node_id) = node_id.as_str() else {
+            continue;
+        };
+        let Some(position_mapping) = position_value.as_mapping() else {
+            continue;
+        };
+        let x = yaml_number_field(position_mapping, "x", node_id)?;
+        let y = yaml_number_field(position_mapping, "y", node_id)?;
+        positions.insert(node_id.to_string(), WorkflowNodePosition { x, y });
+    }
+
+    Ok(positions)
+}
+
+fn insert_ui_positions(
+    document: &mut YamlValue,
+    ui_positions: &BTreeMap<String, WorkflowNodePosition>,
+) -> Result<(), TriggerError> {
+    let Some(document_mapping) = document.as_mapping_mut() else {
+        return Err(TriggerError::SerializeWorkflowYaml {
+            message: "workflow document must serialize to a YAML mapping".to_string(),
+        });
+    };
+
+    let mut positions_mapping = serde_yaml::Mapping::new();
+    for (node_id, position) in ui_positions {
+        positions_mapping.insert(
+            YamlValue::String(node_id.clone()),
+            serde_yaml::to_value(position).map_err(|error| {
+                TriggerError::SerializeWorkflowYaml { message: error.to_string() }
+            })?,
+        );
+    }
+
+    let mut ui_mapping = serde_yaml::Mapping::new();
+    ui_mapping
+        .insert(YamlValue::String("positions".to_string()), YamlValue::Mapping(positions_mapping));
+    document_mapping.insert(YamlValue::String("ui".to_string()), YamlValue::Mapping(ui_mapping));
+    Ok(())
+}
+
+fn yaml_number_field(mapping: &serde_yaml::Mapping, field_name: &str, node_id: &str) -> Result<f64, TriggerError> {
+    let Some(value) = mapping.get(YamlValue::String(field_name.to_string())) else {
+        return Err(TriggerError::InvalidWorkflowYaml {
+            message: format!("node {node_id}: ui.positions.{field_name} is missing"),
+        });
+    };
+    if let Some(f) = value.as_f64() {
+        Ok(f)
+    } else if let Some(i) = value.as_i64() {
+        Ok(i as f64)
+    } else if let Some(u) = value.as_u64() {
+        Ok(u as f64)
+    } else {
+        Err(TriggerError::InvalidWorkflowYaml {
+            message: format!("node {node_id}: ui.positions.{field_name} must be numeric"),
+        })
+    }
 }
 
 fn validate_no_inline_secrets(workflow: &Workflow) -> Result<(), TriggerError> {
@@ -1138,9 +1248,9 @@ fn workflow_inventory(workflows_dir: &Path) -> Result<WorkflowInventoryResponse,
 
 fn write_workflow_file(
     workflow_path: &Path,
-    workflow: &Workflow,
+    document_state: &WorkflowDocumentState,
 ) -> Result<WorkflowDocumentResponse, TriggerError> {
-    let yaml = serialize_workflow_yaml(workflow)?;
+    let yaml = serialize_workflow_yaml(&document_state.workflow, &document_state.ui_positions)?;
     fs::create_dir_all(workflow_path.parent().ok_or_else(|| {
         TriggerError::InvalidWorkflowYaml {
             message: format!("workflow path {} has no parent directory", workflow_path.display()),
@@ -1157,7 +1267,7 @@ fn write_workflow_file(
 
     Ok(WorkflowDocumentResponse {
         id: workflow_id.clone(),
-        summary: build_workflow_summary(workflow_id, workflow),
+        summary: build_workflow_summary(workflow_id, &document_state.workflow),
         yaml,
     })
 }
@@ -1439,9 +1549,9 @@ mod tests {
     use serde_yaml::Value as YamlValue;
 
     use super::{
-        authenticate_webhook, compute_signature, cron_schedule, slugify_workflow_name,
-        validate_secret_value, workflow_file_path, TriggerError, WebhookSignatureAuth,
-        WebhookWorkflow,
+        authenticate_webhook, compute_signature, cron_schedule, parse_workflow_document_state,
+        serialize_workflow_yaml, slugify_workflow_name, validate_secret_value, workflow_file_path,
+        TriggerError, WebhookSignatureAuth, WebhookWorkflow,
     };
     use crate::{
         engine::compile_workflow,
@@ -1510,6 +1620,69 @@ mod tests {
         let result = authenticate_webhook(&webhook, &headers, body);
 
         assert!(matches!(result, Err(message) if message == "webhook signature did not match"));
+    }
+
+    #[test]
+    fn parses_ui_positions_without_affecting_workflow_validation() {
+        let document_state = parse_workflow_document_state(
+            r#"
+version: v1
+name: layout-demo
+trigger:
+  type: manual
+steps:
+  - id: start
+    type: constant
+    params:
+      value: true
+    next: []
+ui:
+  positions:
+    __trigger__:
+      x: 80
+      y: 200
+    start:
+      x: 340
+      y: 120
+"#,
+        )
+        .expect("document state should parse");
+
+        assert_eq!(document_state.workflow.name, "layout-demo");
+        assert_eq!(document_state.ui_positions.len(), 2);
+        assert_eq!(document_state.ui_positions["start"].x, 340.0);
+    }
+
+    #[test]
+    fn serializes_ui_positions_back_into_workflow_yaml() {
+        let document_state = parse_workflow_document_state(
+            r#"
+version: v1
+name: layout-demo
+trigger:
+  type: manual
+steps:
+  - id: start
+    type: constant
+    params:
+      value: true
+    next: []
+ui:
+  positions:
+    start:
+      x: 512
+      y: 192
+"#,
+        )
+        .expect("document state should parse");
+
+        let yaml = serialize_workflow_yaml(&document_state.workflow, &document_state.ui_positions)
+            .expect("workflow yaml should serialize");
+
+        assert!(yaml.contains("ui:"));
+        assert!(yaml.contains("positions:"));
+        assert!(yaml.contains("start:"));
+        assert!(yaml.contains("x: 512.0"));
     }
 
     fn signed_webhook(secret: &str) -> WebhookWorkflow {

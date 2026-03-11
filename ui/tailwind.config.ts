@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import defaultTheme from "tailwindcss/defaultTheme";
 import type { Config } from "tailwindcss";
 
 const config: Config = {
@@ -27,11 +28,12 @@ const config: Config = {
         slate: "#304347"
       },
       boxShadow: {
-        panel: "0 24px 60px rgba(16, 26, 29, 0.16)"
+        panel: "0 0 0 1px rgba(16, 26, 29, 0.04)"
       },
       fontFamily: {
-        display: ["Avenir Next", "Trebuchet MS", "sans-serif"],
-        body: ["IBM Plex Sans", "Segoe UI", "sans-serif"]
+        display: ["Inter", "IBM Plex Sans", ...defaultTheme.fontFamily.sans],
+        body: ["Inter", "IBM Plex Sans", ...defaultTheme.fontFamily.sans],
+        mono: ["JetBrains Mono", "Fira Code", ...defaultTheme.fontFamily.mono]
       }
     }
   },

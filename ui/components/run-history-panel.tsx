@@ -69,7 +69,7 @@ export function RunHistoryPanel({
             <h2 className="section-title mt-2">Run history, logs, and metrics</h2>
           </div>
           <button
-            className="rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink transition hover:border-ink/20 hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60"
+            className="ui-button"
             disabled={isLoading}
             onClick={onRefresh}
             type="button"
@@ -109,14 +109,14 @@ export function RunHistoryPanel({
           <div className="space-y-4 px-5 py-5">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-1">
               <input
-                className="w-full rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm text-ink outline-none transition focus:border-tide/40"
+                className="ui-input"
                 onChange={(event) => onRunWorkflowFilterChange(event.target.value)}
                 placeholder="Filter by workflow"
                 type="text"
                 value={runWorkflowFilter}
               />
               <select
-                className="w-full rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm text-ink outline-none transition focus:border-tide/40"
+                className="ui-input"
                 onChange={(event) => onRunStatusFilterChange(event.target.value)}
                 value={runStatusFilter}
               >
@@ -134,9 +134,9 @@ export function RunHistoryPanel({
                 return (
                   <button
                     key={run.id}
-                    className={`w-full rounded-3xl border px-4 py-4 text-left transition ${
+                    className={`w-full rounded-2xl border px-4 py-4 text-left transition ${
                       active
-                        ? "border-tide/40 bg-tide/10 shadow-panel"
+                        ? "border-tide/40 bg-tide/10"
                         : "border-black/10 bg-white/70 hover:border-black/20 hover:bg-white"
                     }`}
                     onClick={() => onSelectRun(run.id)}
@@ -146,24 +146,24 @@ export function RunHistoryPanel({
                       <span className="font-display text-lg font-semibold text-ink">
                         {run.workflow_name}
                       </span>
-                      <span className="rounded-full bg-sand px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-ember">
+                      <span className="ui-badge">
                         {run.status}
                       </span>
                     </div>
-                    <div className="mt-3 text-sm leading-6 text-slate">
+                    <div className="mt-3 font-mono text-sm leading-6 text-slate">
                       {run.id}
                     </div>
                     <div className="mt-2 text-sm leading-6 text-slate">
                       Started {formatTimestamp(run.started_at)}
                     </div>
-                    <div className="mt-1 text-xs uppercase tracking-[0.18em] text-slate/65">
+                    <div className="ui-meta mt-1">
                       Duration {formatDuration(run.duration_seconds)}
                     </div>
                   </button>
                 );
               })}
               {!runPage?.runs.length ? (
-                <div className="rounded-3xl border border-dashed border-black/15 bg-white/60 px-4 py-8 text-center text-sm leading-6 text-slate">
+                <div className="rounded-2xl border border-dashed border-black/15 bg-white/60 px-4 py-8 text-center text-sm leading-6 text-slate">
                   No runs match the current filters yet.
                 </div>
               ) : null}
@@ -174,7 +174,7 @@ export function RunHistoryPanel({
         <div className="space-y-5 px-5 py-5">
           {runDetail ? (
             <>
-              <section className="rounded-3xl border border-black/10 bg-white/70 p-4">
+              <section className="ui-panel-card p-4">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <div>
                     <p className="section-kicker">Run detail</p>
@@ -182,42 +182,42 @@ export function RunHistoryPanel({
                       {runDetail.run.workflow_name}
                     </h3>
                   </div>
-                  <div className="text-sm leading-6 text-slate">
+                  <div className="font-mono text-sm leading-6 text-slate">
                     <div>{runDetail.run.id}</div>
                     <div>{formatTimestamp(runDetail.run.started_at)}</div>
                   </div>
                 </div>
                 {runDetail.run.error_message ? (
-                  <div className="mt-4 rounded-2xl border border-ember/20 bg-ember/5 px-4 py-3 text-sm leading-6 text-ember">
+                  <div className="mt-4 rounded-xl border border-ember/20 bg-ember/5 px-4 py-3 text-sm leading-6 text-ember">
                     {runDetail.run.error_message}
                   </div>
                 ) : null}
               </section>
 
-              <section className="rounded-3xl border border-black/10 bg-white/70 p-4">
+              <section className="ui-panel-card p-4">
                 <p className="section-kicker">Timeline</p>
                 <div className="mt-4 space-y-4">
                   {runDetail.step_runs.map((stepRun) => (
                     <article
                       key={stepRun.id}
-                      className="rounded-3xl border border-black/10 bg-white p-4"
+                      className="rounded-2xl border border-black/10 bg-white p-4"
                     >
                       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                         <div>
                           <h4 className="font-display text-xl text-ink">
                             {stepRun.step_id}
                           </h4>
-                          <div className="mt-1 text-xs uppercase tracking-[0.18em] text-slate/65">
+                          <div className="ui-meta mt-1">
                             attempt {stepRun.attempt} • {stepRun.status}
                           </div>
                         </div>
-                        <div className="text-sm leading-6 text-slate">
+                        <div className="font-mono text-sm leading-6 text-slate">
                           {formatDuration(stepRun.duration_seconds)}
                         </div>
                       </div>
 
                       {stepRun.error_message ? (
-                        <div className="mt-4 rounded-2xl border border-ember/20 bg-ember/5 px-4 py-3 text-sm leading-6 text-ember">
+                        <div className="mt-4 rounded-xl border border-ember/20 bg-ember/5 px-4 py-3 text-sm leading-6 text-ember">
                           {stepRun.error_message}
                         </div>
                       ) : null}
@@ -231,12 +231,12 @@ export function RunHistoryPanel({
                 </div>
               </section>
 
-              <section className="rounded-3xl border border-black/10 bg-white/70 p-4">
+              <section className="ui-panel-card p-4">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <p className="section-kicker">Logs</p>
                   <div className="grid gap-3 md:grid-cols-2">
                     <select
-                      className="w-full rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm text-ink outline-none transition focus:border-tide/40"
+                      className="ui-input"
                       onChange={(event) => onLogLevelFilterChange(event.target.value)}
                       value={logLevelFilter}
                     >
@@ -246,7 +246,7 @@ export function RunHistoryPanel({
                       <option value="error">Error</option>
                     </select>
                     <input
-                      className="w-full rounded-2xl border border-black/10 bg-white px-4 py-3 text-sm text-ink outline-none transition focus:border-tide/40"
+                      className="ui-input"
                       onChange={(event) => onLogSearchChange(event.target.value)}
                       placeholder="Search logs"
                       type="text"
@@ -259,18 +259,18 @@ export function RunHistoryPanel({
                   {logs?.logs.map((log) => (
                     <div
                       key={log.id}
-                      className="rounded-2xl border border-black/10 bg-ink px-4 py-3 text-sm text-mist"
+                      className="rounded-xl border border-black/10 bg-ink px-4 py-3 text-sm text-mist"
                     >
-                      <div className="flex flex-wrap items-center gap-3 text-[11px] font-semibold uppercase tracking-[0.18em] text-white/65">
+                      <div className="flex flex-wrap items-center gap-3 font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-white/65">
                         <span>{log.level}</span>
                         <span>{formatTimestamp(log.timestamp)}</span>
                         {log.step_id ? <span>{log.step_id}</span> : null}
                       </div>
-                      <p className="mt-3 whitespace-pre-wrap leading-6">{log.message}</p>
+                      <p className="mt-3 whitespace-pre-wrap font-mono leading-6">{log.message}</p>
                     </div>
                   ))}
                   {!logs?.logs.length ? (
-                    <div className="rounded-3xl border border-dashed border-black/15 bg-white/60 px-4 py-8 text-center text-sm leading-6 text-slate">
+                    <div className="rounded-2xl border border-dashed border-black/15 bg-white/60 px-4 py-8 text-center text-sm leading-6 text-slate">
                       No log entries match the current filters for this run.
                     </div>
                   ) : null}
@@ -278,7 +278,7 @@ export function RunHistoryPanel({
               </section>
             </>
           ) : (
-            <div className="rounded-3xl border border-dashed border-black/15 bg-white/60 px-4 py-12 text-center text-sm leading-6 text-slate">
+            <div className="rounded-2xl border border-dashed border-black/15 bg-white/60 px-4 py-12 text-center text-sm leading-6 text-slate">
               Select a run from the history list to inspect steps, inputs,
               outputs, and logs.
             </div>
@@ -299,7 +299,7 @@ function MetricCard({
   value: number | string;
 }) {
   return (
-    <article className="rounded-3xl border border-black/10 bg-white/70 px-4 py-4">
+    <article className="rounded-2xl border border-black/10 bg-white/70 px-4 py-4">
       <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate/65">
         {label}
       </div>
@@ -311,11 +311,11 @@ function MetricCard({
 
 function PayloadBox({ label, value }: { label: string; value?: string | null }) {
   return (
-    <div className="rounded-3xl border border-black/10 bg-ink p-4 text-white">
+    <div className="rounded-2xl border border-black/10 bg-ink p-4 text-white">
       <div className="text-xs font-semibold uppercase tracking-[0.18em] text-white/65">
         {label}
       </div>
-      <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs leading-6 text-mist">
+      <pre className="mt-3 overflow-x-auto whitespace-pre-wrap font-mono text-xs leading-6 text-mist">
         {value ?? "Hidden or unavailable"}
       </pre>
     </div>

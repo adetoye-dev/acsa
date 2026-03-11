@@ -19,26 +19,18 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
-  addEdge,
-  applyEdgeChanges,
-  Background,
-  BackgroundVariant,
-  Controls,
-  MiniMap,
-  ReactFlow,
-  ReactFlowProvider,
-  type Connection,
   type Edge,
-  type EdgeChange,
-  type NodeChange
+  type XYPosition
 } from "@xyflow/react";
 
 import { HumanTaskInbox } from "./human-task-inbox";
 import { NodeInspector } from "./node-inspector";
 import { RunHistoryPanel } from "./run-history-panel";
 import { TopBar } from "./top-bar";
+import { WorkflowCanvas } from "./workflow-canvas";
 import { WorkflowExplorer } from "./workflow-explorer";
 import {
+  formatDuration,
   parseMetricsSummary,
   type LogPageResponse,
   type MetricsSummary,
@@ -47,6 +39,7 @@ import {
 } from "../lib/observability";
 import {
   addStepToWorkflow,
+  autoLayoutWorkflow,
   createBlankWorkflow,
   defaultStepParamsForType,
   defaultTriggerDetailsForType,
@@ -58,6 +51,7 @@ import {
   type CanvasNode,
   type HumanTask,
   type InvalidWorkflowFile,
+  type NodeExecutionState,
   type PendingTask,
   type StepTypeEntry,
   type TriggerTypeEntry,
@@ -70,7 +64,6 @@ import {
   workflowToCanvas,
   workflowToYaml,
   updateWorkflowEdges,
-  updateWorkflowPositions,
   removeStepFromWorkflow,
   slugifyIdentifier,
   summarizeWorkflow,
@@ -133,10 +126,18 @@ export function EditorShell() {
         : { edges: [] as Edge[], nodes: [] as CanvasNode[], positions: {} },
     [activeWorkflow, stepCatalog]
   );
+  const displayNodes = useMemo(
+    () => decorateNodesForSelectedRun(canvas.nodes, activeWorkflow, runDetail),
+    [activeWorkflow, canvas.nodes, runDetail]
+  );
+  const connectorSteps = useMemo(
+    () => stepCatalog.filter((entry) => entry.source === "connector"),
+    [stepCatalog]
+  );
   const selectedNode =
     selectedNodeId === null
       ? null
-      : canvas.nodes.find((node) => node.id === selectedNodeId) ?? null;
+      : displayNodes.find((node) => node.id === selectedNodeId) ?? null;
   const isBusy =
     isBooting ||
     isLoadingWorkflow ||
@@ -326,6 +327,7 @@ export function EditorShell() {
       return;
     }
     const nextDocument = finalizeDocument(updater(activeWorkflow));
+    persistWorkflowPositions(nextDocument.id, nextDocument.positions);
     setDocuments((current) => ({
       ...current,
       [nextDocument.id]: nextDocument
@@ -340,7 +342,13 @@ export function EditorShell() {
   function applyWorkflowResponse(response: WorkflowDocumentResponse) {
     setDocuments((current) => ({
       ...current,
-      [response.id]: workflowDocumentFromResponse(response, current[response.id])
+      [response.id]: persistDocumentLayout(
+        workflowDocumentFromResponse(
+          response,
+          current[response.id],
+          readStoredWorkflowPositions(response.id)
+        )
+      )
     }));
     setWorkflows((current) => upsertWorkflowSummary(current, response.summary));
   }
@@ -390,6 +398,7 @@ export function EditorShell() {
         delete nextDocuments[workflowId];
         return nextDocuments;
       });
+      clearStoredWorkflowPositions(workflowId);
       const nextWorkflowId = await refreshInventory(
         activeWorkflowId === workflowId ? null : activeWorkflowId
       );
@@ -434,43 +443,10 @@ export function EditorShell() {
     }
   }
 
-  function handleNodesChange(changes: NodeChange<CanvasNode>[]) {
+  function handleEdgesCommit(nextEdges: Edge[]) {
     if (!activeWorkflow) {
       return;
     }
-
-    const removedStep = changes.find(
-      (change): change is Extract<NodeChange<CanvasNode>, { id: string; type: "remove" }> =>
-        change.type === "remove" && "id" in change && change.id !== TRIGGER_NODE_ID
-    );
-    if (removedStep) {
-      handleDeleteSelectedNode(removedStep.id);
-      return;
-    }
-
-    let nextPositions = activeWorkflow.positions;
-    let changed = false;
-
-    for (const change of changes) {
-      if (change.type === "position" && "id" in change && change.position) {
-        nextPositions = updateWorkflowPositions(nextPositions, change.id, change.position);
-        changed = true;
-      }
-    }
-
-    if (changed) {
-      applyActiveWorkflowUpdate((document) => ({
-        ...document,
-        positions: nextPositions
-      }));
-    }
-  }
-
-  function handleEdgesChange(changes: EdgeChange<Edge>[]) {
-    if (!activeWorkflow) {
-      return;
-    }
-    const nextEdges = applyEdgeChanges(changes, canvas.edges);
     applyActiveWorkflowUpdate((document) => ({
       ...document,
       workflow: updateWorkflowEdges(document.workflow, nextEdges)
@@ -478,31 +454,15 @@ export function EditorShell() {
     setLastAction("Updated workflow connections");
   }
 
-  function handleConnect(connection: Connection) {
-    if (!activeWorkflow || !connection.source || !connection.target) {
+  function handlePositionsCommit(nextPositions: Record<string, XYPosition>) {
+    if (!activeWorkflow) {
       return;
     }
-    if (
-      connection.source === TRIGGER_NODE_ID ||
-      connection.target === TRIGGER_NODE_ID ||
-      connection.source === connection.target
-    ) {
-      setLastAction("Trigger edges are derived from root steps and cannot be edited directly");
-      return;
-    }
-
-    const nextEdges = addEdge(
-      {
-        ...connection,
-        id: `${connection.source}->${connection.target}`
-      },
-      canvas.edges
-    );
     applyActiveWorkflowUpdate((document) => ({
       ...document,
-      workflow: updateWorkflowEdges(document.workflow, nextEdges)
+      positions: nextPositions
     }));
-    setLastAction(`Connected ${connection.source} to ${connection.target}`);
+    setLastAction("Updated node positions");
   }
 
   function handleAddStep() {
@@ -519,6 +479,17 @@ export function EditorShell() {
     }));
     setSelectedNodeId(createdNodeId);
     setLastAction(`Added ${newStepType} step`);
+  }
+
+  function handleAutoLayout() {
+    if (!activeWorkflow) {
+      return;
+    }
+    applyActiveWorkflowUpdate((document) => ({
+      ...document,
+      positions: autoLayoutWorkflow(document.workflow)
+    }));
+    setLastAction("Auto-arranged workflow nodes");
   }
 
   async function handleRefresh() {
@@ -913,6 +884,7 @@ export function EditorShell() {
         <section className="grid gap-5 lg:grid-cols-[320px_minmax(0,1fr)_400px]">
           <WorkflowExplorer
             activeWorkflowId={activeWorkflowId}
+            connectors={connectorSteps}
             invalidFiles={invalidFiles}
             isBusy={isBusy}
             onCreateWorkflow={() => void handleCreateWorkflow()}
@@ -932,7 +904,7 @@ export function EditorShell() {
               </div>
               <div className="flex flex-wrap items-center gap-3">
                 <select
-                  className="rounded-full border border-black/10 bg-white px-4 py-2 text-sm text-ink outline-none transition focus:border-tide/40"
+                  className="ui-input w-auto min-w-[220px]"
                   onChange={(event) => setNewStepType(event.target.value)}
                   value={newStepType}
                 >
@@ -947,13 +919,20 @@ export function EditorShell() {
                   ))}
                 </select>
                 <button
-                  className="rounded-full bg-tide px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#0d5b61]"
+                  className="ui-button ui-button-tide"
                   onClick={handleAddStep}
                   type="button"
                 >
                   Add step
                 </button>
-                <div className="rounded-full bg-ember/15 px-3 py-1 text-xs font-semibold text-ember">
+                <button
+                  className="ui-button"
+                  onClick={handleAutoLayout}
+                  type="button"
+                >
+                  Auto layout
+                </button>
+                <div className="rounded-md border border-ember/20 bg-ember/10 px-3 py-2 font-mono text-[11px] uppercase tracking-[0.16em] text-ember">
                   YAML remains the source of truth
                 </div>
               </div>
@@ -961,31 +940,15 @@ export function EditorShell() {
 
             <div className="h-[680px]">
               {activeWorkflow ? (
-                <ReactFlowProvider>
-                  <ReactFlow
-                    fitView
-                    edges={canvas.edges}
-                    nodes={canvas.nodes}
-                    onConnect={handleConnect}
-                    onEdgesChange={handleEdgesChange}
-                    onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-                    onNodesChange={handleNodesChange}
-                    onPaneClick={() => setSelectedNodeId(null)}
-                  >
-                    <MiniMap
-                      pannable
-                      zoomable
-                      className="!rounded-2xl !border !border-black/10 !bg-white/80"
-                    />
-                    <Controls className="!rounded-2xl !border !border-black/10 !bg-white/80" />
-                    <Background
-                      color="#b5c3c5"
-                      gap={20}
-                      size={1}
-                      variant={BackgroundVariant.Dots}
-                    />
-                  </ReactFlow>
-                </ReactFlowProvider>
+                <WorkflowCanvas
+                  key={activeWorkflow.id}
+                  edges={canvas.edges}
+                  nodes={displayNodes}
+                  onDeleteStep={handleDeleteSelectedNode}
+                  onEdgesCommit={handleEdgesCommit}
+                  onPositionsCommit={handlePositionsCommit}
+                  onSelectNode={setSelectedNodeId}
+                />
               ) : (
                 <div className="flex h-full items-center justify-center px-10 text-center text-sm leading-7 text-slate">
                   {isBooting
@@ -1051,6 +1014,80 @@ export function EditorShell() {
       </div>
     </main>
   );
+}
+
+function decorateNodesForSelectedRun(
+  nodes: CanvasNode[],
+  activeWorkflow: WorkflowDocument | null,
+  runDetail: RunDetailResponse | null
+) {
+  if (
+    !activeWorkflow ||
+    !runDetail ||
+    runDetail.run.workflow_name !== activeWorkflow.workflow.name
+  ) {
+    return nodes.map((node) => ({
+      ...node,
+      type: "workflowNode",
+      data: {
+        ...node.data,
+        executionLabel: null,
+        executionMeta: null,
+        executionState: "idle" as const
+      }
+    }));
+  }
+
+  const latestStepRuns = new Map<string, RunDetailResponse["step_runs"][number]>();
+  for (const stepRun of runDetail.step_runs) {
+    const current = latestStepRuns.get(stepRun.step_id);
+    if (!current || stepRun.attempt > current.attempt) {
+      latestStepRuns.set(stepRun.step_id, stepRun);
+    } else if (stepRun.attempt === current.attempt && (stepRun.started_at ?? "") > (current.started_at ?? "")) {
+      latestStepRuns.set(stepRun.step_id, stepRun);
+    }
+  }
+
+  const pendingTaskStepIds = new Set(
+    runDetail.human_tasks
+      .filter((task) => task.status === "pending")
+      .map((task) => task.step_id)
+  );
+
+  return nodes.map((node) => {
+    if (node.id === TRIGGER_NODE_ID) {
+      const runState = normalizeExecutionState(runDetail.run.status);
+      return {
+        ...node,
+        type: "workflowNode",
+        data: {
+          ...node.data,
+          executionLabel: executionLabel(runState),
+          executionMeta: runDetail.run.id.slice(0, 8),
+          executionState: runState
+        }
+      };
+    }
+
+    const latestStepRun = latestStepRuns.get(node.id);
+    let state: NodeExecutionState = "idle";
+    if (pendingTaskStepIds.has(node.id)) {
+      state = "paused";
+    } else if (latestStepRun) {
+      state = normalizeExecutionState(latestStepRun.status);
+    }
+
+    return {
+      ...node,
+      type: "workflowNode",
+      data: {
+        ...node.data,
+        executionLabel: executionLabel(state),
+        executionMeta: latestStepRun ? executionMeta(state, latestStepRun) : null,
+        executionState: state
+      }
+    };
+  });
 }
 
 async function fetchEngineJson<T>(
@@ -1132,13 +1169,21 @@ function finalizeDocument(document: WorkflowDocument): WorkflowDocument {
   const positions = Object.fromEntries(
     Object.entries(document.positions).filter(([key]) => allowedPositionKeys.has(key))
   );
+  const workflow = {
+    ...document.workflow,
+    ui: {
+      ...(document.workflow.ui ?? {}),
+      positions
+    }
+  };
 
   return {
     ...document,
     dirty: true,
     positions,
     summary: summarizeWorkflow(document.id, document.workflow),
-    yaml: workflowToYaml(document.workflow)
+    workflow,
+    yaml: workflowToYaml(workflow)
   };
 }
 
@@ -1197,6 +1242,115 @@ function errorMessage(error: unknown) {
   return "Unexpected error";
 }
 
+function persistDocumentLayout(document: WorkflowDocument) {
+  persistWorkflowPositions(document.id, document.positions);
+  return document;
+}
+
+function readStoredWorkflowPositions(workflowId: string) {
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+  try {
+    const stored = window.localStorage.getItem(workflowLayoutStorageKey(workflowId));
+    if (!stored) {
+      return undefined;
+    }
+    const parsed = JSON.parse(stored) as Record<string, { x: unknown; y: unknown }>;
+    return Object.fromEntries(
+      Object.entries(parsed).flatMap(([nodeId, position]) => {
+        const x = Number(position?.x);
+        const y = Number(position?.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) {
+          return [];
+        }
+        return [[nodeId, { x, y }]];
+      })
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function persistWorkflowPositions(
+  workflowId: string,
+  positions: Record<string, { x: number; y: number }>
+) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(workflowLayoutStorageKey(workflowId), JSON.stringify(positions));
+  } catch {
+    // Ignore storage quota or privacy-mode errors.
+  }
+}
+
+function clearStoredWorkflowPositions(workflowId: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.removeItem(workflowLayoutStorageKey(workflowId));
+  } catch {
+    // Ignore storage failures.
+  }
+}
+
+function workflowLayoutStorageKey(workflowId: string) {
+  return `acsa:workflow-layout:${workflowId}`;
+}
+
 function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function normalizeExecutionState(status: string): NodeExecutionState {
+  switch (status) {
+    case "failed":
+      return "failed";
+    case "paused":
+      return "paused";
+    case "running":
+      return "running";
+    case "skipped":
+      return "skipped";
+    case "success":
+      return "success";
+    default:
+      return "idle";
+  }
+}
+
+function executionLabel(state: NodeExecutionState) {
+  switch (state) {
+    case "failed":
+      return "Failed";
+    case "paused":
+      return "Action required";
+    case "running":
+      return "Running";
+    case "skipped":
+      return "Skipped";
+    case "success":
+      return "Success";
+    default:
+      return null;
+  }
+}
+
+function executionMeta(
+  state: NodeExecutionState,
+  stepRun: RunDetailResponse["step_runs"][number]
+) {
+  if (state === "paused") {
+    return `attempt ${stepRun.attempt}`;
+  }
+  if (state === "running") {
+    return `attempt ${stepRun.attempt}`;
+  }
+  if (stepRun.duration_seconds !== null && stepRun.duration_seconds !== undefined) {
+    return formatDuration(stepRun.duration_seconds);
+  }
+  return `attempt ${stepRun.attempt}`;
 }

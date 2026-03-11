@@ -16,11 +16,13 @@
 
 import type {
   InvalidWorkflowFile,
+  StepTypeEntry,
   WorkflowSummary
 } from "../lib/workflow-editor";
 
 type WorkflowExplorerProps = {
   activeWorkflowId: string | null;
+  connectors: StepTypeEntry[];
   invalidFiles: InvalidWorkflowFile[];
   isBusy: boolean;
   onCreateWorkflow: () => void;
@@ -32,6 +34,7 @@ type WorkflowExplorerProps = {
 
 export function WorkflowExplorer({
   activeWorkflowId,
+  connectors,
   invalidFiles,
   isBusy,
   onCreateWorkflow,
@@ -48,7 +51,7 @@ export function WorkflowExplorer({
           <h2 className="section-title mt-2">YAML definitions</h2>
         </div>
         <button
-          className="rounded-full bg-tide px-4 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-white transition hover:bg-[#0d5b61] disabled:cursor-not-allowed disabled:opacity-60"
+          className="ui-button ui-button-tide"
           disabled={isBusy}
           onClick={onCreateWorkflow}
           type="button"
@@ -64,9 +67,9 @@ export function WorkflowExplorer({
           return (
             <article
               key={workflow.id}
-              className={`rounded-3xl border px-4 py-4 transition ${
+              className={`rounded-2xl border px-4 py-4 transition ${
                 isActive
-                  ? "border-tide/40 bg-tide/10 shadow-panel"
+                  ? "border-tide/40 bg-tide/10"
                   : "border-black/10 bg-white/70 hover:border-black/20 hover:bg-white"
               }`}
             >
@@ -79,17 +82,17 @@ export function WorkflowExplorer({
                   <span className="font-display text-lg font-semibold text-ink">
                     {workflow.name}
                   </span>
-                  <span className="rounded-full bg-sand px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-ember">
+                  <span className="ui-badge">
                     {workflow.trigger_type}
                   </span>
                 </div>
                 <p className="mt-2 text-sm leading-6 text-slate">
                   {workflow.description}
                 </p>
-                <div className="mt-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/65">
+                <div className="mt-3 flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
                   <span>{workflow.file_name}</span>
                   {workflow.has_connector_steps ? (
-                    <span className="rounded-full bg-ember/10 px-2 py-1 text-ember">
+                    <span className="rounded-md bg-ember/10 px-2 py-1 text-ember">
                       Connector step
                     </span>
                   ) : null}
@@ -98,7 +101,7 @@ export function WorkflowExplorer({
 
               <div className="mt-4 flex flex-wrap gap-2">
                 <button
-                  className="rounded-full border border-black/10 px-3 py-2 text-xs font-semibold text-ink transition hover:border-black/20 hover:bg-white"
+                  className="ui-button"
                   disabled={isBusy}
                   onClick={() => onDuplicateWorkflow(workflow.id)}
                   type="button"
@@ -106,7 +109,7 @@ export function WorkflowExplorer({
                   Duplicate
                 </button>
                 <button
-                  className="rounded-full border border-ember/20 px-3 py-2 text-xs font-semibold text-ember transition hover:border-ember/40 hover:bg-ember/5"
+                  className="ui-button ui-button-danger"
                   disabled={isBusy}
                   onClick={() => onDeleteWorkflow(workflow.id)}
                   type="button"
@@ -120,11 +123,11 @@ export function WorkflowExplorer({
       </div>
 
       {invalidFiles.length > 0 ? (
-        <div className="mt-6 rounded-3xl border border-ember/20 bg-ember/5 p-4">
+        <div className="mt-6 rounded-2xl border border-ember/20 bg-ember/5 p-4">
           <p className="section-kicker text-ember">Needs attention</p>
           <div className="mt-3 space-y-3">
             {invalidFiles.map((file) => (
-              <div key={file.id} className="rounded-2xl border border-ember/15 bg-white/80 p-3">
+              <div key={file.id} className="rounded-xl border border-ember/15 bg-white/80 p-3">
                 <div className="text-sm font-semibold text-ink">{file.file_name}</div>
                 <p className="mt-1 text-sm leading-6 text-slate">{file.error}</p>
               </div>
@@ -132,6 +135,52 @@ export function WorkflowExplorer({
           </div>
         </div>
       ) : null}
+
+      <div className="mt-6 rounded-2xl border border-black/10 bg-white/65 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="section-kicker">Connectors</p>
+            <h3 className="section-title mt-2">Loaded plugins</h3>
+          </div>
+          <span className="ui-badge">{connectors.length}</span>
+        </div>
+
+        <p className="mt-3 text-sm leading-6 text-slate">
+          Connector nodes are discovered from the local
+          <code className="mx-1 rounded bg-sand px-1.5 py-0.5 font-mono text-ember">
+            connectors/
+          </code>
+          directory. Shipping a drag-and-drop installer still needs a backend upload API.
+        </p>
+
+        <div className="mt-4 space-y-3">
+          {connectors.length > 0 ? (
+            connectors.map((connector) => (
+              <article
+                key={connector.type_name}
+                className="rounded-xl border border-black/10 bg-white/80 px-3 py-3"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="font-semibold text-ink">{connector.label}</div>
+                  <span className="rounded-md bg-tide/10 px-2 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-tide">
+                    {connector.runtime ?? "plugin"}
+                  </span>
+                </div>
+                <div className="mt-2 font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
+                  {connector.type_name}
+                </div>
+                <p className="mt-2 text-sm leading-6 text-slate">
+                  {connector.description}
+                </p>
+              </article>
+            ))
+          ) : (
+            <div className="rounded-xl border border-dashed border-black/15 bg-white/80 px-4 py-6 text-center text-sm leading-6 text-slate">
+              No connector manifests are loaded yet. Built-in nodes remain available in the canvas.
+            </div>
+          )}
+        </div>
+      </div>
     </aside>
   );
 }

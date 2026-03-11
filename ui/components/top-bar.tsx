@@ -54,39 +54,39 @@ export function TopBar({
         </div>
 
         <div className="flex flex-col items-stretch gap-3 lg:min-w-[420px] lg:items-end">
-          <div className="rounded-2xl border border-black/10 bg-white/70 px-4 py-3 text-sm text-slate">
+          <div className="ui-panel-card px-4 py-3 text-sm text-slate">
             <div>
               <span className="font-semibold text-ink">Active workflow:</span>{" "}
               {activeWorkflowName}
             </div>
-            <div className="mt-1 text-xs uppercase tracking-[0.18em] text-slate/65">
+            <div className="ui-meta mt-1">
               {activeWorkflowFile}
             </div>
             <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.18em]">
-              <span className="rounded-full bg-sand px-3 py-1 text-ember">
+              <span className="ui-badge">
                 {pendingTaskCount} pending task{pendingTaskCount === 1 ? "" : "s"}
               </span>
               {runStatus ? (
-                <span className="rounded-full bg-tide/10 px-3 py-1 text-tide">
+                <span className="rounded-md bg-tide/10 px-2 py-1 font-mono text-[11px] text-tide">
                   {runStatus}
                 </span>
               ) : null}
             </div>
-            <div className="mt-3 text-xs uppercase tracking-[0.18em] text-slate/65">
+            <div className="ui-meta mt-3">
               {lastAction}
             </div>
           </div>
 
           <div className="flex flex-wrap gap-3">
             <button
-              className="rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink transition hover:border-ink/20 hover:bg-white/90"
+              className="ui-button"
               onClick={onRefresh}
               type="button"
             >
               Refresh
             </button>
             <button
-              className="rounded-full border border-ink/10 bg-white px-5 py-3 text-sm font-semibold text-ink transition hover:border-ink/20 hover:bg-white/90 disabled:cursor-not-allowed disabled:opacity-60"
+              className="ui-button"
               disabled={isSaving}
               onClick={onSave}
               type="button"
@@ -94,7 +94,7 @@ export function TopBar({
               {isSaving ? "Saving..." : "Save YAML"}
             </button>
             <button
-              className="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate disabled:cursor-not-allowed disabled:opacity-60"
+              className="ui-button ui-button-primary"
               disabled={isRunning}
               onClick={onRun}
               type="button"
