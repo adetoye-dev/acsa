@@ -2056,10 +2056,9 @@ mod tests {
 
     #[test]
     fn allows_secrets_env_mappings() {
-        let value = serde_yaml::from_str::<YamlValue>(
-            "secrets_env:\n  password: ACSA_SMTP_PASSWORD\n",
-        )
-        .expect("yaml should parse");
+        let value =
+            serde_yaml::from_str::<YamlValue>("secrets_env:\n  password: ACSA_SMTP_PASSWORD\n")
+                .expect("yaml should parse");
 
         validate_secret_value("steps.send_brief_email.params", &value)
             .expect("secrets_env should be treated as an environment reference map");

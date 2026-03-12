@@ -251,7 +251,9 @@ impl WorkflowEngine {
                             logged_workflow_name, log_error
                         );
                     }
-                    if let Err(complete_error) = engine.store.complete_run_failure(&run_id, &message).await {
+                    if let Err(complete_error) =
+                        engine.store.complete_run_failure(&run_id, &message).await
+                    {
                         let completion_message = format!(
                             "workflow '{}' failed to mark run as failed: {}",
                             logged_workflow_name, complete_error
@@ -1004,11 +1006,7 @@ fn transitive_predecessors(plan: &WorkflowPlan, step_id: &str) -> Vec<String> {
         }
     }
 
-    plan.order()
-        .iter()
-        .filter(|step| discovered.contains(step.as_str()))
-        .cloned()
-        .collect()
+    plan.order().iter().filter(|step| discovered.contains(step.as_str())).cloned().collect()
 }
 
 async fn execute_step_with_retries(
