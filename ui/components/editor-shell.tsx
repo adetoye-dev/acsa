@@ -24,7 +24,6 @@ import {
   type XYPosition
 } from "@xyflow/react";
 
-import { HumanTaskInbox } from "./human-task-inbox";
 import { NodeInspector } from "./node-inspector";
 import { RunHistoryPanel } from "./run-history-panel";
 import { TopBar, type WorkspaceView } from "./top-bar";
@@ -50,7 +49,7 @@ import {
 import {
   addStepToWorkflow,
   autoLayoutWorkflow,
-  createBlankWorkflow,
+  createLocalWorkflowDocument,
   defaultStepParamsForType,
   defaultTriggerDetailsForType,
   extractTriggerDetails,
@@ -67,6 +66,7 @@ import {
   type WorkflowDocument,
   type WorkflowDocumentResponse,
   type WorkflowSummary,
+  workflowHasRunnableSteps,
   workflowDocumentFromResponse,
   workflowToCanvas,
   workflowToYaml,
@@ -109,12 +109,10 @@ export function EditorShell() {
     isRunning,
     isSaving,
     lastRun,
-    pendingTasks,
     runStatus,
     selectedNodeId,
     stepCatalog,
     stepParamsDraft,
-    taskValues,
     triggerCatalog,
     triggerDetailsDraft,
     workflows
@@ -131,12 +129,10 @@ export function EditorShell() {
       isRunning: state.isRunning,
       isSaving: state.isSaving,
       lastRun: state.lastRun,
-      pendingTasks: state.pendingTasks,
       runStatus: state.runStatus,
       selectedNodeId: state.selectedNodeId,
       stepCatalog: state.stepCatalog,
       stepParamsDraft: state.stepParamsDraft,
-      taskValues: state.taskValues,
       triggerCatalog: state.triggerCatalog,
       triggerDetailsDraft: state.triggerDetailsDraft,
       workflows: state.workflows
@@ -165,8 +161,7 @@ export function EditorShell() {
       selectedRunId: state.selectedRunId
     }))
   );
-  const { clearTaskValue, patch: patchWorkflowState, setDocuments, setTaskValue, setWorkflows } =
-    useWorkflowActions();
+  const { patch: patchWorkflowState, setDocuments, setWorkflows } = useWorkflowActions();
   const { patch: patchObservabilityState } = useObservabilityActions();
 
   const activeWorkflow = activeWorkflowId ? documents[activeWorkflowId] ?? null : null;
@@ -189,6 +184,10 @@ export function EditorShell() {
     selectedNodeId === null
       ? null
       : displayNodes.find((node) => node.id === selectedNodeId) ?? null;
+  const selectedStep =
+    selectedNode?.data.kind === "step"
+      ? activeWorkflow?.workflow.steps.find((step) => step.id === selectedNode.id) ?? null
+      : null;
   const isBusy =
     isBooting ||
     isLoadingWorkflow ||
@@ -196,6 +195,10 @@ export function EditorShell() {
     isRefreshingTasks ||
     isRunning ||
     isSaving;
+  const saveDisabledReason = saveDisabledMessage(activeWorkflow);
+  const runDisabledReason = runDisabledMessage(activeWorkflow);
+  const canSave = !isSaving && !saveDisabledReason;
+  const canRun = !isRunning && !runDisabledReason;
 
   useEffect(() => {
     void bootstrap();
@@ -294,7 +297,7 @@ export function EditorShell() {
         pendingTasks: tasks.tasks,
         stepCatalog: catalog.step_types,
         triggerCatalog: catalog.trigger_types,
-        workflows: inventory.workflows
+        workflows: mergeWorkflowSummaries({}, inventory.workflows)
       });
 
       const preferredWorkflowId =
@@ -330,10 +333,7 @@ export function EditorShell() {
         `/api/workflows/${workflowId}`
       );
       applyWorkflowResponse(response);
-      patchWorkflowState({
-        lastAction: `Opened ${response.summary.file_name}`,
-        selectedNodeId: TRIGGER_NODE_ID
-      });
+      patchWorkflowState({ lastAction: `Opened ${response.summary.file_name}` });
       return response;
     } catch (error) {
       patchWorkflowState({
@@ -360,13 +360,15 @@ export function EditorShell() {
 
   async function refreshInventory(preferredWorkflowId?: string | null) {
     const inventory = await fetchEngineJson<WorkflowInventoryResponse>("/api/workflows");
+    const localDraftDocuments = workflowStoreState().documents;
+    const workflows = mergeWorkflowSummaries(localDraftDocuments, inventory.workflows);
     patchWorkflowState({
       invalidFiles: inventory.invalid_files,
-      workflows: inventory.workflows
+      workflows
     });
     const nextWorkflowId =
-      inventory.workflows.find((workflow) => workflow.id === preferredWorkflowId)?.id ??
-      inventory.workflows[0]?.id ??
+      workflows.find((workflow) => workflow.id === preferredWorkflowId)?.id ??
+      workflows[0]?.id ??
       null;
     patchWorkflowState({ activeWorkflowId: nextWorkflowId });
     return nextWorkflowId;
@@ -451,8 +453,7 @@ export function EditorShell() {
     if (!activeWorkflow) {
       return;
     }
-    const nextDocument = finalizeDocument(updater(activeWorkflow));
-    persistWorkflowPositions(nextDocument.id, nextDocument.positions);
+    const nextDocument = persistDocumentLayout(finalizeDocument(updater(activeWorkflow)));
     setDocuments((current) => ({
       ...current,
       [nextDocument.id]: nextDocument
@@ -479,43 +480,55 @@ export function EditorShell() {
   }
 
   async function handleCreateWorkflow() {
-    const proposedId = window.prompt(
-      "Workflow file id",
-      `workflow-${workflows.length + 1}`
-    );
-    if (!proposedId) {
-      return;
-    }
-    const workflowId = slugifyIdentifier(proposedId);
-    const yaml = workflowToYaml(createBlankWorkflow(workflowId));
-
-    try {
-      const response = await fetchEngineJson<WorkflowDocumentResponse>("/api/workflows", {
-        body: JSON.stringify({ id: workflowId, yaml }),
-        headers: {
-          "content-type": "application/json"
-        },
-        method: "POST"
-      });
-      applyWorkflowResponse(response);
-      patchWorkflowState({
-        activeWorkflowId: response.id,
-        globalError: null,
-        lastAction: `Created ${response.summary.file_name}`,
-        selectedNodeId: TRIGGER_NODE_ID
-      });
-      await refreshInventory(response.id);
-      await refreshRunHistory(undefined, response.summary.name);
-    } catch (error) {
-      patchWorkflowState({
-        globalError: errorMessage(error),
-        lastAction: "Failed to create workflow"
-      });
-    }
+    const workflowId = nextDraftWorkflowId(workflows);
+    const document = persistDocumentLayout(createLocalWorkflowDocument(workflowId));
+    setDocuments((current) => ({
+      ...current,
+      [document.id]: document
+    }));
+    setWorkflows((current) => upsertWorkflowSummary(current, document.summary));
+    patchWorkflowState({
+      activeWorkflowId: document.id,
+      globalError: null,
+      lastAction: `Created ${document.summary.file_name} draft`,
+      selectedNodeId: TRIGGER_NODE_ID
+    });
+    await refreshRunHistory(undefined, document.workflow.name);
   }
 
   async function handleDeleteWorkflow(workflowId: string) {
     if (!window.confirm(`Delete ${workflowId}.yaml?`)) {
+      return;
+    }
+
+    const document = documents[workflowId];
+    if (document?.localDraft) {
+      setDocuments((current) => {
+        const nextDocuments = { ...current };
+        delete nextDocuments[workflowId];
+        return nextDocuments;
+      });
+      setWorkflows((current) => current.filter((workflow) => workflow.id !== workflowId));
+      clearStoredWorkflowPositions(workflowId);
+      const nextWorkflowId = nextSelectableWorkflowId(
+        workflows.filter((workflow) => workflow.id !== workflowId),
+        activeWorkflowId === workflowId ? null : activeWorkflowId
+      );
+      patchWorkflowState({
+        activeWorkflowId: nextWorkflowId,
+        globalError: null,
+        lastAction: `Discarded ${workflowId}.yaml draft`,
+        selectedNodeId: null
+      });
+      if (nextWorkflowId && !workflowStoreState().documents[nextWorkflowId]) {
+        const response = await loadWorkflowDocument(nextWorkflowId);
+        await refreshRunHistory(undefined, response?.summary.name ?? nextWorkflowId);
+      } else {
+        await refreshRunHistory(
+          undefined,
+          nextWorkflowId ? workflowStoreState().documents[nextWorkflowId]?.workflow.name ?? null : null
+        );
+      }
       return;
     }
 
@@ -534,13 +547,19 @@ export function EditorShell() {
       );
       let workflowName: string | null = null;
       if (nextWorkflowId) {
-        const response = await loadWorkflowDocument(nextWorkflowId);
-        workflowName = response?.summary.name ?? null;
+        const draftDocument = workflowStoreState().documents[nextWorkflowId];
+        if (draftDocument?.localDraft) {
+          workflowName = draftDocument.workflow.name;
+        } else {
+          const response = await loadWorkflowDocument(nextWorkflowId);
+          workflowName = response?.summary.name ?? null;
+        }
       }
       await refreshRunHistory(undefined, workflowName);
       patchWorkflowState({
         globalError: null,
-        lastAction: `Deleted ${workflowId}.yaml`
+        lastAction: `Deleted ${workflowId}.yaml`,
+        selectedNodeId: null
       });
     } catch (error) {
       patchWorkflowState({
@@ -556,6 +575,45 @@ export function EditorShell() {
       return;
     }
     const targetId = slugifyIdentifier(proposedId);
+    if (workflows.some((workflow) => workflow.id === targetId)) {
+      patchWorkflowState({
+        globalError: `A workflow named ${targetId}.yaml already exists.`,
+        lastAction: "Workflow duplication failed"
+      });
+      return;
+    }
+
+    const localSource = documents[workflowId];
+    if (localSource?.localDraft) {
+      const duplicateDocument = persistDocumentLayout(
+        finalizeDocument({
+          ...localSource,
+          dirty: true,
+          id: targetId,
+          localDraft: true,
+          summary: summarizeWorkflow(targetId, localSource.workflow, {
+            localDraft: true
+          }),
+          workflow: {
+            ...localSource.workflow,
+            name: `${localSource.workflow.name} copy`
+          }
+        })
+      );
+      setDocuments((current) => ({
+        ...current,
+        [targetId]: duplicateDocument
+      }));
+      setWorkflows((current) => upsertWorkflowSummary(current, duplicateDocument.summary));
+      patchWorkflowState({
+        activeWorkflowId: targetId,
+        globalError: null,
+        lastAction: `Duplicated ${workflowId}.yaml to ${duplicateDocument.summary.file_name}`,
+        selectedNodeId: null
+      });
+      await refreshRunHistory(undefined, duplicateDocument.workflow.name);
+      return;
+    }
 
     try {
       const response = await fetchEngineJson<WorkflowDocumentResponse>(
@@ -573,7 +631,7 @@ export function EditorShell() {
         activeWorkflowId: response.id,
         globalError: null,
         lastAction: `Duplicated ${workflowId}.yaml to ${response.summary.file_name}`,
-        selectedNodeId: TRIGGER_NODE_ID
+        selectedNodeId: null
       });
       await refreshInventory(response.id);
       await refreshRunHistory(undefined, response.summary.name);
@@ -581,6 +639,120 @@ export function EditorShell() {
       patchWorkflowState({
         globalError: errorMessage(error),
         lastAction: "Workflow duplication failed"
+      });
+    }
+  }
+
+  async function handleRenameWorkflow(workflowId: string) {
+    const document = documents[workflowId];
+    const currentName =
+      document?.workflow.name ??
+      workflows.find((workflow) => workflow.id === workflowId)?.name ??
+      workflowId;
+    const proposedName = window.prompt("Rename workflow", currentName);
+    if (!proposedName) {
+      return;
+    }
+
+    const nextName = proposedName.trim();
+    if (!nextName) {
+      patchWorkflowState({
+        globalError: "Workflow names must not be empty.",
+        lastAction: "Workflow rename failed"
+      });
+      return;
+    }
+
+    const targetId = slugifyIdentifier(nextName);
+    if (
+      workflows.some(
+        (workflow) => workflow.id === targetId && workflow.id !== workflowId
+      )
+    ) {
+      patchWorkflowState({
+        globalError: `A workflow named ${targetId}.yaml already exists.`,
+        lastAction: "Workflow rename failed"
+      });
+      return;
+    }
+
+    if (document?.localDraft) {
+      const renamedDocument = finalizeDocument({
+        ...document,
+        id: targetId,
+        localDraft: true,
+        summary: summarizeWorkflow(targetId, document.workflow, {
+          localDraft: true
+        }),
+        workflow: {
+          ...document.workflow,
+          name: nextName
+        }
+      });
+      setDocuments((current) => {
+        const nextDocuments = { ...current };
+        delete nextDocuments[workflowId];
+        nextDocuments[targetId] = renamedDocument;
+        return nextDocuments;
+      });
+      setWorkflows((current) => {
+        const nextWorkflows = current.filter((workflow) => workflow.id !== workflowId);
+        return upsertWorkflowSummary(nextWorkflows, renamedDocument.summary);
+      });
+      clearStoredWorkflowPositions(workflowId);
+      patchWorkflowState({
+        activeWorkflowId: activeWorkflowId === workflowId ? targetId : activeWorkflowId,
+        globalError: null,
+        lastAction: `Renamed ${workflowId}.yaml to ${renamedDocument.summary.file_name}`
+      });
+      return;
+    }
+
+    try {
+      const response = await fetchEngineJson<WorkflowDocumentResponse>(
+        `/api/workflows/${workflowId}/rename`,
+        {
+          body: JSON.stringify({
+            name: nextName,
+            target_id: targetId,
+            ...(document ? { yaml: workflowToYaml({ ...document.workflow, name: nextName }) } : {})
+          }),
+          headers: {
+            "content-type": "application/json"
+          },
+          method: "POST"
+        }
+      );
+      setDocuments((current) => {
+        const nextDocuments = { ...current };
+        if (workflowId !== response.id) {
+          delete nextDocuments[workflowId];
+        }
+        nextDocuments[response.id] = persistDocumentLayout(
+          workflowDocumentFromResponse(
+            response,
+            current[workflowId] ?? current[response.id],
+            readStoredWorkflowPositions(response.id)
+          )
+        );
+        return nextDocuments;
+      });
+      setWorkflows((current) => {
+        const nextWorkflows = current.filter((workflow) => workflow.id !== workflowId);
+        return upsertWorkflowSummary(nextWorkflows, response.summary);
+      });
+      clearStoredWorkflowPositions(workflowId);
+      patchWorkflowState({
+        activeWorkflowId: activeWorkflowId === workflowId ? response.id : activeWorkflowId,
+        globalError: null,
+        lastAction: `Renamed ${workflowId}.yaml to ${response.summary.file_name}`
+      });
+      await refreshInventory(activeWorkflowId === workflowId ? response.id : activeWorkflowId);
+      await refreshRunHistory(undefined, response.summary.name);
+    } catch (error) {
+      patchWorkflowState({
+        globalError: errorMessage(error),
+        lastAction: "Workflow rename failed"
       });
     }
   }
@@ -668,8 +840,13 @@ export function EditorShell() {
       const workflowIdToLoad = nextWorkflowId ?? activeWorkflowId;
       let workflowName: string | null = activeWorkflow?.workflow.name ?? null;
       if (workflowIdToLoad) {
-        const response = await loadWorkflowDocument(workflowIdToLoad);
-        workflowName = response?.summary.name ?? workflowName;
+        const draftDocument = workflowStoreState().documents[workflowIdToLoad];
+        if (draftDocument?.localDraft) {
+          workflowName = draftDocument.workflow.name;
+        } else {
+          const response = await loadWorkflowDocument(workflowIdToLoad);
+          workflowName = response?.summary.name ?? workflowName;
+        }
       }
       await refreshRunHistory(selectedRunId, workflowName);
       patchWorkflowState({
@@ -686,6 +863,13 @@ export function EditorShell() {
 
   async function handleRun() {
     if (!activeWorkflow) {
+      return;
+    }
+    if (runDisabledReason) {
+      patchWorkflowState({
+        globalError: runDisabledReason,
+        lastAction: "Workflow run blocked"
+      });
       return;
     }
     patchWorkflowState({ isRunning: true });
@@ -727,23 +911,47 @@ export function EditorShell() {
     if (!activeWorkflow) {
       return;
     }
+    if (saveDisabledReason) {
+      patchWorkflowState({
+        globalError: saveDisabledReason,
+        lastAction: "Save blocked"
+      });
+      return;
+    }
     patchWorkflowState({ isSaving: true });
     try {
       const response = await fetchEngineJson<WorkflowDocumentResponse>(
-        `/api/workflows/${activeWorkflow.id}`,
+        activeWorkflow.localDraft ? "/api/workflows" : `/api/workflows/${activeWorkflow.id}`,
         {
-          body: JSON.stringify({ yaml: activeWorkflow.yaml }),
+          body: JSON.stringify(
+            activeWorkflow.localDraft
+              ? { id: activeWorkflow.id, yaml: activeWorkflow.yaml }
+              : { yaml: activeWorkflow.yaml }
+          ),
           headers: {
             "content-type": "application/json"
           },
-          method: "PUT"
+          method: activeWorkflow.localDraft ? "POST" : "PUT"
         }
       );
       applyWorkflowResponse(response);
+      if (activeWorkflow.localDraft) {
+        setDocuments((current) => {
+          const nextDocuments = { ...current };
+          nextDocuments[response.id] = {
+            ...(nextDocuments[response.id] ?? workflowDocumentFromResponse(response)),
+            localDraft: false
+          };
+          return nextDocuments;
+        });
+      }
       patchWorkflowState({
+        activeWorkflowId: response.id,
         globalError: null,
-        lastAction: `Saved ${response.summary.file_name}`
+        lastAction: `Saved ${response.summary.file_name}`,
+        selectedNodeId
       });
+      await refreshInventory(response.id);
     } catch (error) {
       patchWorkflowState({
         globalError: errorMessage(error),
@@ -758,7 +966,7 @@ export function EditorShell() {
     patchWorkflowState({
       activeWorkflowId: workflowId,
       globalError: null,
-      selectedNodeId: TRIGGER_NODE_ID
+      selectedNodeId: null
     });
     if (!documents[workflowId]) {
       const response = await loadWorkflowDocument(workflowId);
@@ -767,17 +975,6 @@ export function EditorShell() {
     }
     await refreshRunHistory(selectedRunId, documents[workflowId].workflow.name);
     patchWorkflowState({ lastAction: `Opened ${workflowId}.yaml` });
-  }
-
-  function handleWorkflowNameChange(name: string) {
-    applyActiveWorkflowUpdate((document) => ({
-      ...document,
-      workflow: {
-        ...document.workflow,
-        name
-      }
-    }));
-    patchWorkflowState({ lastAction: "Updated workflow name" });
   }
 
   function handleTriggerTypeChange(triggerType: string) {
@@ -985,10 +1182,6 @@ export function EditorShell() {
     if (!targetStepId) {
       return;
     }
-    if (activeWorkflow.workflow.steps.length === 1) {
-      patchWorkflowState({ inspectorError: "Workflows must keep at least one step." });
-      return;
-    }
 
     applyActiveWorkflowUpdate((document) => ({
       ...document,
@@ -998,70 +1191,16 @@ export function EditorShell() {
     patchWorkflowState({
       inspectorError: null,
       lastAction: `Removed step ${targetStepId}`,
-      selectedNodeId: TRIGGER_NODE_ID
+      selectedNodeId: null
     });
   }
 
-  function handleTaskValueChange(taskId: string, value: string) {
-    setTaskValue(taskId, value);
-  }
-
-  async function handleApprovalTask(taskId: string, approved: boolean) {
-    await resolveTask(taskId, { approved });
-  }
-
-  async function handleManualInputTask(taskId: string) {
-    const value = taskValues[taskId] ?? "";
-    if (!value.trim()) {
-      patchWorkflowState({
-        globalError: "Manual input tasks require a value before resuming the run."
-      });
-      return;
-    }
-    await resolveTask(taskId, { value });
-    clearTaskValue(taskId);
-  }
-
-  async function resolveTask(taskId: string, payload: Record<string, unknown>) {
-    patchWorkflowState({ isRefreshingTasks: true });
-    try {
-      const response = await fetchEngineJson<RunSummary>(
-        `/human-tasks/${taskId}/resolve`,
-        {
-          body: JSON.stringify(payload),
-          headers: {
-            "content-type": "application/json"
-          },
-          method: "POST"
-        }
-      );
-      patchWorkflowState({
-        lastRun: response,
-        runStatus: `${response.status} • ${response.run_id.slice(0, 8)}`
-      });
-      await refreshHumanTasks();
-      await refreshRunHistory(response.run_id);
-      patchWorkflowState({
-        globalError: null,
-        lastAction:
-          response.status === "paused"
-            ? `Resolved task ${taskId} and the run paused again`
-            : `Resolved task ${taskId} and resumed the run`
-      });
-    } catch (error) {
-      patchWorkflowState({
-        globalError: errorMessage(error),
-        lastAction: `Failed to resolve task ${taskId}`
-      });
-    } finally {
-      patchWorkflowState({ isRefreshingTasks: false });
-    }
-  }
-
   const showCanvasView = centerView === "canvas";
+  const showNodeRail = showCanvasView && Boolean(selectedNode);
   const activeRunStatus =
     runStatus ??
     (lastRun ? `${lastRun.status} • ${lastRun.run_id.slice(0, 8)}` : null);
+  const draftNotice = workflowDraftNotice(activeWorkflow);
   const centerViewLabel =
     centerView === "canvas"
       ? "Canvas"
@@ -1087,6 +1226,10 @@ export function EditorShell() {
           onRefresh={() => void handleRefresh()}
           onRun={() => void handleRun()}
           onSave={() => void handleSave()}
+          runDisabled={!canRun}
+          runDisabledReason={runDisabledReason}
+          saveDisabled={!canSave}
+          saveDisabledReason={saveDisabledReason}
           runStatus={activeRunStatus}
         />
 
@@ -1098,7 +1241,7 @@ export function EditorShell() {
 
         <section
           className={`grid min-h-0 gap-4 ${
-            showCanvasView
+            showNodeRail
               ? "xl:grid-cols-[256px_minmax(0,1fr)_336px]"
               : "xl:grid-cols-[256px_minmax(0,1fr)]"
           }`}
@@ -1133,6 +1276,7 @@ export function EditorShell() {
                   isBusy={isBusy}
                   onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
                   onDuplicateWorkflow={(workflowId) => void handleDuplicateWorkflow(workflowId)}
+                  onRenameWorkflow={(workflowId) => void handleRenameWorkflow(workflowId)}
                   onSelectWorkflow={(workflowId) => void handleSelectWorkflow(workflowId)}
                   workflows={workflows}
                 />
@@ -1195,6 +1339,13 @@ export function EditorShell() {
                       showMiniMap={false}
                       showViewportPanel={false}
                     />
+                    {draftNotice ? (
+                      <div className="pointer-events-none absolute left-4 top-4 z-20 max-w-sm">
+                        <div className="rounded-2xl border border-black/10 bg-white/92 px-4 py-3 text-sm leading-6 text-slate shadow-panel">
+                          {draftNotice}
+                        </div>
+                      </div>
+                    ) : null}
                     <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-end p-4">
                       <div className="pointer-events-auto flex flex-wrap items-center gap-2">
                         <button
@@ -1241,7 +1392,7 @@ export function EditorShell() {
                   </>
                 ) : (
                   <div className="flex h-full items-center justify-center px-10 text-center text-sm leading-7 text-slate">
-                    {isBooting
+                {isBooting
                       ? "Booting the editor..."
                       : "No valid workflow is loaded yet. Create a new workflow or fix invalid YAML files from the sidebar."}
                   </div>
@@ -1277,69 +1428,68 @@ export function EditorShell() {
             )}
           </section>
 
-          {showCanvasView ? (
+          {showNodeRail ? (
             <aside className="panel-surface grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
               <div className="border-b border-black/10 px-4 py-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/55">
-                      Context rail
+                      Selected node
                     </div>
-                    <div className="mt-1 text-lg font-semibold tracking-tight text-ink">
-                      Canvas details
-                    </div>
+                    {selectedStep ? (
+                      <div className="mt-2 space-y-1.5">
+                        <input
+                          aria-label="Step id"
+                          className="w-full rounded-xl border border-black/10 bg-black/[0.03] px-2 py-1 font-mono text-[15px] font-semibold tracking-tight text-ink outline-none transition focus:border-tide/45 focus:bg-white focus:ring-2 focus:ring-tide/15 placeholder:text-slate/45"
+                          id="selected-step-name"
+                          onChange={(event) => handleSelectedNodeIdChange(event.target.value)}
+                          placeholder="rename-step"
+                          spellCheck={false}
+                          type="text"
+                          value={selectedStep.id}
+                        />
+                      </div>
+                    ) : (
+                      <div className="mt-1 text-lg font-semibold tracking-tight text-ink">
+                        Trigger
+                      </div>
+                    )}
                   </div>
-                  <ShellBadge label="canvas only" tone="info" />
+                  {selectedStep ? (
+                    <button
+                      aria-label={`Delete ${selectedStep.id}`}
+                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 bg-black/[0.03] text-slate/70 transition hover:border-ember/25 hover:bg-ember/5 hover:text-ember"
+                      onClick={() => handleDeleteSelectedNode(selectedStep.id)}
+                      type="button"
+                    >
+                      <TrashIcon />
+                    </button>
+                  ) : (
+                    <ShellBadge
+                      label={activeWorkflow?.workflow.trigger.type ?? "manual"}
+                      tone="info"
+                    />
+                  )}
                 </div>
               </div>
 
               <div className="sleek-scroll min-h-0 overflow-y-auto px-3 py-3">
-                <AccordionCard
-                  defaultOpen={pendingTasks.length > 0}
-                  subtitle="Only shown when the workflow actually needs attention"
-                  title="Required actions"
-                  tone="warn"
-                >
-                  <HumanTaskInbox
-                    embedded
-                    isRefreshing={isRefreshingTasks}
-                    onApprove={(taskId, approved) => void handleApprovalTask(taskId, approved)}
-                    onRefresh={() => void refreshHumanTasks()}
-                    onResolveValue={(taskId) => void handleManualInputTask(taskId)}
-                    onValueChange={handleTaskValueChange}
-                    taskValues={taskValues}
-                    tasks={pendingTasks}
-                  />
-                </AccordionCard>
-
-                <AccordionCard
-                  defaultOpen
-                  subtitle="Step metadata and settings stay compact until needed"
-                  title="Inspector"
-                  tone="neutral"
-                >
-                  <NodeInspector
-                    activeWorkflow={activeWorkflow}
-                    embedded
-                    inspectorError={inspectorError}
-                    onSelectedNodeIdChange={handleSelectedNodeIdChange}
-                    onSelectedNodeParamsChange={handleSelectedNodeParamsChange}
-                    onSelectedNodeRetryAttemptsChange={handleSelectedNodeRetryAttemptsChange}
-                    onSelectedNodeRetryBackoffChange={handleSelectedNodeRetryBackoffChange}
-                    onSelectedNodeTimeoutChange={handleSelectedNodeTimeoutChange}
-                    onSelectedNodeTypeChange={handleSelectedNodeTypeChange}
-                    onTriggerDetailsChange={handleTriggerDetailsChange}
-                    onTriggerTypeChange={handleTriggerTypeChange}
-                    onWorkflowNameChange={handleWorkflowNameChange}
-                    selectedNode={selectedNode}
-                    showYamlPreview={false}
-                    stepCatalog={stepCatalog}
-                    stepParamsDraft={stepParamsDraft}
-                    triggerCatalog={triggerCatalog}
-                    triggerDetailsDraft={triggerDetailsDraft}
-                    workflowYaml={activeWorkflow?.yaml ?? ""}
-                  />
-                </AccordionCard>
+                <NodeInspector
+                  activeWorkflow={activeWorkflow}
+                  inspectorError={inspectorError}
+                  onSelectedNodeParamsChange={handleSelectedNodeParamsChange}
+                  onSelectedNodeRetryAttemptsChange={handleSelectedNodeRetryAttemptsChange}
+                  onSelectedNodeRetryBackoffChange={handleSelectedNodeRetryBackoffChange}
+                  onSelectedNodeTimeoutChange={handleSelectedNodeTimeoutChange}
+                  onSelectedNodeTypeChange={handleSelectedNodeTypeChange}
+                  onTriggerDetailsChange={handleTriggerDetailsChange}
+                  onTriggerTypeChange={handleTriggerTypeChange}
+                  selectedNode={selectedNode}
+                  stepCatalog={stepCatalog}
+                  stepParamsDraft={stepParamsDraft}
+                  triggerCatalog={triggerCatalog}
+                  triggerDetailsDraft={triggerDetailsDraft}
+                />
               </div>
             </aside>
           ) : null}
@@ -1368,43 +1518,6 @@ function SidebarBlock({
       </div>
       {children}
     </section>
-  );
-}
-
-function AccordionCard({
-  children,
-  defaultOpen,
-  subtitle,
-  title,
-  tone
-}: {
-  children: ReactNode;
-  defaultOpen?: boolean;
-  subtitle: string;
-  title: string;
-  tone: "dark" | "neutral" | "warn";
-}) {
-  const toneShell = {
-    dark: "bg-white/80",
-    neutral: "bg-white/80",
-    warn: "bg-white/80"
-  } as const;
-
-  return (
-    <details className={`mb-4 rounded-2xl border border-black/10 px-3 py-3 ${toneShell[tone]}`} open={defaultOpen}>
-      <summary className="cursor-pointer list-none">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="text-sm font-semibold text-ink">{title}</div>
-            <div className="mt-1 text-xs leading-5 text-slate">{subtitle}</div>
-          </div>
-          <div className="rounded-xl border border-black/10 bg-white/70 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.16em] text-slate/62">
-            ▾
-          </div>
-        </div>
-      </summary>
-      <div className="mt-3">{children}</div>
-    </details>
   );
 }
 
@@ -1524,6 +1637,7 @@ function WorkflowList({
   isBusy,
   onDeleteWorkflow,
   onDuplicateWorkflow,
+  onRenameWorkflow,
   onSelectWorkflow,
   workflows
 }: {
@@ -1532,6 +1646,7 @@ function WorkflowList({
   isBusy: boolean;
   onDeleteWorkflow: (workflowId: string) => void;
   onDuplicateWorkflow: (workflowId: string) => void;
+  onRenameWorkflow: (workflowId: string) => void;
   onSelectWorkflow: (workflowId: string) => void;
   workflows: WorkflowSummary[];
 }) {
@@ -1563,6 +1678,7 @@ function WorkflowList({
                 disabled={isBusy}
                 onDelete={() => onDeleteWorkflow(workflow.id)}
                 onDuplicate={() => onDuplicateWorkflow(workflow.id)}
+                onRename={() => onRenameWorkflow(workflow.id)}
               />
             </div>
           </article>
@@ -1591,11 +1707,13 @@ function WorkflowList({
 function WorkflowCardMenu({
   disabled,
   onDelete,
-  onDuplicate
+  onDuplicate,
+  onRename
 }: {
   disabled: boolean;
   onDelete: () => void;
   onDuplicate: () => void;
+  onRename: () => void;
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
@@ -1645,6 +1763,17 @@ function WorkflowCardMenu({
             disabled={disabled}
             onClick={() => {
               setIsOpen(false);
+              onRename();
+            }}
+            type="button"
+          >
+            Rename
+          </button>
+          <button
+            className="flex w-full items-center rounded-md px-2.5 py-2 text-left text-sm text-ink transition hover:bg-black/[0.04] disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={disabled}
+            onClick={() => {
+              setIsOpen(false);
               onDuplicate();
             }}
             type="button"
@@ -1680,6 +1809,26 @@ function ThreeDotsVerticalIcon() {
       <circle cx="8" cy="3" fill="currentColor" r="1.1" />
       <circle cx="8" cy="8" fill="currentColor" r="1.1" />
       <circle cx="8" cy="13" fill="currentColor" r="1.1" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-3.5 w-3.5"
+      fill="none"
+      viewBox="0 0 16 16"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M3.5 4.5H12.5M6 2.75H10M5 4.5V11.25C5 11.9404 5.55964 12.5 6.25 12.5H9.75C10.4404 12.5 11 11.9404 11 11.25V4.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.25"
+      />
     </svg>
   );
 }
@@ -1805,8 +1954,11 @@ function finalizeDocument(document: WorkflowDocument): WorkflowDocument {
   return {
     ...document,
     dirty: true,
+    localDraft: document.localDraft,
     positions,
-    summary: summarizeWorkflow(document.id, document.workflow),
+    summary: summarizeWorkflow(document.id, workflow, {
+      localDraft: document.localDraft
+    }),
     workflow,
     yaml: workflowToYaml(workflow)
   };
@@ -1868,8 +2020,86 @@ function errorMessage(error: unknown) {
 }
 
 function persistDocumentLayout(document: WorkflowDocument) {
-  persistWorkflowPositions(document.id, document.positions);
+  if (!document.localDraft) {
+    persistWorkflowPositions(document.id, document.positions);
+  }
   return document;
+}
+
+function mergeWorkflowSummaries(
+  documents: Record<string, WorkflowDocument>,
+  persistedWorkflows: WorkflowSummary[]
+) {
+  const workflowMap = new Map(
+    persistedWorkflows.map((workflow) => [workflow.id, { ...workflow }])
+  );
+
+  for (const document of Object.values(documents)) {
+    if (!document.localDraft) {
+      continue;
+    }
+    workflowMap.set(document.id, document.summary);
+  }
+
+  return Array.from(workflowMap.values()).sort((left, right) =>
+    left.file_name.localeCompare(right.file_name)
+  );
+}
+
+function nextDraftWorkflowId(workflows: WorkflowSummary[]) {
+  const existingIds = new Set(workflows.map((workflow) => workflow.id));
+  let index = 1;
+  while (existingIds.has(`untitled-workflow-${index}`)) {
+    index += 1;
+  }
+  return `untitled-workflow-${index}`;
+}
+
+function nextSelectableWorkflowId(
+  workflows: WorkflowSummary[],
+  preferredWorkflowId: string | null
+) {
+  return (
+    workflows.find((workflow) => workflow.id === preferredWorkflowId)?.id ??
+    workflows[0]?.id ??
+    null
+  );
+}
+
+function saveDisabledMessage(activeWorkflow: WorkflowDocument | null) {
+  if (!activeWorkflow) {
+    return "Select a workflow before saving.";
+  }
+  if (!workflowHasRunnableSteps(activeWorkflow.workflow)) {
+    return "Add at least one step before saving this workflow.";
+  }
+  return null;
+}
+
+function runDisabledMessage(activeWorkflow: WorkflowDocument | null) {
+  if (!activeWorkflow) {
+    return "Select a workflow before running it.";
+  }
+  if (!workflowHasRunnableSteps(activeWorkflow.workflow)) {
+    return "Add at least one step before saving or running this workflow.";
+  }
+  if (activeWorkflow.localDraft) {
+    return "Save this draft before running it.";
+  }
+  return null;
+}
+
+function workflowDraftNotice(activeWorkflow: WorkflowDocument | null) {
+  if (!activeWorkflow) {
+    return null;
+  }
+  if (!workflowHasRunnableSteps(activeWorkflow.workflow)) {
+    return "Add the first step to this workflow. Save and Run stay disabled until the canvas has at least one step.";
+  }
+  if (activeWorkflow.localDraft) {
+    return `Save this draft to create ${activeWorkflow.summary.file_name} and enable runs.`;
+  }
+  return null;
 }
 
 function readStoredWorkflowPositions(workflowId: string) {

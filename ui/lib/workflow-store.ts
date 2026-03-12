@@ -26,8 +26,7 @@ import {
   type StepTypeEntry,
   type TriggerTypeEntry,
   type WorkflowDocument,
-  type WorkflowSummary,
-  TRIGGER_NODE_ID
+  type WorkflowSummary
 } from "./workflow-editor";
 
 type Updater<T> = T | ((current: T) => T);
@@ -83,7 +82,7 @@ const initialWorkflowState: WorkflowState = {
   newStepType: "noop",
   pendingTasks: [],
   runStatus: null,
-  selectedNodeId: TRIGGER_NODE_ID,
+  selectedNodeId: null,
   stepCatalog: [],
   stepParamsDraft: "{}",
   taskValues: {},

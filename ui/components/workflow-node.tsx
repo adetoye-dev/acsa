@@ -44,24 +44,7 @@ export const WorkflowNode = memo(function WorkflowNode({
 
   return (
     <div className={containerClassName(data.kind, selected, state)}>
-      {selected && data.kind === "step" ? (
-        <div className="mb-2 flex justify-end">
-          <button
-            aria-label={`Delete ${data.label}`}
-            className="flex h-7 w-7 items-center justify-center rounded-lg border border-black/10 bg-black/[0.03] text-slate/70 transition hover:border-ember/25 hover:bg-ember/5 hover:text-ember"
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              data.onDelete?.(data.nodeId);
-            }}
-            type="button"
-          >
-            <TrashIcon />
-          </button>
-        </div>
-      ) : null}
-
-      <div className="node-drag-handle mb-3 flex cursor-grab items-center justify-between rounded-xl border border-black/10 bg-black/[0.03] px-3 py-2 active:cursor-grabbing">
+      <div className="mb-3 flex cursor-grab items-center justify-between rounded-xl border border-black/10 bg-black/[0.03] px-3 py-2 active:cursor-grabbing">
         <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate/60">
           {data.kind === "trigger" ? "Trigger" : "Step"}
         </span>
@@ -142,8 +125,8 @@ function containerClassName(
   state: NodeExecutionState
 ) {
   const base =
-    "min-w-[240px] rounded-2xl border bg-white px-4 py-3 shadow-none transition duration-150";
-  const selectedState = selected ? "ring-1 ring-ink/15" : "";
+    "min-w-[240px] cursor-grab rounded-2xl border bg-white px-4 py-3 shadow-none transition duration-150 active:cursor-grabbing";
+  const selectedState = selected ? "border-tide/60 ring-2 ring-tide/15" : "";
   const kindStateDefault =
     kind === "trigger"
       ? "border-ink/20 bg-[#f8f5ef]"
@@ -151,15 +134,15 @@ function containerClassName(
 
   switch (state) {
     case "running":
-      return `${base} ${selectedState} border-tide/45 bg-tide/5`;
+      return `${base} ${selected ? selectedState : "border-tide/45"} bg-tide/5`;
     case "success":
-      return `${base} ${selectedState} border-emerald-500/35 bg-emerald-500/5`;
+      return `${base} ${selected ? selectedState : "border-emerald-500/35"} bg-emerald-500/5`;
     case "failed":
-      return `${base} ${selectedState} border-ember/45 bg-ember/5`;
+      return `${base} ${selected ? selectedState : "border-ember/45"} bg-ember/5`;
     case "paused":
-      return `${base} ${selectedState} border-amber-500/45 bg-amber-500/5`;
+      return `${base} ${selected ? selectedState : "border-amber-500/45"} bg-amber-500/5`;
     case "skipped":
-      return `${base} ${selectedState} border-black/10 bg-black/[0.03]`;
+      return `${base} ${selected ? selectedState : "border-black/10"} bg-black/[0.03]`;
     default:
       return `${base} ${selectedState} ${kindStateDefault}`;
   }
@@ -170,24 +153,4 @@ function formatToken(value?: string | null) {
     return "built in";
   }
   return value.replace(/[_-]+/g, " ");
-}
-
-function TrashIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="h-3.5 w-3.5"
-      fill="none"
-      viewBox="0 0 16 16"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path
-        d="M3.5 4.5H12.5M6 2.75H10M5 4.5V11.25C5 11.9404 5.55964 12.5 6.25 12.5H9.75C10.4404 12.5 11 11.9404 11 11.25V4.5"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.25"
-      />
-    </svg>
-  );
 }

@@ -111,6 +111,14 @@ struct DuplicateWorkflowRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct RenameWorkflowRequest {
+    name: String,
+    target_id: String,
+    #[serde(default)]
+    yaml: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct RunWorkflowRequest {
     #[serde(default)]
     payload: Option<Value>,
@@ -380,6 +388,7 @@ pub async fn serve(
             get(get_workflow).put(save_workflow).delete(delete_workflow),
         )
         .route("/api/workflows/{workflow_id}/duplicate", post(duplicate_workflow))
+        .route("/api/workflows/{workflow_id}/rename", post(rename_workflow))
         .route("/api/workflows/{workflow_id}/run", post(run_workflow))
         .route("/human-tasks", get(list_pending_human_tasks))
         .route("/human-tasks/{task_id}/resolve", post(resolve_human_task))
@@ -738,6 +747,17 @@ async fn duplicate_workflow(
     }
 }
 
+async fn rename_workflow(
+    State(state): State<AppState>,
+    AxumPath(workflow_id): AxumPath<String>,
+    Json(request): Json<RenameWorkflowRequest>,
+) -> axum::response::Response {
+    match rename_workflow_document(&state.workflows_dir, &workflow_id, request) {
+        Ok(document) => (StatusCode::OK, Json(json!(document))).into_response(),
+        Err(error) => workflow_error_response(error),
+    }
+}
+
 async fn run_workflow(
     State(state): State<AppState>,
     AxumPath(workflow_id): AxumPath<String>,
@@ -947,6 +967,45 @@ fn duplicate_workflow_document(
     }
 
     write_workflow_file(&target_path, &document_state)
+}
+
+fn rename_workflow_document(
+    workflows_dir: &Path,
+    workflow_id: &str,
+    request: RenameWorkflowRequest,
+) -> Result<WorkflowDocumentResponse, TriggerError> {
+    let next_name = request.name.trim();
+    if next_name.is_empty() {
+        return Err(TriggerError::InvalidWorkflowYaml {
+            message: "workflow name must not be empty".to_string(),
+        });
+    }
+
+    let mut document_state = match request.yaml.as_deref() {
+        Some(yaml) => parse_workflow_document_state(yaml)?,
+        None => {
+            let source_document = read_workflow_document(workflows_dir, workflow_id)?;
+            parse_workflow_document_state(&source_document.yaml)?
+        }
+    };
+    document_state.workflow.name = next_name.to_string();
+
+    let source_path = workflow_file_path(workflows_dir, workflow_id)?;
+    if !source_path.exists() {
+        return Err(TriggerError::WorkflowNotFound { workflow_id: workflow_id.to_string() });
+    }
+
+    let target_path = workflow_file_path(workflows_dir, &request.target_id)?;
+    if request.target_id != workflow_id && target_path.exists() {
+        return Err(TriggerError::WorkflowAlreadyExists { workflow_id: request.target_id });
+    }
+
+    let response = write_workflow_file(&target_path, &document_state)?;
+    if source_path != target_path {
+        fs::remove_file(source_path)?;
+    }
+
+    Ok(response)
 }
 
 fn is_builtin_step_type(type_name: &str) -> bool {
@@ -1919,8 +1978,9 @@ mod tests {
 
     use super::{
         authenticate_webhook, compute_signature, cron_schedule, parse_workflow_document_state,
-        serialize_workflow_yaml, slugify_workflow_name, validate_secret_value, workflow_file_path,
-        TriggerError, WebhookSignatureAuth, WebhookWorkflow,
+        rename_workflow_document, serialize_workflow_yaml, slugify_workflow_name,
+        validate_secret_value, workflow_file_path, RenameWorkflowRequest, TriggerError,
+        WebhookSignatureAuth, WebhookWorkflow,
     };
     use crate::{
         engine::compile_workflow,
@@ -2092,6 +2152,101 @@ ui:
         assert!(yaml.contains("- start"));
     }
 
+    #[test]
+    fn renames_workflow_file_and_name_together() {
+        let temp_dir = write_temp_directory("rename");
+        let workflow_path = temp_dir.join("draft.yaml");
+        std::fs::write(
+            &workflow_path,
+            r#"
+version: v1
+name: draft
+trigger:
+  type: manual
+steps:
+  - id: first
+    type: constant
+    params:
+      value: 1
+    next: []
+"#,
+        )
+        .expect("workflow should be written");
+
+        let response = rename_workflow_document(
+            &temp_dir,
+            "draft",
+            RenameWorkflowRequest {
+                name: "Customer intake".to_string(),
+                target_id: "customer-intake".to_string(),
+                yaml: None,
+            },
+        )
+        .expect("rename should succeed");
+
+        assert_eq!(response.id, "customer-intake");
+        assert_eq!(response.summary.file_name, "customer-intake.yaml");
+        assert_eq!(response.summary.name, "Customer intake");
+        assert!(!workflow_path.exists());
+        let renamed_yaml = std::fs::read_to_string(temp_dir.join("customer-intake.yaml"))
+            .expect("renamed workflow should exist");
+        assert!(renamed_yaml.contains("name: Customer intake"));
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn rename_uses_supplied_yaml_when_present() {
+        let temp_dir = write_temp_directory("rename-yaml");
+        let workflow_path = temp_dir.join("draft.yaml");
+        std::fs::write(
+            &workflow_path,
+            r#"
+version: v1
+name: original
+trigger:
+  type: manual
+steps:
+  - id: first
+    type: constant
+    params:
+      value: 1
+    next: []
+"#,
+        )
+        .expect("workflow should be written");
+
+        let response = rename_workflow_document(
+            &temp_dir,
+            "draft",
+            RenameWorkflowRequest {
+                name: "Updated draft".to_string(),
+                target_id: "updated-draft".to_string(),
+                yaml: Some(
+                    r#"
+version: v1
+name: ignored
+trigger:
+  type: manual
+steps:
+  - id: first
+    type: constant
+    params:
+      value: 99
+    next: []
+"#
+                    .to_string(),
+                ),
+            },
+        )
+        .expect("rename should succeed");
+
+        assert_eq!(response.summary.name, "Updated draft");
+        assert!(response.yaml.contains("value: 99"));
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
     fn signed_webhook(secret: &str) -> WebhookWorkflow {
         let plan = compile_workflow(Workflow {
             version: "v1".to_string(),
@@ -2120,5 +2275,14 @@ ui:
             }),
             token_auth: None,
         }
+    }
+
+    fn write_temp_directory(prefix: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "acsa-trigger-tests-{prefix}-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp directory should be created");
+        dir
     }
 }

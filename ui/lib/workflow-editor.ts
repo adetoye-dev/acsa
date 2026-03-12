@@ -63,6 +63,7 @@ export type WorkflowSummary = {
   file_name: string;
   has_connector_steps: boolean;
   id: string;
+  local_draft?: boolean;
   name: string;
   step_count: number;
   trigger_type: string;
@@ -154,6 +155,7 @@ export type CanvasNode = Node<CanvasNodeData>;
 export type WorkflowDocument = {
   dirty: boolean;
   id: string;
+  localDraft: boolean;
   positions: Record<string, XYPosition>;
   summary: WorkflowSummary;
   workflow: WorkflowDefinition;
@@ -194,14 +196,7 @@ export function createBlankWorkflow(workflowId: string): WorkflowDefinition {
   const normalizedId = slugifyIdentifier(workflowId || "workflow");
   return {
     name: normalizedId.replace(/-/g, " "),
-    steps: [
-      {
-        id: "start",
-        next: [],
-        params: defaultStepParamsForType("constant"),
-        type: "constant"
-      }
-    ],
+    steps: [],
     trigger: {
       type: "manual",
       ...defaultTriggerDetailsForType("manual", normalizedId)
@@ -236,6 +231,20 @@ export function defaultTriggerDetailsForType(
 export function describeWorkflow(workflow: WorkflowDefinition): string {
   const stepLabel = workflow.steps.length === 1 ? "step" : "steps";
   return `${workflow.trigger.type} trigger, ${workflow.steps.length} ${stepLabel}`;
+}
+
+export function createLocalWorkflowDocument(workflowId: string): WorkflowDocument {
+  const workflow = createBlankWorkflow(workflowId);
+  const normalizedId = slugifyIdentifier(workflowId || "workflow");
+  return {
+    dirty: true,
+    id: normalizedId,
+    localDraft: true,
+    positions: {},
+    summary: summarizeWorkflow(normalizedId, workflow, { localDraft: true }),
+    workflow,
+    yaml: workflowToYaml(workflow)
+  };
 }
 
 export function extractTriggerDetails(trigger: TriggerDefinition): Record<string, unknown> {
@@ -330,13 +339,15 @@ export function slugifyIdentifier(value: string): string {
 
 export function summarizeWorkflow(
   workflowId: string,
-  workflow: WorkflowDefinition
+  workflow: WorkflowDefinition,
+  options?: { localDraft?: boolean }
 ): WorkflowSummary {
   return {
     description: describeWorkflow(workflow),
     file_name: `${workflowId}.yaml`,
     has_connector_steps: workflow.steps.some((step) => !isBuiltInStepType(step.type)),
     id: workflowId,
+    ...(options?.localDraft ? { local_draft: true } : {}),
     name: workflow.name,
     step_count: workflow.steps.length,
     trigger_type: workflow.trigger.type
@@ -419,6 +430,7 @@ export function workflowDocumentFromResponse(
   return {
     dirty: false,
     id: response.id,
+    localDraft: false,
     positions: {
       ...yamlPositions,
       ...(existing?.positions ?? {}),
@@ -451,12 +463,11 @@ export function workflowToCanvas(
   const triggerPos = positions[TRIGGER_NODE_ID] ?? nextPositions[TRIGGER_NODE_ID] ?? { x: 80, y: 200 };
   const nodes: CanvasNode[] = [
     {
-      dragHandle: ".node-drag-handle",
       id: TRIGGER_NODE_ID,
       position: triggerPos,
       type: "workflowNode",
       data: {
-        description: "Workflow trigger definition. Edit trigger settings in the inspector.",
+        description: "Workflow entrypoint. Select it to configure trigger settings.",
         detached: false,
         kind: "trigger",
         label: workflow.name,
@@ -476,7 +487,6 @@ export function workflowToCanvas(
     nextPositions[step.id] = position;
     const catalogEntry = stepLookup.get(step.type);
     nodes.push({
-      dragHandle: ".node-drag-handle",
       id: step.id,
       position,
       type: "workflowNode",
@@ -543,6 +553,10 @@ export function workflowToCanvas(
 
 export function workflowToYaml(workflow: WorkflowDefinition): string {
   return YAML.stringify(cleanWorkflow(workflow)).trim();
+}
+
+export function workflowHasRunnableSteps(workflow: WorkflowDefinition): boolean {
+  return workflow.steps.length > 0;
 }
 
 export function autoLayoutWorkflow(workflow: WorkflowDefinition): Record<string, XYPosition> {

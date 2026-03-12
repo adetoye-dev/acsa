@@ -24,9 +24,7 @@ import { YamlEditor } from "./yaml-editor";
 
 type NodeInspectorProps = {
   activeWorkflow: WorkflowDocument | null;
-  embedded?: boolean;
   inspectorError: string | null;
-  onSelectedNodeIdChange: (value: string) => void;
   onSelectedNodeParamsChange: (value: string) => void;
   onSelectedNodeRetryAttemptsChange: (value: string) => void;
   onSelectedNodeRetryBackoffChange: (value: string) => void;
@@ -34,21 +32,16 @@ type NodeInspectorProps = {
   onSelectedNodeTypeChange: (value: string) => void;
   onTriggerDetailsChange: (value: string) => void;
   onTriggerTypeChange: (value: string) => void;
-  onWorkflowNameChange: (value: string) => void;
   selectedNode: CanvasNode | null;
-  showYamlPreview?: boolean;
   stepCatalog: StepTypeEntry[];
   stepParamsDraft: string;
   triggerCatalog: TriggerTypeEntry[];
   triggerDetailsDraft: string;
-  workflowYaml: string;
 };
 
 export function NodeInspector({
   activeWorkflow,
-  embedded = false,
   inspectorError,
-  onSelectedNodeIdChange,
   onSelectedNodeParamsChange,
   onSelectedNodeRetryAttemptsChange,
   onSelectedNodeRetryBackoffChange,
@@ -56,14 +49,11 @@ export function NodeInspector({
   onSelectedNodeTypeChange,
   onTriggerDetailsChange,
   onTriggerTypeChange,
-  onWorkflowNameChange,
   selectedNode,
-  showYamlPreview = true,
   stepCatalog,
   stepParamsDraft,
   triggerCatalog,
-  triggerDetailsDraft,
-  workflowYaml
+  triggerDetailsDraft
 }: NodeInspectorProps) {
   const selectedStep =
     selectedNode?.data.kind === "step"
@@ -72,42 +62,27 @@ export function NodeInspector({
   const selectedStepIsDetached =
     selectedStep !== null &&
     (activeWorkflow?.workflow.ui?.detached_steps ?? []).includes(selectedStep.id);
-  const triggerSelected = selectedNode?.data.kind === "trigger" || !selectedNode;
-  const showWorkflowSection = !embedded || !selectedStep;
-  const showSecretPolicy = !embedded;
+  const triggerSelected = selectedNode?.data.kind === "trigger";
 
-  const content = (
+  if (!activeWorkflow || !selectedNode) {
+    return (
+      <div className="rounded-2xl border border-dashed border-black/10 bg-white/70 px-4 py-5 text-sm leading-6 text-slate">
+        Select a node on the canvas to configure it here.
+      </div>
+    );
+  }
+
+  return (
     <div className="space-y-3">
-      {showWorkflowSection ? (
-        <section className="ui-panel-card p-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <label
-              className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62"
-              htmlFor="workflow-name"
-            >
-              Workflow
-            </label>
-            {activeWorkflow ? <span className="ui-meta">{activeWorkflow.summary.file_name}</span> : null}
-          </div>
-          <input
-            className="ui-input"
-            id="workflow-name"
-            onChange={(event) => onWorkflowNameChange(event.target.value)}
-            type="text"
-            value={activeWorkflow?.workflow.name ?? ""}
-          />
-        </section>
-      ) : null}
-
-      {triggerSelected && activeWorkflow ? (
+      {triggerSelected ? (
         <section className="ui-panel-card p-3">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62">
                 Trigger
               </div>
-              <div className="mt-1 text-base font-semibold text-ink">
-                {activeWorkflow.workflow.trigger.type}
+              <div className="mt-1 text-sm text-slate">
+                Configure how this workflow starts.
               </div>
             </div>
             <span className="ui-badge">Entrypoint</span>
@@ -140,7 +115,7 @@ export function NodeInspector({
           </label>
           <YamlEditor
             id="trigger-details"
-            minHeight={160}
+            minHeight={168}
             onChange={onTriggerDetailsChange}
             value={triggerDetailsDraft}
           />
@@ -152,31 +127,16 @@ export function NodeInspector({
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62">
-                Selected step
+                Step configuration
               </div>
-              <div className="mt-1 flex items-center gap-2">
-                <div className="text-base font-semibold text-ink">{selectedStep.id}</div>
-                {selectedStepIsDetached ? <span className="ui-badge">Detached</span> : null}
+              <div className="mt-1 text-sm text-slate">
+                Tune runtime behavior and parameters for this step.
               </div>
             </div>
+            {selectedStepIsDetached ? <span className="ui-badge">Detached</span> : null}
           </div>
 
           <div className="mt-4 grid gap-3">
-            <div>
-              <label
-                className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62"
-                htmlFor="step-id"
-              >
-                Step id
-              </label>
-              <input
-                className="ui-input font-mono"
-                id="step-id"
-                onChange={(event) => onSelectedNodeIdChange(event.target.value)}
-                type="text"
-                value={selectedStep.id}
-              />
-            </div>
             <div>
               <label
                 className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62"
@@ -259,7 +219,7 @@ export function NodeInspector({
           </label>
           <YamlEditor
             id="step-params"
-            minHeight={180}
+            minHeight={208}
             onChange={onSelectedNodeParamsChange}
             value={stepParamsDraft}
           />
@@ -271,47 +231,7 @@ export function NodeInspector({
           {inspectorError}
         </div>
       ) : null}
-
-      {showSecretPolicy ? (
-        <div className="ui-panel-card p-3 text-sm leading-6 text-slate">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62">
-            Secret policy
-          </div>
-          <p className="mt-2">
-            Reference secrets through environment-backed fields such as
-            <code className="mx-1 rounded bg-sand px-1.5 py-0.5 text-ember">secret_env</code>,
-            <code className="mx-1 rounded bg-sand px-1.5 py-0.5 text-ember">token_env</code>, or
-            <code className="mx-1 rounded bg-sand px-1.5 py-0.5 text-ember">secrets_env</code>.
-          </p>
-        </div>
-      ) : null}
-
-      {showYamlPreview ? (
-        <div className="rounded-2xl border border-black/10 bg-ink p-3 text-white">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/65">
-            YAML preview
-          </div>
-          <pre className="mt-2 overflow-x-auto whitespace-pre-wrap font-mono text-xs leading-6 text-mist">
-            {workflowYaml}
-          </pre>
-        </div>
-      ) : null}
     </div>
-  );
-
-  if (embedded) {
-    return content;
-  }
-
-  return (
-    <aside className="panel-surface overflow-hidden">
-      <div className="border-b border-black/10 px-4 py-4">
-        <p className="section-kicker">Inspector</p>
-        <h2 className="section-title mt-1">Workflow and node details</h2>
-      </div>
-
-      <div className="px-4 py-4">{content}</div>
-    </aside>
   );
 }
 

@@ -22,9 +22,13 @@ type TopBarProps = {
   hasUnsavedChanges: boolean;
   isRunning: boolean;
   isSaving: boolean;
+  runDisabled: boolean;
+  runDisabledReason?: string | null;
   onRefresh: () => void;
   onRun: () => void;
   onSave: () => void;
+  saveDisabled: boolean;
+  saveDisabledReason?: string | null;
   runStatus: string | null;
 };
 
@@ -34,9 +38,13 @@ export function TopBar({
   hasUnsavedChanges,
   isRunning,
   isSaving,
+  runDisabled,
+  runDisabledReason,
   onRefresh,
   onRun,
   onSave,
+  saveDisabled,
+  saveDisabledReason,
   runStatus
 }: TopBarProps) {
   return (
@@ -50,19 +58,15 @@ export function TopBar({
             <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate/55">
               Workflow studio
             </div>
-            <div className="flex min-w-0 items-center gap-2">
-              <div className="truncate text-[15px] font-semibold text-ink">
-                {activeWorkflowName}
-              </div>
-              {hasUnsavedChanges ? (
-                <ShellBadge label="unsaved" tone="warn" />
-              ) : null}
+            <div className="mt-0.5 truncate text-[15px] font-semibold text-ink">
+              {activeWorkflowName}
             </div>
           </div>
         </div>
 
-        <div className="hidden items-center gap-2 xl:flex">
+        <div className="hidden min-w-0 flex-1 items-center justify-center gap-2 lg:flex">
           <ShellBadge label={activeWorkflowFile} tone="neutral" />
+          {hasUnsavedChanges ? <ShellBadge label="unsaved" tone="warn" /> : null}
           {runStatus ? <ShellBadge label={runStatus} tone="warn" /> : null}
         </div>
 
@@ -70,13 +74,20 @@ export function TopBar({
           <button className="ui-button" onClick={onRefresh} type="button">
             Refresh
           </button>
-          <button className="ui-button" disabled={isSaving} onClick={onSave} type="button">
+          <button
+            className="ui-button"
+            disabled={saveDisabled}
+            onClick={onSave}
+            title={saveDisabledReason ?? undefined}
+            type="button"
+          >
             {isSaving ? "Saving..." : "Save"}
           </button>
           <button
             className="ui-button ui-button-primary"
-            disabled={isRunning}
+            disabled={runDisabled}
             onClick={onRun}
+            title={runDisabledReason ?? undefined}
             type="button"
           >
             {isRunning ? "Running..." : "Run"}
