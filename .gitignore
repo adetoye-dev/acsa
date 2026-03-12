@@ -19,3 +19,5 @@ ui/out
 *.wasm
 *.tsbuildinfo
 data/demo/output/
+acsa_agent_system/
+acsa_blueprint/
