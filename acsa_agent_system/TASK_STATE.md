@@ -43,7 +43,7 @@ Last updated: 2026-03-11
 - Added bounded concurrent execution, retry handling, and per-step timeout control
 - Added SQLite-backed `runs`, `step_runs`, and `logs` tables with restart cleanup
 - Extended the CLI with `validate`, `list`, and `run` commands
-- Added an executable sample DAG workflow at `workflows/manual-demo.yaml`
+- Added an executable sample DAG workflow, now retained under `examples/workflow-samples/manual-demo.yaml`
 - Ran Rust tests, clippy, CLI execution checks, and a clean Cargo audit for the Phase 3 engine
 - Added built-in logic nodes for `condition`, `switch`, `loop`, and `parallel`
 - Added integration nodes for HTTP requests, database queries, and file read/write under a restricted data directory
@@ -111,10 +111,11 @@ Last updated: 2026-03-11
 - Top-level implementation directories now exist: `core/`, `ui/`, `connectors/`, `workflows/`, `docs/`, and `examples/`
 - Rust workspace and UI dependency lockfiles have been generated
 - `workflows/hello.yaml` is the baseline sample workflow used by the CLI
-- `workflows/manual-demo.yaml` is the baseline executable DAG sample used by the engine CLI
-- `workflows/conditional-demo.yaml` is the Phase 4 branching sample for manual execution
-- `workflows/webhook-demo.yaml` is the Phase 4 authenticated webhook sample for the trigger server
-- `workflows/approval-demo.yaml` is the persisted pause/resume sample for human approval flows
+- `workflows/ai-news-intelligence-demo.yaml` is the live flagship demo surfaced in the UI and CLI
+- `examples/workflow-samples/manual-demo.yaml` is the legacy executable DAG sample
+- `examples/workflow-samples/conditional-demo.yaml` is the legacy branching sample
+- `examples/workflow-samples/webhook-demo.yaml` is the legacy authenticated webhook sample
+- `examples/workflow-samples/approval-demo.yaml` is the legacy pause/resume human approval sample
 - `examples/process-connector/` is the subprocess connector sample used by `connector-test`
 - `examples/wasm-plugin/` is the starter Extism/WASM connector template
 - Phase 2 CI workflow is present under `.github/workflows/ci.yml`

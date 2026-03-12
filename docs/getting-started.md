@@ -21,8 +21,8 @@ Use these commands in order if you are trying Acsa for the first time:
 # Validate the smallest workflow
 cargo run -p acsa-core -- validate workflows/hello.yaml
 
-# Run a local manual workflow and write SQLite state
-cargo run -p acsa-core -- run workflows/manual-demo.yaml --db ./acsa.db
+# Validate the flagship AI news demo
+cargo run -p acsa-core -- validate workflows/ai-news-intelligence-demo.yaml
 
 # Run the built-in connector example with working defaults
 cargo run -p acsa-core -- connector-test
@@ -40,7 +40,8 @@ If you want the full engine + UI stack immediately:
 cargo run -p acsa-core -- validate workflows/hello.yaml
 cargo run -p acsa-core -- list workflows
 cargo run -p acsa-core -- --version
-cargo run -p acsa-core -- run workflows/conditional-demo.yaml --db ./acsa.db
+# Requires the demo env vars shown in README.md
+cargo run -p acsa-core -- run workflows/ai-news-intelligence-demo.yaml --db ./acsa.db
 ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
 cargo run -p acsa-core -- connector-test
 ```
@@ -61,7 +62,7 @@ Automation-friendly variants:
 ```bash
 cargo run -p acsa-core -- validate workflows/hello.yaml --json
 cargo run -p acsa-core -- list workflows --json
-cargo run -p acsa-core -- run workflows/manual-demo.yaml --db ./acsa.db --json
+cargo run -p acsa-core -- run workflows/ai-news-intelligence-demo.yaml --db ./acsa.db --json
 ```
 
 ## Install a packaged binary
@@ -131,10 +132,11 @@ Useful environment variables:
 ## Workflow samples
 
 - `workflows/hello.yaml`: cron-triggered validation sample
-- `workflows/manual-demo.yaml`: manual DAG sample for local execution
-- `workflows/conditional-demo.yaml`: manual branching sample using the `condition` node
-- `workflows/webhook-demo.yaml`: authenticated webhook sample for `acsa-core serve`
-- `workflows/approval-demo.yaml`: resumable approval sample that pauses until a reviewer responds
+- `workflows/ai-news-intelligence-demo.yaml`: the UI-visible demo that builds and emails an AI news intelligence brief from live public sources
+- `examples/workflow-samples/manual-demo.yaml`: legacy manual DAG sample
+- `examples/workflow-samples/conditional-demo.yaml`: legacy branching sample using the `condition` node
+- `examples/workflow-samples/webhook-demo.yaml`: legacy authenticated webhook sample for `acsa-core serve`
+- `examples/workflow-samples/approval-demo.yaml`: legacy resumable approval sample
 
 ## Webhook example
 
@@ -172,10 +174,10 @@ curl \
 
 ```bash
 # Terminal 1: Start the HTTP server
-ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
+ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve examples/workflow-samples --db ./acsa.db --port 3001
 
 # Terminal 2: Run the workflow
-cargo run -p acsa-core -- run workflows/approval-demo.yaml --db ./acsa.db
+cargo run -p acsa-core -- run examples/workflow-samples/approval-demo.yaml --db ./acsa.db
 
 # Check pending tasks and resolve
 curl http://127.0.0.1:3001/human-tasks

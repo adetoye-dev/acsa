@@ -1,0 +1,25 @@
+{
+  "name": "Git Release Snapshot",
+  "type": "git_release_snapshot",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "outputs": [
+    "area_counts",
+    "branch",
+    "changed_files",
+    "diff_stats",
+    "dirty",
+    "dirty_file_count",
+    "head_sha",
+    "recent_commits",
+    "recommended_checks",
+    "repo_name",
+    "repo_root",
+    "risk_level",
+    "risk_reasons",
+    "top_areas"
+  ],
+  "limits": {
+    "timeout": 3000
+  }
+}

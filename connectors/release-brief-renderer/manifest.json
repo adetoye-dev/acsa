@@ -1,0 +1,20 @@
+{
+  "name": "Release Brief Renderer",
+  "type": "release_brief_renderer",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "inputs": [
+    "repo_context",
+    "review_before_release",
+    "clean_candidate",
+    "high_risk_lane",
+    "standard_risk_lane"
+  ],
+  "outputs": [
+    "markdown",
+    "summary_line"
+  ],
+  "limits": {
+    "timeout": 3000
+  }
+}

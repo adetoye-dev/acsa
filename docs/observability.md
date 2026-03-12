@@ -4,7 +4,7 @@
 
 - `GET /metrics`
   - Returns Prometheus-style counters, gauges, and histograms for workflow runs and step attempts.
-- `GET /api/runs?page=1&page_size=12&status=success&workflow_name=manual-demo`
+- `GET /api/runs?page=1&page_size=12&status=success&workflow_name=ai-news-intelligence-demo`
   - Returns paginated run history with optional status and workflow filters.
 - `GET /api/runs/{run_id}`
   - Returns run metadata, step attempts, and any human tasks tied to the run.

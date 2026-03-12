@@ -53,14 +53,44 @@ Run the fastest happy-path commands first:
 # 1. Validate the smallest workflow
 cargo run -p acsa-core -- validate workflows/hello.yaml
 
-# 2. Execute a local DAG and persist run state
-cargo run -p acsa-core -- run workflows/manual-demo.yaml --db ./acsa.db
+# 2. Validate the flagship AI news demo
+cargo run -p acsa-core -- validate workflows/ai-news-intelligence-demo.yaml
 
 # 3. Exercise the sample connector without creating anything first
 cargo run -p acsa-core -- connector-test
 ```
 
-Those three commands cover schema validation, workflow execution, and connector execution with working defaults.
+Those three commands cover workspace bootstrap, workflow validation, and connector execution with working defaults.
+
+## Demo
+
+If you want the fastest explanation of why Acsa exists, run the AI news intelligence demo:
+
+```bash
+export OPENAI_API_KEY="YOUR_OPENAI_KEY"
+export ACSA_DEMO_EMAIL_TO="you@example.com"
+export ACSA_SMTP_HOST="smtp.example.com"
+export ACSA_SMTP_PORT="587"
+export ACSA_SMTP_USERNAME="smtp-user"
+export ACSA_SMTP_PASSWORD="smtp-password"
+export ACSA_SMTP_FROM="acsa-demo@example.com"
+# Optional. Defaults to `auto` and chooses `ssl` for port 465, `starttls` otherwise.
+export ACSA_SMTP_TLS="auto"
+
+cargo run -p acsa-core -- validate workflows/ai-news-intelligence-demo.yaml
+cargo run -p acsa-core -- run workflows/ai-news-intelligence-demo.yaml --db ./acsa-demo.db --json
+cat data/demo/output/ai-news-intelligence-brief.md
+```
+
+What it shows in one pass:
+
+- live public AI/news input from official feeds plus Hacker News
+- YAML workflow-as-code checked into Git
+- real synthesis through the built-in OpenAI node
+- secure subprocess connectors for source normalization and SMTP delivery
+- a local archive plus delivered email as the final workflow outcome
+
+See [examples/demo/README.md](examples/demo/README.md) for the full walkthrough and the example output.
 
 For the full local stack, run:
 
@@ -76,7 +106,8 @@ Rust is required to build and run the engine.
 cargo run -p acsa-core -- validate workflows/hello.yaml
 cargo run -p acsa-core -- list workflows
 cargo run -p acsa-core -- --version
-cargo run -p acsa-core -- run workflows/manual-demo.yaml --db ./acsa.db
+# Requires the demo env vars shown in the Demo section above
+cargo run -p acsa-core -- run workflows/ai-news-intelligence-demo.yaml --db ./acsa.db
 ACSA_WEBHOOK_SECRET=YOUR_SECRET_HERE cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
 cargo run -p acsa-core -- connector-test
 ```

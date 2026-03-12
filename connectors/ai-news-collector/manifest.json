@@ -1,0 +1,20 @@
+{
+  "name": "AI News Collector",
+  "type": "ai_news_collector",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "outputs": [
+    "generated_at",
+    "item_count",
+    "prompt",
+    "quiet_day",
+    "ranked_items",
+    "source_results",
+    "sources_failed",
+    "sources_succeeded",
+    "subject_hint"
+  ],
+  "limits": {
+    "timeout": 60000
+  }
+}

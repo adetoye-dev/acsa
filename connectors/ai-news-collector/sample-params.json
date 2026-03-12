@@ -1,0 +1,38 @@
+{
+  "product_name": "Acsa",
+  "rss_sources": [
+    {
+      "fixture_path": "fixtures/openai.xml",
+      "name": "OpenAI"
+    },
+    {
+      "fixture_path": "fixtures/anthropic.xml",
+      "name": "Anthropic"
+    },
+    {
+      "fixture_path": "fixtures/huggingface.xml",
+      "name": "Hugging Face"
+    },
+    {
+      "fixture_path": "fixtures/google-ai.xml",
+      "name": "Google AI"
+    }
+  ],
+  "hn": {
+    "fixture_path": "fixtures/hn.json",
+    "keywords": [
+      "ai",
+      "openai",
+      "anthropic",
+      "claude",
+      "gpt",
+      "model",
+      "agent",
+      "inference"
+    ],
+    "max_matches": 4
+  },
+  "max_feed_items_per_source": 3,
+  "max_ranked_items": 6,
+  "timeout_secs": 2
+}

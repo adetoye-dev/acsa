@@ -125,7 +125,7 @@ Response shape:
   "pending_tasks": [],
   "run_id": "uuid",
   "status": "success",
-  "workflow_name": "manual-demo"
+  "workflow_name": "ai-news-intelligence-demo"
 }
 ```
 
@@ -236,8 +236,8 @@ const client = axios.create({
   baseURL: "http://127.0.0.1:3001"
 });
 
-const workflow = await client.get("/api/workflows/manual-demo");
-const run = await client.post("/api/workflows/manual-demo/run", {
+const workflow = await client.get("/api/workflows/ai-news-intelligence-demo");
+const run = await client.post("/api/workflows/ai-news-intelligence-demo/run", {
   payload: {
     source: "axios"
   }

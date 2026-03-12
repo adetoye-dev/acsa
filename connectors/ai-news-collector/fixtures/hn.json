@@ -1,0 +1,29 @@
+[
+  {
+    "descendants": 71,
+    "id": 501,
+    "score": 412,
+    "text": "Developers discuss how the new model changes agent evaluation workflows.",
+    "time": 1773300000,
+    "title": "OpenAI launches eval tooling for agent workflows",
+    "url": "https://openai.com/news/agent-evals?utm_source=hn"
+  },
+  {
+    "descendants": 48,
+    "id": 502,
+    "score": 286,
+    "text": "Strong thread on production inference costs and model serving.",
+    "time": 1773300300,
+    "title": "Gemini updates make multimodal developer agents cheaper to run",
+    "url": "https://blog.google/technology/ai/gemini-multimodal-agents"
+  },
+  {
+    "descendants": 12,
+    "id": 503,
+    "score": 55,
+    "text": "Interesting, but not AI related.",
+    "time": 1773300500,
+    "title": "A fast image codec for indie games",
+    "url": "https://example.com/image-codec"
+  }
+]

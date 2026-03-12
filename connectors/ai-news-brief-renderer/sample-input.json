@@ -1,0 +1,5 @@
+{
+  "draft_news_brief": {
+    "content": "# Top developments today\n\n- GPT-Next Mini brings cheaper reasoning for production workflows.\n\n## Why they matter\n\n- Teams can ship agent features with lower latency.\n\n## Signals worth watching\n\n- Eval tooling is becoming a first-class product surface.\n\n## Suggested experiments or follow-ups\n\n- Benchmark your current agent stack against the new model.\n\n## Source links\n\n- https://openai.com/news/gpt-next-mini\n- https://www.anthropic.com/news/claude-code-long-context"
+  }
+}

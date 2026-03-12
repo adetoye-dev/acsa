@@ -1,0 +1,51 @@
+{
+  "repo_context": {
+    "repo_name": "acsa",
+    "branch": "main",
+    "head_sha": "abc1234",
+    "dirty_file_count": 6,
+    "risk_level": "high",
+    "risk_reasons": [
+      "Touches engine, connectors, release, or workflow-definition paths."
+    ],
+    "top_areas": ["core", "workflows", "docs"],
+    "diff_stats": {
+      "files": 2,
+      "insertions": 112,
+      "deletions": 28
+    },
+    "recommended_checks": [
+      "cargo run -p acsa-core -- validate workflows/hello.yaml",
+      "cargo test -p acsa-core",
+      "cd ui && npm run lint && npm run build"
+    ],
+    "changed_files": [
+      {
+        "status": "M",
+        "path": "core/src/engine.rs"
+      },
+      {
+        "status": "M",
+        "path": "workflows/release-brief-demo.yaml"
+      }
+    ],
+    "recent_commits": [
+      {
+        "sha": "abc1234",
+        "subject": "Improve release orchestration",
+        "author": "Achsah Systems"
+      }
+    ]
+  },
+  "review_before_release": {
+    "lane": "review-before-release",
+    "next_action": "Review, commit, or stash local changes before cutting a release brief from this branch."
+  },
+  "clean_candidate": null,
+  "high_risk_lane": {
+    "reviewer": "senior-engineer",
+    "risk_badge": "high-risk",
+    "release_guidance": "Run the full validation stack before merging or shipping."
+  },
+  "standard_risk_lane": null
+}

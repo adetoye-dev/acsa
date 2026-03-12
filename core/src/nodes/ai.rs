@@ -14,6 +14,7 @@
 
 #![deny(warnings)]
 
+use std::env;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -47,7 +48,7 @@ impl Node for LlmCompletionNode {
         let provider = params.get("provider").and_then(Value::as_str).unwrap_or("mock");
         let prompt = resolve_prompt(inputs, params)?;
         let system_prompt = params.get("system_prompt").and_then(Value::as_str).unwrap_or("");
-        let model = params.get("model").and_then(Value::as_str).unwrap_or("mock-model");
+        let model = resolve_model(provider, params);
 
         self.limiter
             .acquire(params.get("rate_limit_per_second").and_then(Value::as_f64), None)
@@ -345,6 +346,22 @@ impl Node for RetrievalNode {
         ranked.truncate(top_k);
 
         Ok(json!({ "matches": ranked, "query": query }))
+    }
+}
+
+fn resolve_model(provider: &str, params: &Value) -> String {
+    if let Some(model) =
+        params.get("model").and_then(Value::as_str).map(str::trim).filter(|model| !model.is_empty())
+    {
+        return model.to_string();
+    }
+
+    match provider {
+        "openai" | "openai_compatible" => {
+            env::var("OPENAI_MODEL").unwrap_or_else(|_| "gpt-4.1-mini".to_string())
+        }
+        "anthropic" => "claude-3-5-haiku-latest".to_string(),
+        _ => "mock-model".to_string(),
     }
 }
 

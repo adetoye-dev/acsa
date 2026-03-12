@@ -888,12 +888,23 @@ pub enum ConnectorError {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs, path::Path};
+    use std::{
+        collections::BTreeMap,
+        fs,
+        path::{Path, PathBuf},
+        sync::OnceLock,
+    };
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     use serde_json::json;
+    use tokio::{
+        io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+        net::TcpListener,
+        sync::Mutex,
+        task::JoinHandle,
+    };
 
     use super::{
         inspect_connectors, run_manifest_path, scaffold_connector, validate_manifest,
@@ -1073,5 +1084,249 @@ mod tests {
         assert_eq!(inspection.invalid.len(), 1);
 
         fs::remove_dir_all(temp_dir).expect("temp connector directory should be removed");
+    }
+
+    #[tokio::test]
+    async fn ai_news_collector_normalizes_deduplicates_and_ranks_fixture_data() {
+        let manifest_path = repo_root().join("connectors/ai-news-collector/manifest.json");
+        let params = json!({
+            "product_name": "Acsa",
+            "rss_sources": [
+                { "name": "OpenAI", "fixture_path": "fixtures/openai.xml" },
+                { "name": "Anthropic", "fixture_path": "fixtures/anthropic.xml" },
+                { "name": "Hugging Face", "fixture_path": "fixtures/huggingface.xml" },
+                { "name": "Google AI", "fixture_path": "fixtures/google-ai.xml" }
+            ],
+            "hn": {
+                "fixture_path": "fixtures/hn.json",
+                "keywords": ["ai", "openai", "anthropic", "claude", "gpt", "model", "agent", "inference"],
+                "max_matches": 4
+            },
+            "max_feed_items_per_source": 3,
+            "max_ranked_items": 6,
+            "timeout_secs": 2
+        });
+
+        let output = run_manifest_path(&manifest_path, json!({}), params)
+            .await
+            .expect("collector should succeed on fixture data");
+
+        assert_eq!(output["sources_succeeded"], json!(5));
+        assert_eq!(output["sources_failed"], json!(0));
+        assert_eq!(output["item_count"], json!(5));
+        assert!(output["prompt"].as_str().is_some_and(|prompt| prompt.contains("Why they matter")));
+        let ranked = output["ranked_items"].as_array().expect("ranked_items should be an array");
+        assert_eq!(ranked.len(), 5);
+        assert_eq!(
+            ranked
+                .iter()
+                .filter(|item| {
+                    item.get("title")
+                        == Some(&json!("OpenAI launches eval tooling for agent workflows"))
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn ai_news_collector_tolerates_partial_source_failure() {
+        let manifest_path = repo_root().join("connectors/ai-news-collector/manifest.json");
+        let params = json!({
+            "rss_sources": [
+                { "name": "OpenAI", "fixture_path": "fixtures/openai.xml" },
+                { "name": "Broken Feed", "fixture_path": "fixtures/missing.xml" }
+            ],
+            "hn": {
+                "fixture_path": "fixtures/hn.json",
+                "keywords": ["ai", "openai", "anthropic", "claude", "gpt", "model", "agent", "inference"],
+                "max_matches": 2
+            },
+            "max_feed_items_per_source": 2,
+            "max_ranked_items": 4,
+            "timeout_secs": 2
+        });
+
+        let output = run_manifest_path(&manifest_path, json!({}), params)
+            .await
+            .expect("collector should still succeed when some sources fail");
+
+        assert_eq!(output["sources_succeeded"], json!(2));
+        assert_eq!(output["sources_failed"], json!(1));
+        assert!(output["item_count"].as_u64().unwrap_or(0) >= 1);
+    }
+
+    #[tokio::test]
+    async fn smtp_connector_reports_missing_secret_env_clearly() {
+        let manifest_path = repo_root().join("connectors/smtp-email-delivery/manifest.json");
+        let error = run_manifest_path(
+            &manifest_path,
+            json!({ "subject": "Acsa test", "body": "hello" }),
+            json!({
+                "secrets_env": { "password": "ACSA_SMTP_PASSWORD_MISSING_TEST" }
+            }),
+        )
+        .await
+        .expect_err("smtp connector should fail when the password env is missing");
+
+        assert!(error
+            .to_string()
+            .contains("environment variable ACSA_SMTP_PASSWORD_MISSING_TEST is not set"));
+    }
+
+    #[tokio::test]
+    async fn smtp_connector_can_send_to_a_local_mock_server() {
+        let _env_guard = env_lock().lock().await;
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("smtp listener should bind");
+        let address = listener.local_addr().expect("smtp listener should expose a local addr");
+        let server = spawn_mock_smtp(listener);
+
+        let _host = EnvVarGuard::set("ACSA_SMTP_HOST", "127.0.0.1");
+        let _port = EnvVarGuard::set("ACSA_SMTP_PORT", &address.port().to_string());
+        let _username = EnvVarGuard::set("ACSA_SMTP_USERNAME", "demo-user@example.com");
+        let _password = EnvVarGuard::set("ACSA_SMTP_PASSWORD", "demo-password");
+        let _from = EnvVarGuard::set("ACSA_SMTP_FROM", "acsa@example.com");
+        let _to = EnvVarGuard::set("ACSA_DEMO_EMAIL_TO", "user@example.com");
+        let _tls = EnvVarGuard::set("ACSA_SMTP_TLS", "false");
+
+        let manifest_path = repo_root().join("connectors/smtp-email-delivery/manifest.json");
+        let output = run_manifest_path(
+            &manifest_path,
+            json!({ "subject": "Acsa test", "body": "Daily brief body" }),
+            json!({
+                "secrets_env": { "password": "ACSA_SMTP_PASSWORD" }
+            }),
+        )
+        .await
+        .expect("smtp connector should send successfully");
+
+        assert_eq!(output["sent"], json!(true));
+        assert_eq!(output["recipient"], json!("user@example.com"));
+        server.await.expect("smtp server task should complete");
+    }
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crate directory should have a repo parent")
+            .to_path_buf()
+    }
+
+    fn env_lock() -> &'static Mutex<()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: String,
+        previous: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key: key.to_string(), previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.previous {
+                Some(value) => unsafe {
+                    std::env::set_var(&self.key, value);
+                },
+                None => unsafe {
+                    std::env::remove_var(&self.key);
+                },
+            }
+        }
+    }
+
+    fn spawn_mock_smtp(listener: TcpListener) -> JoinHandle<()> {
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("smtp client should connect");
+            let (reader, mut writer) = stream.into_split();
+            let mut reader = BufReader::new(reader);
+            writer
+                .write_all(b"220 mock-smtp ESMTP\r\n")
+                .await
+                .expect("smtp banner should be written");
+
+            let mut line = String::new();
+            loop {
+                line.clear();
+                let bytes = reader.read_line(&mut line).await.expect("smtp line should read");
+                if bytes == 0 {
+                    break;
+                }
+                let upper = line.to_ascii_uppercase();
+
+                if upper.starts_with("EHLO") || upper.starts_with("HELO") {
+                    writer
+                        .write_all(b"250-localhost\r\n250-AUTH PLAIN LOGIN\r\n250 OK\r\n")
+                        .await
+                        .expect("smtp ehlo response should be written");
+                } else if upper.starts_with("AUTH PLAIN") {
+                    writer
+                        .write_all(b"235 2.7.0 Authentication successful\r\n")
+                        .await
+                        .expect("smtp auth response should be written");
+                } else if upper.starts_with("AUTH LOGIN") {
+                    writer
+                        .write_all(b"334 VXNlcm5hbWU6\r\n")
+                        .await
+                        .expect("smtp auth challenge should be written");
+                } else if line.trim() == "ZGVtby11c2Vy" {
+                    writer
+                        .write_all(b"334 UGFzc3dvcmQ6\r\n")
+                        .await
+                        .expect("smtp password challenge should be written");
+                } else if line.trim() == "ZGVtby1wYXNzd29yZA==" {
+                    writer
+                        .write_all(b"235 2.7.0 Authentication successful\r\n")
+                        .await
+                        .expect("smtp login completion should be written");
+                } else if upper.starts_with("MAIL FROM:") || upper.starts_with("RCPT TO:") {
+                    writer
+                        .write_all(b"250 2.1.5 OK\r\n")
+                        .await
+                        .expect("smtp recipient response should be written");
+                } else if upper.starts_with("DATA") {
+                    writer
+                        .write_all(b"354 End data with <CR><LF>.<CR><LF>\r\n")
+                        .await
+                        .expect("smtp data challenge should be written");
+                    loop {
+                        line.clear();
+                        let bytes_read =
+                            reader.read_line(&mut line).await.expect("smtp data should read");
+                        if bytes_read == 0 {
+                            return;
+                        }
+                        if line == ".\r\n" {
+                            break;
+                        }
+                    }
+                    writer
+                        .write_all(b"250 2.0.0 Accepted\r\n")
+                        .await
+                        .expect("smtp data response should be written");
+                } else if upper.starts_with("QUIT") {
+                    writer
+                        .write_all(b"221 2.0.0 Bye\r\n")
+                        .await
+                        .expect("smtp quit response should be written");
+                    break;
+                } else {
+                    writer
+                        .write_all(b"250 OK\r\n")
+                        .await
+                        .expect("smtp default response should be written");
+                }
+            }
+        })
     }
 }

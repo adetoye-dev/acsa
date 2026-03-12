@@ -1,14 +1,25 @@
 version: v1
 name: hello-http
 trigger:
-  type: cron
-  schedule: "0 */6 * * * *"
+  type: manual
 steps:
-  - id: fetch_status
-    type: http_request
-    params:
-      method: GET
-      url: https://healthchecks.io/api/v3/status/
-      headers:
-        accept: application/json
-    next: []
+- id: fetch_status
+  type: http_request
+  params:
+    method: GET
+    url: https://healthchecks.io/api/v3/status/
+    headers:
+      accept: application/json
+  next: []
+  retry:
+    attempts: 2
+    backoff_ms: 1000
+  timeout_ms: 30000
+ui:
+  positions:
+    __trigger__:
+      x: -120.0
+      y: 340.0
+    fetch_status:
+      x: 420.0
+      y: 140.0

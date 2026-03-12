@@ -1,0 +1,25 @@
+{
+  "name": "SMTP Email Delivery",
+  "type": "smtp_email_delivery",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "allowed_env": [
+    "ACSA_DEMO_EMAIL_TO",
+    "ACSA_SMTP_FROM",
+    "ACSA_SMTP_HOST",
+    "ACSA_SMTP_PASSWORD",
+    "ACSA_SMTP_PORT",
+    "ACSA_SMTP_TIMEOUT_SECS",
+    "ACSA_SMTP_TLS",
+    "ACSA_SMTP_USERNAME"
+  ],
+  "outputs": [
+    "message_id",
+    "recipient",
+    "sent",
+    "subject"
+  ],
+  "limits": {
+    "timeout": 30000
+  }
+}

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>OpenAI News</title>
+    <link>https://openai.com/news/</link>
+    <description>OpenAI announcements for models, APIs, tooling, and developer workflows.</description>
+    <item>
+      <title>Introducing GPT-Next Mini for developers</title>
+      <link>https://openai.com/news/gpt-next-mini?utm_source=rss</link>
+      <description>A faster reasoning model with better developer ergonomics and lower latency for production use.</description>
+      <pubDate>Thu, 12 Mar 2026 09:00:00 GMT</pubDate>
+    </item>
+    <item>
+      <title>OpenAI launches eval tooling for agent workflows</title>
+      <link>https://openai.com/news/agent-evals</link>
+      <description>New tooling to help teams benchmark agents, prompts, and production workflows.</description>
+      <pubDate>Thu, 12 Mar 2026 08:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>

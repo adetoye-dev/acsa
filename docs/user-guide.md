@@ -47,7 +47,8 @@ cargo run -p acsa-core -- list workflows
 Run a workflow directly:
 
 ```bash
-cargo run -p acsa-core -- run workflows/manual-demo.yaml --db ./acsa.db
+# Requires the demo env vars shown in README.md
+cargo run -p acsa-core -- run workflows/ai-news-intelligence-demo.yaml --db ./acsa.db
 ```
 
 Start the HTTP server for triggers, the UI, and observability:
@@ -151,7 +152,7 @@ Recommended shape:
 5. Optional `approval` step before final action
 
 Sample:
-[webhook-demo.yaml](../workflows/webhook-demo.yaml)
+[webhook-demo.yaml](../examples/workflow-samples/webhook-demo.yaml)
 
 ### AI-assisted response drafting
 

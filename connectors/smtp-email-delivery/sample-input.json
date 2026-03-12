@@ -1,0 +1,6 @@
+{
+  "from": "sender@example.com",
+  "to": ["recipient@example.com"],
+  "body": "Acsa test email body",
+  "subject": "Acsa SMTP connector test"
+}

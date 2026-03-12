@@ -1,0 +1,78 @@
+version: v1
+name: release-brief-demo
+trigger:
+  type: manual
+steps:
+  - id: repo_context
+    type: git_release_snapshot
+    params: {}
+    next: [route_dirty_worktree, route_risk]
+    timeout_ms: 3000
+  - id: route_dirty_worktree
+    type: condition
+    params:
+      path: repo_context.dirty_file_count
+      operator: gt
+      value: 0
+      when_true: review_before_release
+      when_false: clean_candidate
+    next: [review_before_release, clean_candidate]
+    timeout_ms: 1000
+  - id: route_risk
+    type: condition
+    params:
+      path: repo_context.risk_level
+      operator: eq
+      value: high
+      when_true: high_risk_lane
+      when_false: standard_risk_lane
+    next: [high_risk_lane, standard_risk_lane]
+    timeout_ms: 1000
+  - id: review_before_release
+    type: constant
+    params:
+      value:
+        lane: review-before-release
+        next_action: Review, commit, or stash local changes before cutting a release brief from this branch.
+    next: [render_release_brief]
+    timeout_ms: 1000
+  - id: clean_candidate
+    type: constant
+    params:
+      value:
+        lane: clean-release-candidate
+        next_action: The working tree is clean. Run the suggested checks and cut release notes from this commit.
+    next: [render_release_brief]
+    timeout_ms: 1000
+  - id: high_risk_lane
+    type: constant
+    params:
+      value:
+        reviewer: senior-engineer
+        risk_badge: high-risk
+        release_guidance: Run the full validation stack before merging or shipping.
+    next: [render_release_brief]
+    timeout_ms: 1000
+  - id: standard_risk_lane
+    type: constant
+    params:
+      value:
+        reviewer: feature-owner
+        risk_badge: standard-risk
+        release_guidance: Run the targeted checks and publish notes once they pass.
+    next: [render_release_brief]
+    timeout_ms: 1000
+  - id: render_release_brief
+    type: release_brief_renderer
+    params:
+      output_file: data/demo/output/release-brief.md
+      product_name: Acsa
+    next: [write_brief]
+    timeout_ms: 3000
+  - id: write_brief
+    type: file_write
+    params:
+      path: data/demo/output/release-brief.md
+      contents_path: render_release_brief.markdown
+    next: []
+    timeout_ms: 1000

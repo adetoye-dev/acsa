@@ -29,7 +29,6 @@ type TopBarProps = {
   onSave: () => void;
   saveDisabled: boolean;
   saveDisabledReason?: string | null;
-  runStatus: string | null;
 };
 
 export function TopBar({
@@ -44,8 +43,7 @@ export function TopBar({
   onRun,
   onSave,
   saveDisabled,
-  saveDisabledReason,
-  runStatus
+  saveDisabledReason
 }: TopBarProps) {
   return (
     <section className="panel-surface overflow-hidden">
@@ -67,7 +65,6 @@ export function TopBar({
         <div className="hidden min-w-0 flex-1 items-center justify-center gap-2 lg:flex">
           <ShellBadge label={activeWorkflowFile} tone="neutral" />
           {hasUnsavedChanges ? <ShellBadge label="unsaved" tone="warn" /> : null}
-          {runStatus ? <ShellBadge label={runStatus} tone="warn" /> : null}
         </div>
 
         <div className="flex items-center gap-2">

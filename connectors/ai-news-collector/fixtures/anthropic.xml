@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Anthropic News</title>
+    <link>https://www.anthropic.com/news</link>
+    <description>Anthropic product, research, and developer news updates.</description>
+    <item>
+      <title>Claude Code expands long-context agent tooling</title>
+      <link>https://www.anthropic.com/news/claude-code-long-context</link>
+      <description>Anthropic details improved code editing and analysis workflows for larger repositories.</description>
+      <pubDate>Thu, 12 Mar 2026 07:30:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>

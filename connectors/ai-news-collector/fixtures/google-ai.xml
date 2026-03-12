@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Google AI Blog</title>
+    <link>https://blog.google/technology/ai/</link>
+    <description>Google AI announcements, research updates, and product releases.</description>
+    <item>
+      <title>Gemini updates make multimodal developer agents cheaper to run</title>
+      <link>https://blog.google/technology/ai/gemini-multimodal-agents</link>
+      <description>Google outlines cost and latency improvements for multimodal agent workloads.</description>
+      <pubDate>Thu, 12 Mar 2026 05:00:00 GMT</pubDate>
+    </item>
+  </channel>
+</rss>

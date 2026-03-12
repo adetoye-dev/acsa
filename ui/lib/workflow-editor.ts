@@ -127,6 +127,12 @@ export type RunSummary = {
   workflow_name: string;
 };
 
+export type RunStartResponse = {
+  run_id: string;
+  status: "running";
+  workflow_name: string;
+};
+
 export type NodeExecutionState =
   | "idle"
   | "failed"

@@ -31,7 +31,7 @@ use petgraph::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use thiserror::Error;
-use tokio::{sync::Semaphore, task::JoinSet, time::timeout};
+use tokio::{spawn, sync::Semaphore, task::JoinSet, time::timeout};
 
 use crate::{
     connectors::load_connectors_into,
@@ -63,6 +63,12 @@ pub struct ExecutionSummary {
     pub pending_tasks: Vec<PendingHumanTask>,
     pub run_id: String,
     pub status: ExecutionStatus,
+    pub workflow_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartedExecution {
+    pub run_id: String,
     pub workflow_name: String,
 }
 
@@ -128,14 +134,34 @@ impl WorkflowEngine {
         &self.store
     }
 
+    fn sync_connectors(&self) -> Result<(), EngineError> {
+        let connector_path =
+            self.config.connector_path.as_deref().unwrap_or(Path::new("connectors"));
+        load_connectors_into(&self.registry, connector_path)
+            .map_err(|error| EngineError::ConnectorLoad(error.to_string()))?;
+        Ok(())
+    }
+
     pub async fn execute_workflow_path(
         &self,
         path: impl AsRef<Path>,
         initial_payload: Value,
     ) -> Result<ExecutionSummary, EngineError> {
+        self.sync_connectors()?;
         let workflow = load_workflow_from_path(path)?;
         let plan = compile_workflow(workflow)?;
         self.execute_plan(&plan, initial_payload).await
+    }
+
+    pub async fn start_workflow_path(
+        &self,
+        path: impl AsRef<Path>,
+        initial_payload: Value,
+    ) -> Result<StartedExecution, EngineError> {
+        self.sync_connectors()?;
+        let workflow = load_workflow_from_path(path)?;
+        let plan = compile_workflow(workflow)?;
+        self.start_plan(plan, initial_payload).await
     }
 
     pub async fn execute_plan(
@@ -143,6 +169,7 @@ impl WorkflowEngine {
         plan: &WorkflowPlan,
         initial_payload: Value,
     ) -> Result<ExecutionSummary, EngineError> {
+        self.sync_connectors()?;
         let workflow_snapshot = serde_json::to_string(&plan.workflow)?;
         let run =
             self.store.start_run(&plan.workflow.name, &workflow_snapshot, &initial_payload).await?;
@@ -157,11 +184,106 @@ impl WorkflowEngine {
         self.execute_run_state(plan, &run.id, initial_payload, PersistedRunState::fresh(plan)).await
     }
 
+    pub async fn start_plan(
+        &self,
+        plan: WorkflowPlan,
+        initial_payload: Value,
+    ) -> Result<StartedExecution, EngineError> {
+        self.sync_connectors()?;
+        let workflow_snapshot = serde_json::to_string(&plan.workflow)?;
+        let run =
+            self.store.start_run(&plan.workflow.name, &workflow_snapshot, &initial_payload).await?;
+        record_log(
+            &self.store,
+            LogLevel::Info,
+            Some(&run.id),
+            None,
+            format!("workflow '{}' execution started", plan.workflow.name),
+        )
+        .await?;
+
+        let engine = self.clone();
+        let run_id = run.id.clone();
+        let workflow_name = plan.workflow.name.clone();
+        let logged_workflow_name = workflow_name.clone();
+        spawn(async move {
+            let result = engine
+                .execute_run_state(&plan, &run_id, initial_payload, PersistedRunState::fresh(&plan))
+                .await;
+            if let Err(error) = result {
+                let should_mark_failure = match engine.store.get_run(&run_id).await {
+                    Ok(run) => run.status == "running",
+                    Err(get_run_error) => {
+                        let get_run_message = format!(
+                            "workflow '{}' failed to recover run state via get_run: {}",
+                            logged_workflow_name, get_run_error
+                        );
+                        if let Err(log_error) = record_log(
+                            &engine.store,
+                            LogLevel::Error,
+                            Some(&run_id),
+                            None,
+                            &get_run_message,
+                        )
+                        .await
+                        {
+                            eprintln!(
+                                "failed to record get_run recovery error for workflow '{}': {}",
+                                logged_workflow_name, log_error
+                            );
+                        }
+                        true
+                    }
+                };
+                if should_mark_failure {
+                    let message = error.to_string();
+                    if let Err(log_error) = record_log(
+                        &engine.store,
+                        LogLevel::Error,
+                        Some(&run_id),
+                        None,
+                        format!("workflow '{}' execution failed: {message}", logged_workflow_name),
+                    )
+                    .await
+                    {
+                        eprintln!(
+                            "failed to record execution failure for workflow '{}': {}",
+                            logged_workflow_name, log_error
+                        );
+                    }
+                    if let Err(complete_error) = engine.store.complete_run_failure(&run_id, &message).await {
+                        let completion_message = format!(
+                            "workflow '{}' failed to mark run as failed: {}",
+                            logged_workflow_name, complete_error
+                        );
+                        if let Err(log_error) = record_log(
+                            &engine.store,
+                            LogLevel::Error,
+                            Some(&run_id),
+                            None,
+                            &completion_message,
+                        )
+                        .await
+                        {
+                            eprintln!(
+                                "{}; additionally failed to record the error: {}",
+                                completion_message, log_error
+                            );
+                        }
+                    }
+                }
+            }
+        });
+
+        Ok(StartedExecution { run_id: run.id, workflow_name })
+    }
+
     pub async fn resume_human_task(
         &self,
         task_id: &str,
         response: Value,
     ) -> Result<ExecutionSummary, EngineError> {
+        self.sync_connectors()?;
         let task = self.store.get_human_task(task_id).await?;
         if task.status != "pending" {
             return Err(EngineError::HumanTaskNotPending { task_id: task_id.to_string() });
@@ -846,22 +968,47 @@ fn build_step_inputs(
     outputs: &HashMap<String, Value>,
     initial_payload: &Value,
 ) -> Result<Value, EngineError> {
-    let predecessors = plan.predecessors(step_id);
-    if predecessors.is_empty() {
+    let upstream_steps = transitive_predecessors(plan, step_id);
+    if upstream_steps.is_empty() {
         return Ok(initial_payload.clone());
     }
 
     let mut payload = Map::new();
-    for predecessor in predecessors {
+    for predecessor in upstream_steps {
         let output =
-            outputs.get(predecessor).ok_or_else(|| EngineError::MissingUpstreamOutput {
+            outputs.get(&predecessor).ok_or_else(|| EngineError::MissingUpstreamOutput {
                 step_id: step_id.to_string(),
                 upstream_step: predecessor.clone(),
             })?;
-        payload.insert(predecessor.clone(), output.clone());
+        payload.insert(predecessor, output.clone());
     }
 
     Ok(Value::Object(payload))
+}
+
+fn transitive_predecessors(plan: &WorkflowPlan, step_id: &str) -> Vec<String> {
+    let mut discovered = HashSet::new();
+    let mut queue = VecDeque::new();
+
+    for predecessor in plan.predecessors(step_id) {
+        queue.push_back(predecessor.clone());
+    }
+
+    while let Some(predecessor) = queue.pop_front() {
+        if !discovered.insert(predecessor.clone()) {
+            continue;
+        }
+
+        for ancestor in plan.predecessors(&predecessor) {
+            queue.push_back(ancestor.clone());
+        }
+    }
+
+    plan.order()
+        .iter()
+        .filter(|step| discovered.contains(step.as_str()))
+        .cloned()
+        .collect()
 }
 
 async fn execute_step_with_retries(
@@ -1725,10 +1872,195 @@ steps:
         cleanup_file(temp_db);
     }
 
+    #[tokio::test]
+    async fn execution_syncs_connectors_before_running_a_plan() {
+        let temp_db = temp_db_path("connector-hotload");
+        let connectors_dir = write_temp_directory("connector-hotload");
+        let engine = WorkflowEngine::new(
+            &temp_db,
+            ExecutionConfig {
+                connector_path: Some(connectors_dir.clone()),
+                ..ExecutionConfig::default()
+            },
+        )
+        .await
+        .expect("workflow engine should initialize");
+
+        let connector_dir = connectors_dir.join("late-echo");
+        fs::create_dir_all(&connector_dir).expect("connector directory should be created");
+        fs::write(
+            connector_dir.join("manifest.json"),
+            r#"{
+  "name": "Late Echo",
+  "type": "late_echo",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "outputs": ["echoed"],
+  "limits": { "timeout": 1000 }
+}"#,
+        )
+        .expect("manifest should be written");
+        fs::write(
+            connector_dir.join("main.py"),
+            r#"#!/usr/bin/env python3
+import json
+import sys
+
+json.dump({"echoed": "loaded-after-startup"}, sys.stdout)
+"#,
+        )
+        .expect("connector source should be written");
+
+        let workflow = Workflow {
+            version: "v1".to_string(),
+            name: "connector-hotload".to_string(),
+            trigger: Trigger { r#type: "manual".to_string(), details: Default::default() },
+            steps: vec![step("late", "late_echo", json!({}), vec![])],
+            ui: Default::default(),
+        };
+        let plan = compile_workflow(workflow).expect("workflow should plan");
+
+        let summary = engine
+            .execute_plan(&plan, json!({ "source": "test" }))
+            .await
+            .expect("workflow should execute with hot-loaded connector");
+
+        assert_eq!(
+            summary.outputs["late"]["echoed"],
+            Value::String("loaded-after-startup".to_string())
+        );
+
+        cleanup_file(temp_db);
+        cleanup_dir(connectors_dir);
+    }
+
+    #[tokio::test]
+    async fn archives_the_news_brief_before_email_delivery_failure() {
+        let workflow = Workflow {
+            version: "v1".to_string(),
+            name: "ai-news-archive-before-email".to_string(),
+            trigger: Trigger { r#type: "manual".to_string(), details: Default::default() },
+            steps: vec![
+                Step {
+                    id: "collect_news_context".to_string(),
+                    r#type: "ai_news_collector".to_string(),
+                    params: serde_yaml::to_value(json!({
+                        "product_name": "Acsa",
+                        "rss_sources": [
+                            { "name": "OpenAI", "fixture_path": "fixtures/openai.xml" },
+                            { "name": "Anthropic", "fixture_path": "fixtures/anthropic.xml" }
+                        ],
+                        "hn": {
+                            "fixture_path": "fixtures/hn.json",
+                            "keywords": ["ai", "openai", "anthropic", "claude", "gpt", "model", "agent", "inference"],
+                            "max_matches": 2
+                        },
+                        "max_feed_items_per_source": 2,
+                        "max_ranked_items": 4,
+                        "timeout_secs": 2
+                    }))
+                    .expect("collector params should convert to yaml"),
+                    next: vec!["draft_news_brief".to_string()],
+                    retry: None,
+                    timeout_ms: Some(5_000),
+                },
+                Step {
+                    id: "draft_news_brief".to_string(),
+                    r#type: "llm_completion".to_string(),
+                    params: serde_yaml::to_value(json!({
+                        "provider": "mock",
+                        "prompt_path": "collect_news_context.prompt",
+                        "response": "# Top developments today\n\n- Demo item.\n\n## Why they matter\n\n- Demo reason.\n\n## Signals worth watching\n\n- Demo signal.\n\n## Suggested experiments or follow-ups\n\n- Demo follow-up.\n\n## Source links\n\n- https://example.com/demo"
+                    }))
+                    .expect("llm params should convert to yaml"),
+                    next: vec!["render_news_brief".to_string()],
+                    retry: None,
+                    timeout_ms: Some(5_000),
+                },
+                Step {
+                    id: "render_news_brief".to_string(),
+                    r#type: "ai_news_brief_renderer".to_string(),
+                    params: serde_yaml::to_value(json!({})).expect("renderer params should convert"),
+                    next: vec!["write_brief_archive".to_string()],
+                    retry: None,
+                    timeout_ms: Some(5_000),
+                },
+                Step {
+                    id: "write_brief_archive".to_string(),
+                    r#type: "file_write".to_string(),
+                    params: serde_yaml::to_value(json!({
+                        "path": "demo/output/ai-news-intelligence-brief.md",
+                        "contents_path": "render_news_brief.markdown"
+                    }))
+                    .expect("file params should convert to yaml"),
+                    next: vec!["send_brief_email".to_string()],
+                    retry: None,
+                    timeout_ms: Some(5_000),
+                },
+                Step {
+                    id: "send_brief_email".to_string(),
+                    r#type: "smtp_email_delivery".to_string(),
+                    params: serde_yaml::to_value(json!({
+                        "subject_path": "render_news_brief.subject",
+                        "body_path": "render_news_brief.body",
+                        "body_html_path": "render_news_brief.body_html",
+                        "secrets_env": {
+                            "password": "ACSA_SMTP_PASSWORD_MISSING_TEST"
+                        }
+                    }))
+                    .expect("smtp params should convert to yaml"),
+                    next: vec![],
+                    retry: None,
+                    timeout_ms: Some(5_000),
+                },
+            ],
+            ui: Default::default(),
+        };
+        let plan = compile_workflow(workflow).expect("workflow should plan");
+        let temp_db = temp_db_path("news-archive");
+        let temp_data_dir = write_temp_directory("news-archive-data");
+        let store = RunStore::connect(&temp_db).await.expect("sqlite should initialize");
+        let registry =
+            NodeRegistry::built_in(BuiltInNodeConfig { data_dir: temp_data_dir.clone() });
+        let engine = WorkflowEngine::with_registry(
+            store,
+            registry,
+            ExecutionConfig {
+                connector_path: Some(repo_root().join("connectors")),
+                ..ExecutionConfig::default()
+            },
+        );
+
+        let error = engine
+            .execute_plan(&plan, json!({ "trigger": "manual" }))
+            .await
+            .expect_err("workflow should fail on email delivery");
+
+        let archived_brief = temp_data_dir.join("demo/output/ai-news-intelligence-brief.md");
+        assert!(archived_brief.exists());
+        assert!(error.to_string().contains("ACSA_SMTP_PASSWORD_MISSING_TEST"));
+
+        cleanup_file(temp_db);
+        cleanup_dir(temp_data_dir);
+    }
+
     fn cleanup_file(path: PathBuf) {
         if path.exists() {
             fs::remove_file(path).expect("temp file cleanup should succeed");
         }
+    }
+
+    fn cleanup_dir(path: PathBuf) {
+        if path.exists() {
+            fs::remove_dir_all(path).expect("temp directory cleanup should succeed");
+        }
+    }
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crate directory should have a repo parent")
+            .to_path_buf()
     }
 
     fn step(id: &str, node_type: &str, params: Value, next: Vec<&str>) -> Step {

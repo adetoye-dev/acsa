@@ -390,6 +390,7 @@ pub async fn serve(
         .route("/api/workflows/{workflow_id}/duplicate", post(duplicate_workflow))
         .route("/api/workflows/{workflow_id}/rename", post(rename_workflow))
         .route("/api/workflows/{workflow_id}/run", post(run_workflow))
+        .route("/api/workflows/{workflow_id}/run-async", post(run_workflow_async))
         .route("/human-tasks", get(list_pending_human_tasks))
         .route("/human-tasks/{task_id}/resolve", post(resolve_human_task))
         .route("/{*hook}", post(handle_webhook))
@@ -789,6 +790,41 @@ async fn run_workflow(
                     ExecutionStatus::Success => "success"
                 },
                 "workflow_name": summary.workflow_name
+            })),
+        )
+            .into_response(),
+        Err(error) => {
+            (StatusCode::BAD_REQUEST, Json(json!({ "error": error.to_string() }))).into_response()
+        }
+    }
+}
+
+async fn run_workflow_async(
+    State(state): State<AppState>,
+    AxumPath(workflow_id): AxumPath<String>,
+    Json(request): Json<RunWorkflowRequest>,
+) -> axum::response::Response {
+    let workflow_path = match workflow_file_path(&state.workflows_dir, &workflow_id) {
+        Ok(path) => path,
+        Err(error) => return workflow_error_response(error),
+    };
+    if !workflow_path.exists() {
+        return workflow_error_response(TriggerError::WorkflowNotFound { workflow_id });
+    }
+
+    let initial_payload = json!({
+        "payload": request.payload.unwrap_or_else(|| json!({})),
+        "requested_at": Utc::now().to_rfc3339(),
+        "source": "ui",
+        "workflow_id": workflow_id
+    });
+    match state.engine.start_workflow_path(&workflow_path, initial_payload).await {
+        Ok(started) => (
+            StatusCode::ACCEPTED,
+            Json(json!({
+                "run_id": started.run_id,
+                "status": "running",
+                "workflow_name": started.workflow_name
             })),
         )
             .into_response(),
@@ -1517,6 +1553,9 @@ fn validate_secret_value(context: &str, value: &YamlValue) -> Result<(), Trigger
                             key: key_text.to_string(),
                         });
                     }
+                    if is_secret_reference_key(key_text) {
+                        continue;
+                    }
                     let child_context = format!("{context}.{key_text}");
                     validate_secret_value(&child_context, entry)?;
                 } else {
@@ -2013,6 +2052,17 @@ mod tests {
             validate_secret_value("trigger", &value).expect_err("inline secret should fail");
 
         assert!(matches!(error, TriggerError::InlineSecretRejected { .. }));
+    }
+
+    #[test]
+    fn allows_secrets_env_mappings() {
+        let value = serde_yaml::from_str::<YamlValue>(
+            "secrets_env:\n  password: ACSA_SMTP_PASSWORD\n",
+        )
+        .expect("yaml should parse");
+
+        validate_secret_value("steps.send_brief_email.params", &value)
+            .expect("secrets_env should be treated as an environment reference map");
     }
 
     #[test]

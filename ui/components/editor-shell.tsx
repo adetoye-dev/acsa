@@ -55,7 +55,7 @@ import {
   extractTriggerDetails,
   formatYaml,
   parseObjectYaml,
-  RunSummary,
+  type RunStartResponse,
   type CanvasNode,
   type HumanTask,
   type InvalidWorkflowFile,
@@ -108,7 +108,6 @@ export function EditorShell() {
     isRefreshingTasks,
     isRunning,
     isSaving,
-    lastRun,
     runStatus,
     selectedNodeId,
     stepCatalog,
@@ -128,7 +127,6 @@ export function EditorShell() {
       isRefreshingTasks: state.isRefreshingTasks,
       isRunning: state.isRunning,
       isSaving: state.isSaving,
-      lastRun: state.lastRun,
       runStatus: state.runStatus,
       selectedNodeId: state.selectedNodeId,
       stepCatalog: state.stepCatalog,
@@ -279,6 +277,73 @@ export function EditorShell() {
     void loadRunDetail(selectedRunId);
   }, [isBooting, logLevelFilter, logSearch, selectedRunId]);
 
+  useEffect(() => {
+    if (!selectedRunId || !isRunning) {
+      return;
+    }
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const poll = async () => {
+      const detail = await loadRunDetail(selectedRunId);
+      if (cancelled) {
+        return;
+      }
+
+      if (!detail || detail.run.id !== selectedRunId) {
+        timer = setTimeout(poll, 900);
+        return;
+      }
+
+      if (detail.run.status === "running") {
+        timer = setTimeout(poll, 900);
+        return;
+      }
+
+      patchWorkflowState({
+        isRunning: false,
+        lastAction:
+          detail.run.status === "paused"
+            ? `Run paused with ${detail.human_tasks.filter((task) => task.status === "pending").length} pending task(s)`
+            : detail.run.status === "failed"
+              ? "Workflow run failed"
+              : `Run completed successfully (${detail.step_runs.filter((stepRun) => stepRun.status === "success").length} steps)`,
+        lastRun:
+          detail.run.status === "success" || detail.run.status === "paused"
+            ? {
+                completed_steps: detail.step_runs.filter((stepRun) => stepRun.status === "success")
+                  .length,
+                pending_tasks: detail.human_tasks
+                  .filter((task) => task.status === "pending")
+                  .map((task) => ({
+                    field: task.field,
+                    id: task.id,
+                    kind: task.kind,
+                    prompt: task.prompt,
+                    step_id: task.step_id
+                  })),
+                run_id: detail.run.id,
+                status: detail.run.status,
+                workflow_name: detail.run.workflow_name
+              }
+            : null,
+        runStatus: null
+      });
+      await refreshHumanTasks();
+      await refreshRunHistory(detail.run.id, detail.run.workflow_name);
+    };
+
+    void poll();
+
+    return () => {
+      cancelled = true;
+      if (timer) {
+        clearTimeout(timer);
+      }
+    };
+  }, [isRunning, selectedRunId, logLevelFilter, logSearch]);
+
   async function bootstrap() {
     patchWorkflowState({
       globalError: null,
@@ -399,17 +464,21 @@ export function EditorShell() {
       ]);
 
       const nextRunId =
-        pageResponse.runs.find((run) => run.id === preferredRunId)?.id ??
-        pageResponse.runs.find(
-          (run) => run.id === currentObservabilityState.selectedRunId
-        )?.id ??
-        pageResponse.runs[0]?.id ??
+        preferredRunId ??
+        (currentObservabilityState.selectedRunId
+          ? pageResponse.runs.find(
+              (run) => run.id === currentObservabilityState.selectedRunId
+            )?.id
+          : undefined) ??
         null;
       patchObservabilityState({
         isRefreshingHistory: false,
         logs: nextRunId ? currentObservabilityState.logs : null,
         metrics: parseMetricsSummary(metricsText),
-        runDetail: nextRunId ? currentObservabilityState.runDetail : null,
+        runDetail:
+          nextRunId && currentObservabilityState.runDetail?.run.id === nextRunId
+            ? currentObservabilityState.runDetail
+            : null,
         runPage: pageResponse,
         selectedRunId: nextRunId
       });
@@ -442,8 +511,10 @@ export function EditorShell() {
         logs: logResponse,
         runDetail: detailResponse
       });
+      return detailResponse;
     } catch (error) {
       patchWorkflowState({ globalError: errorMessage(error) });
+      return null;
     }
   }
 
@@ -872,10 +943,20 @@ export function EditorShell() {
       });
       return;
     }
-    patchWorkflowState({ isRunning: true });
+    patchWorkflowState({
+      isRunning: true,
+      lastAction: "Workflow run started",
+      lastRun: null,
+      runStatus: null
+    });
+    patchObservabilityState({
+      logs: null,
+      runDetail: null,
+      selectedRunId: null
+    });
     try {
-      const response = await fetchEngineJson<RunSummary>(
-        `/api/workflows/${activeWorkflow.id}/run`,
+      const response = await fetchEngineJson<RunStartResponse>(
+        `/api/workflows/${activeWorkflow.id}/run-async`,
         {
           body: JSON.stringify({ payload: {} }),
           headers: {
@@ -885,25 +966,17 @@ export function EditorShell() {
         }
       );
       patchWorkflowState({
-        lastRun: response,
-        runStatus: `${response.status} • ${response.run_id.slice(0, 8)}`
+        globalError: null
       });
-      await refreshHumanTasks();
-      await refreshRunHistory(response.run_id);
-      patchWorkflowState({
-        globalError: null,
-        lastAction:
-          response.status === "paused"
-            ? `Run paused with ${response.pending_tasks.length} pending task(s)`
-            : `Run completed successfully (${response.completed_steps} steps)`
-      });
+      patchObservabilityState({ selectedRunId: response.run_id });
+      await refreshRunHistory(response.run_id, response.workflow_name);
     } catch (error) {
       patchWorkflowState({
         globalError: errorMessage(error),
-        lastAction: "Workflow run failed"
+        isRunning: false,
+        lastAction: "Workflow run failed",
+        runStatus: "failed"
       });
-    } finally {
-      patchWorkflowState({ isRunning: false });
     }
   }
 
@@ -1197,9 +1270,7 @@ export function EditorShell() {
 
   const showCanvasView = centerView === "canvas";
   const showNodeRail = showCanvasView && Boolean(selectedNode);
-  const activeRunStatus =
-    runStatus ??
-    (lastRun ? `${lastRun.status} • ${lastRun.run_id.slice(0, 8)}` : null);
+  const activeRunStatus = isRunning ? "running" : runDetail?.run.status ?? runStatus ?? null;
   const draftNotice = workflowDraftNotice(activeWorkflow);
   const centerViewLabel =
     centerView === "canvas"
@@ -1230,7 +1301,6 @@ export function EditorShell() {
           runDisabledReason={runDisabledReason}
           saveDisabled={!canSave}
           saveDisabledReason={saveDisabledReason}
-          runStatus={activeRunStatus}
         />
 
         {globalError ? (

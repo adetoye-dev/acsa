@@ -1,0 +1,18 @@
+{
+  "name": "AI News Brief Renderer",
+  "type": "ai_news_brief_renderer",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "inputs": [
+    "draft_news_brief"
+  ],
+  "outputs": [
+    "body",
+    "body_html",
+    "markdown",
+    "subject"
+  ],
+  "limits": {
+    "timeout": 3000
+  }
+}

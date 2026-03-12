@@ -91,7 +91,7 @@ impl Cli {
     }
 
     pub const fn usage() -> &'static str {
-        "Usage:\n  acsa-core validate [workflow-file] [--json]\n  acsa-core list [workflows-dir] [--json]\n  acsa-core run [workflow-file] [--db path] [--max-concurrency N] [--json]\n  acsa-core serve [workflows-dir] [--db path] [--host HOST] [--port PORT] [--max-concurrency N]\n  acsa-core connector-new NAME --type TYPE --runtime process|wasm [--dir connectors]\n  acsa-core connector-test [manifest-file] [--inputs path] [--params path]\n  acsa-core version\n  acsa-core --version\n\nDefaults:\n  validate        workflows/hello.yaml\n  list            workflows/\n  run             workflows/manual-demo.yaml --db acsa.db\n  serve           workflows/ --db acsa.db --host 127.0.0.1 --port 3001\n  connector-test  examples/process-connector/manifest.json --inputs examples/process-connector/sample-input.json\n\nExamples:\n  acsa-core run workflows/manual-demo.yaml --db acsa.db\n  acsa-core run workflows/manual-demo.yaml --db acsa.db --json\n  acsa-core list workflows --json\n  acsa-core serve workflows --db acsa.db --port 3001\n  acsa-core connector-test\n  acsa-core connector-new sample-echo --type sample_echo --runtime process --dir ./connectors"
+        "Usage:\n  acsa-core validate [workflow-file] [--json]\n  acsa-core list [workflows-dir] [--json]\n  acsa-core run [workflow-file] [--db path] [--max-concurrency N] [--json]\n  acsa-core serve [workflows-dir] [--db path] [--host HOST] [--port PORT] [--max-concurrency N]\n  acsa-core connector-new NAME --type TYPE --runtime process|wasm [--dir connectors]\n  acsa-core connector-test [manifest-file] [--inputs path] [--params path]\n  acsa-core version\n  acsa-core --version\n\nDefaults:\n  validate        workflows/hello.yaml\n  list            workflows/\n  run             workflows/ai-news-intelligence-demo.yaml --db acsa.db\n  serve           workflows/ --db acsa.db --host 127.0.0.1 --port 3001\n  connector-test  examples/process-connector/manifest.json --inputs examples/process-connector/sample-input.json\n\nExamples:\n  acsa-core run workflows/ai-news-intelligence-demo.yaml --db acsa.db\n  acsa-core run workflows/ai-news-intelligence-demo.yaml --db acsa.db --json\n  acsa-core list workflows --json\n  acsa-core serve workflows --db acsa.db --port 3001\n  acsa-core connector-test\n  acsa-core connector-new sample-echo --type sample_echo --runtime process --dir ./connectors"
     }
 }
 
@@ -134,7 +134,7 @@ fn parse_list(args: &[String]) -> Result<Command, CliError> {
 }
 
 fn parse_run(args: &[String]) -> Result<Command, CliError> {
-    let mut workflow_path = PathBuf::from("workflows/manual-demo.yaml");
+    let mut workflow_path = PathBuf::from("workflows/ai-news-intelligence-demo.yaml");
     let mut database_path = PathBuf::from("acsa.db");
     let mut json = false;
     let mut max_concurrency = 4usize;
@@ -393,7 +393,7 @@ mod tests {
     #[test]
     fn parse_run_accepts_json_flag() {
         let command = super::parse_run(&[
-            "workflows/manual-demo.yaml".to_string(),
+            "workflows/ai-news-intelligence-demo.yaml".to_string(),
             "--db".to_string(),
             "acsa.db".to_string(),
             "--json".to_string(),
@@ -406,7 +406,7 @@ mod tests {
                 database_path: PathBuf::from("acsa.db"),
                 json: true,
                 max_concurrency: 4,
-                workflow_path: PathBuf::from("workflows/manual-demo.yaml"),
+                workflow_path: PathBuf::from("workflows/ai-news-intelligence-demo.yaml"),
             }
         );
     }

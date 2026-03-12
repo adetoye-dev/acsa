@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Hugging Face Blog</title>
+  <entry>
+    <title>Open-source agent stack for production AI workflows</title>
+    <link href="https://huggingface.co/blog/agent-stack" />
+    <summary>How to assemble retrieval, inference, and evaluation into a pragmatic production stack.</summary>
+    <updated>2026-03-12T06:00:00Z</updated>
+  </entry>
+</feed>
