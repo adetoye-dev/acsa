@@ -17,6 +17,7 @@
  */
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -143,15 +144,18 @@ export function WorkflowCanvas({
     }
   }
 
-  function handleDeleteEdges(edgeIds: string[]) {
-    if (edgeIds.length === 0) {
-      return;
-    }
+  const handleDeleteEdges = useCallback(
+    (edgeIds: string[]) => {
+      if (edgeIds.length === 0) {
+        return;
+      }
 
-    const nextEdges = localEdgesRef.current.filter((edge) => !edgeIds.includes(edge.id));
-    setLocalEdges(nextEdges);
-    onEdgesCommit(nextEdges);
-  }
+      const nextEdges = localEdgesRef.current.filter((edge) => !edgeIds.includes(edge.id));
+      setLocalEdges(nextEdges);
+      onEdgesCommit(nextEdges);
+    },
+    [onEdgesCommit]
+  );
 
   function handleConnect(connection: Connection) {
     if (
@@ -227,7 +231,7 @@ export function WorkflowCanvas({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [onDeleteStep]);
+  }, [handleDeleteEdges, onDeleteStep]);
 
   return (
     <ReactFlowProvider>
