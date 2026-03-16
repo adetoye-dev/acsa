@@ -102,23 +102,23 @@ steps:
 ui:
   positions:
     __trigger__:
-      x: -280.0
-      y: 300.0
+      x: -440.0
+      y: -440.0
     collect_news_context:
       x: 40.0
-      y: 240.0
-    write_context_snapshot:
-      x: 360.0
-      y: 40.0
+      y: -720.0
     draft_news_brief:
-      x: 380.0
-      y: 320.0
+      x: 520.0
+      y: -260.0
     render_news_brief:
-      x: 760.0
-      y: 320.0
-    write_brief_archive:
-      x: 1080.0
-      y: 320.0
+      x: 900.0
+      y: -40.0
     send_brief_email:
-      x: 1400.0
-      y: 320.0
+      x: 1560.0
+      y: -320.0
+    write_brief_archive:
+      x: 1300.0
+      y: 0.0
+    write_context_snapshot:
+      x: 520.0
+      y: -560.0

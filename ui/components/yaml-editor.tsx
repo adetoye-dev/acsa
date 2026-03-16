@@ -18,12 +18,63 @@
 
 import { useMemo } from "react";
 
+import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { yaml } from "@codemirror/lang-yaml";
+import { tags } from "@lezer/highlight";
+import { EditorView } from "@codemirror/view";
 import dynamic from "next/dynamic";
 
 const CodeMirror = dynamic(async () => (await import("@uiw/react-codemirror")).default, {
   ssr: false
 });
+
+const yamlEditorTheme = EditorView.theme({
+  "&": {
+    backgroundColor: "rgba(17, 23, 25, 0.98)",
+    color: "#e7f0ef"
+  },
+  ".cm-content": {
+    caretColor: "#f2f7f6"
+  },
+  ".cm-activeLine": {
+    backgroundColor: "rgba(255, 255, 255, 0.03)"
+  },
+  ".cm-activeLineGutter": {
+    backgroundColor: "rgba(255, 255, 255, 0.03)"
+  },
+  ".cm-gutters": {
+    backgroundColor: "rgba(10, 14, 15, 0.94)",
+    color: "rgba(213, 228, 227, 0.52)"
+  }
+});
+
+const yamlHighlightStyle = HighlightStyle.define([
+  {
+    tag: [tags.propertyName, tags.attributeName, tags.labelName],
+    color: "#f5d88d"
+  },
+  {
+    tag: [tags.string, tags.special(tags.string)],
+    color: "#d6f3c8"
+  },
+  {
+    tag: [tags.number, tags.bool, tags.null, tags.atom],
+    color: "#9fd8ff"
+  },
+  {
+    tag: [tags.keyword],
+    color: "#ffb07a"
+  },
+  {
+    tag: [tags.comment],
+    color: "rgba(176, 196, 194, 0.58)",
+    fontStyle: "italic"
+  },
+  {
+    tag: [tags.punctuation, tags.brace, tags.squareBracket],
+    color: "rgba(216, 230, 229, 0.82)"
+  }
+]);
 
 type YamlEditorProps = {
   id: string;
@@ -33,7 +84,10 @@ type YamlEditorProps = {
 };
 
 export function YamlEditor({ id, minHeight, onChange, value }: YamlEditorProps) {
-  const extensions = useMemo(() => [yaml()], []);
+  const extensions = useMemo(
+    () => [yaml(), yamlEditorTheme, syntaxHighlighting(yamlHighlightStyle)],
+    []
+  );
 
   return (
     <div className="yaml-editor overflow-hidden" style={{ minHeight }}>
