@@ -67,20 +67,15 @@ Those three commands cover workspace bootstrap, workflow validation, and connect
 If you want the fastest explanation of why Acsa exists, run the AI news intelligence demo:
 
 ```bash
-export OPENAI_API_KEY="YOUR_OPENAI_KEY"
-export ACSA_DEMO_EMAIL_TO="you@example.com"
-export ACSA_SMTP_HOST="smtp.example.com"
-export ACSA_SMTP_PORT="587"
-export ACSA_SMTP_USERNAME="smtp-user"
-export ACSA_SMTP_PASSWORD="smtp-password"
-export ACSA_SMTP_FROM="acsa-demo@example.com"
-# Optional. Defaults to `auto` and chooses `ssl` for port 465, `starttls` otherwise.
-export ACSA_SMTP_TLS="auto"
-
+cp .env.local.example .env.local
+# edit .env.local with your real OpenAI and SMTP values
 cargo run -p acsa-core -- validate workflows/ai-news-intelligence-demo.yaml
 cargo run -p acsa-core -- run workflows/ai-news-intelligence-demo.yaml --db ./acsa-demo.db --json
 cat data/demo/output/ai-news-intelligence-brief.md
 ```
+
+`acsa-core` now loads `.env.local` automatically from the repository root. Exported shell
+variables still win if both are present.
 
 What it shows in one pass:
 

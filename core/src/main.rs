@@ -14,7 +14,7 @@
 
 #![deny(warnings)]
 
-use std::{fs, io, path::Path};
+use std::{env, fs, io, path::Path};
 
 use serde_json::json;
 
@@ -34,11 +34,31 @@ type MainError = Box<dyn std::error::Error>;
 
 #[tokio::main]
 async fn main() {
+    if let Err(error) = load_local_env_files() {
+        report_error(error.as_ref());
+        std::process::exit(1);
+    }
     init_tracing();
     if let Err(error) = run().await {
         report_error(error.as_ref());
         std::process::exit(1);
     }
+}
+
+fn load_local_env_files() -> Result<(), MainError> {
+    let current_dir = env::current_dir()?;
+    load_env_file_if_present(&current_dir.join(".env.local"))?;
+    load_env_file_if_present(&current_dir.join(".env"))?;
+    Ok(())
+}
+
+fn load_env_file_if_present(path: &Path) -> Result<(), MainError> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    dotenvy::from_path(path).map_err(|error| -> MainError { Box::new(error) })?;
+    Ok(())
 }
 
 async fn run() -> Result<(), MainError> {

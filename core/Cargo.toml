@@ -16,6 +16,7 @@ async-trait = "0.1"
 axum = { version = "0.8.6", default-features = false, features = ["http1", "json", "original-uri", "query", "tokio"] }
 chrono = { version = "0.4.42", default-features = false, features = ["clock"] }
 cron = "0.13.0"
+dotenvy = "0.15.7"
 extism = "1.13.0"
 hmac = "0.12"
 sha2 = "0.10"

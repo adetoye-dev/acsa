@@ -23,24 +23,15 @@ The workflow lives in `workflows/` on purpose so it shows up in the editor immed
 From the repository root:
 
 ```bash
-export OPENAI_API_KEY="YOUR_OPENAI_KEY"
-export ACSA_DEMO_EMAIL_TO="you@example.com"
-export ACSA_SMTP_HOST="smtp.example.com"
-export ACSA_SMTP_PORT="587"
-export ACSA_SMTP_USERNAME="smtp-user"
-export ACSA_SMTP_PASSWORD="smtp-password"
-export ACSA_SMTP_FROM="acsa-demo@example.com"
-# Optional. Defaults to `auto` and picks `ssl` for port 465, `starttls` otherwise.
-export ACSA_SMTP_TLS="auto"
-# Optional. Increase if your SMTP provider is slow to respond.
-export ACSA_SMTP_TIMEOUT_SECS="25"
-# Optional. The built-in OpenAI node reads this when the workflow omits `model`.
-export OPENAI_MODEL="gpt-4.1-mini"
-
+cp .env.local.example .env.local
+# edit .env.local with your real OpenAI and SMTP values
 cargo run -p acsa-core -- validate workflows/ai-news-intelligence-demo.yaml
 cargo run -p acsa-core -- run workflows/ai-news-intelligence-demo.yaml --db ./acsa-demo.db --json
 cat data/demo/output/ai-news-intelligence-brief.md
 ```
+
+`acsa-core` loads `.env.local` automatically when you run from the repository root. If you also
+export values in your shell, those exported values take precedence.
 
 Expected runtime is well under five minutes on a normal developer machine.
 
