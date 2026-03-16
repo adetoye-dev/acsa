@@ -1,6 +1,6 @@
 .DS_Store
 .env
-.env.*
+.env.local
 .turbo
 .vercel
 .next

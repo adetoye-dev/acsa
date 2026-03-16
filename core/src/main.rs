@@ -47,8 +47,8 @@ async fn main() {
 
 fn load_local_env_files() -> Result<(), MainError> {
     let current_dir = env::current_dir()?;
-    load_env_file_if_present(&current_dir.join(".env"))?;
     load_env_file_if_present(&current_dir.join(".env.local"))?;
+    load_env_file_if_present(&current_dir.join(".env"))?;
     Ok(())
 }
 
