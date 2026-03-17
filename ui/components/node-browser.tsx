@@ -25,12 +25,14 @@ import {
 } from "./node-visuals";
 
 type NodeBrowserProps = {
+  contextHint?: string | null;
   onClose: () => void;
   onSelectType: (typeName: string) => void;
   stepCatalog: StepTypeEntry[];
 };
 
 export function NodeBrowser({
+  contextHint,
   onClose,
   onSelectType,
   stepCatalog
@@ -73,6 +75,9 @@ export function NodeBrowser({
             <div className="mt-1 text-lg font-semibold tracking-tight text-ink">
               Add a step
             </div>
+            {contextHint ? (
+              <div className="mt-1 text-xs text-slate">{contextHint}</div>
+            ) : null}
           </div>
           <button
             aria-label="Close node browser"

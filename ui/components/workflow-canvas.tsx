@@ -62,6 +62,8 @@ type WorkflowCanvasProps = {
   edges: Edge[];
   frameRequestKey?: number;
   nodes: CanvasNode[];
+  onInsertBetween: (sourceId: string, targetId: string) => void;
+  onRequestAddAfterNode: (nodeId: string) => void;
   onAttachStepToTrigger: (stepId: string) => void;
   onDeleteStep: (stepId: string) => void;
   onEdgesCommit: (edges: Edge[]) => void;
@@ -77,6 +79,8 @@ export function WorkflowCanvas({
   edges,
   frameRequestKey = 0,
   nodes,
+  onInsertBetween,
+  onRequestAddAfterNode,
   onAttachStepToTrigger,
   onDeleteStep,
   onEdgesCommit,
@@ -88,9 +92,11 @@ export function WorkflowCanvas({
   showViewportPanel = true
 }: WorkflowCanvasProps) {
   const [localNodes, setLocalNodes] = useState<CanvasNode[]>(() =>
-    attachNodeActions(nodes, onDeleteStep)
+    attachNodeActions(nodes, onDeleteStep, readOnly ? null : onRequestAddAfterNode)
   );
-  const [localEdges, setLocalEdges] = useState<Edge[]>(edges);
+  const [localEdges, setLocalEdges] = useState<Edge[]>(() =>
+    attachEdgeActions(edges, readOnly ? null : onInsertBetween)
+  );
   const localNodesRef = useRef<CanvasNode[]>(nodes);
   const localEdgesRef = useRef<Edge[]>(edges);
   const nodeTypes = useMemo<NodeTypes>(
@@ -111,12 +117,21 @@ export function WorkflowCanvas({
   }, [localEdges]);
 
   useEffect(() => {
-    setLocalNodes(attachNodeActions(nodes, onDeleteStep));
-  }, [nodes, onDeleteStep]);
+    setLocalNodes((current) =>
+      attachNodeActions(
+        nodes,
+        onDeleteStep,
+        readOnly ? null : onRequestAddAfterNode,
+        current
+      )
+    );
+  }, [nodes, onDeleteStep, onRequestAddAfterNode, readOnly]);
 
   useEffect(() => {
-    setLocalEdges(edges);
-  }, [edges]);
+    setLocalEdges((current) =>
+      attachEdgeActions(edges, readOnly ? null : onInsertBetween, current)
+    );
+  }, [edges, onInsertBetween, readOnly]);
 
   function handleNodesChange(changes: NodeChange<CanvasNode>[]) {
     if (readOnly) {
@@ -358,14 +373,45 @@ function InitialFrame({
 
 function attachNodeActions(
   nodes: CanvasNode[],
-  onDeleteStep: (stepId: string) => void
+  onDeleteStep: (stepId: string) => void,
+  onAddAfterNode: ((nodeId: string) => void) | null,
+  currentNodes: CanvasNode[] = []
 ) {
+  const selectedNodeIds = new Set(
+    currentNodes.filter((node) => node.selected).map((node) => node.id)
+  );
+
   return nodes.map((node) => ({
     ...node,
+    selected: selectedNodeIds.has(node.id),
     data: {
       ...node.data,
+      onAddAfter: onAddAfterNode,
       onDelete: node.data.kind === "step" ? onDeleteStep : null
     }
+  }));
+}
+
+function attachEdgeActions(
+  edges: Edge[],
+  onInsertBetween: ((sourceId: string, targetId: string) => void) | null,
+  currentEdges: Edge[] = []
+) {
+  const selectedEdgeIds = new Set(
+    currentEdges.filter((edge) => edge.selected).map((edge) => edge.id)
+  );
+
+  return edges.map((edge) => ({
+    ...edge,
+    selected: selectedEdgeIds.has(edge.id),
+    data: onInsertBetween
+      ? {
+          ...(typeof edge.data === "object" && edge.data !== null ? edge.data : {}),
+          onInsertBetween,
+          sourceId: edge.source,
+          targetId: edge.target
+        }
+      : edge.data
   }));
 }
 

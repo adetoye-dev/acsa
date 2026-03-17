@@ -48,6 +48,7 @@ import {
   useObservabilityStore
 } from "../lib/observability-store";
 import {
+  addStepAfterNode,
   addStepToWorkflow,
   autoLayoutWorkflow,
   createLocalWorkflowDocument,
@@ -73,6 +74,7 @@ import {
   workflowToYaml,
   updateWorkflowEdges,
   removeStepFromWorkflow,
+  insertStepBetweenNodes,
   slugifyIdentifier,
   summarizeWorkflow,
   withStepUpdated
@@ -96,6 +98,11 @@ type WorkflowInventoryResponse = {
 type HumanTaskResponse = {
   tasks: HumanTask[];
 };
+
+type AddStepIntent =
+  | { mode: "detached" }
+  | { mode: "after"; sourceNodeId: string }
+  | { mode: "between"; sourceId: string; targetId: string };
 
 export function EditorShell() {
   const {
@@ -167,6 +174,7 @@ export function EditorShell() {
   const [centerView, setCenterView] = useState<WorkspaceView>("canvas");
   const [frameRequestKey, setFrameRequestKey] = useState(0);
   const [isAddStepMenuOpen, setIsAddStepMenuOpen] = useState(false);
+  const [addStepIntent, setAddStepIntent] = useState<AddStepIntent>({ mode: "detached" });
   const [liveRunId, setLiveRunId] = useState<string | null>(null);
   const [liveRunDetail, setLiveRunDetail] = useState<RunDetailResponse | null>(null);
   const canvas = useMemo(
@@ -180,6 +188,27 @@ export function EditorShell() {
     () => decorateNodesForSelectedRun(canvas.nodes, activeWorkflow, liveRunDetail),
     [activeWorkflow, canvas.nodes, liveRunDetail]
   );
+  const canvasNodeLookup = useMemo(
+    () => new Map(canvas.nodes.map((node) => [node.id, node])),
+    [canvas.nodes]
+  );
+  const nodeBrowserHint = useMemo(() => {
+    if (addStepIntent.mode === "after") {
+      return `Add after ${
+        canvasNodeLookup.get(addStepIntent.sourceNodeId)?.data.label ?? "selected node"
+      }`;
+    }
+
+    if (addStepIntent.mode === "between") {
+      const sourceLabel =
+        canvasNodeLookup.get(addStepIntent.sourceId)?.data.label ?? "source node";
+      const targetLabel =
+        canvasNodeLookup.get(addStepIntent.targetId)?.data.label ?? "target node";
+      return `Insert between ${sourceLabel} and ${targetLabel}`;
+    }
+
+    return "Create an unconnected draft step";
+  }, [addStepIntent, canvasNodeLookup]);
   const selectedNode =
     selectedNodeId === null
       ? null
@@ -876,14 +905,31 @@ export function EditorShell() {
     patchWorkflowState({ lastAction: "Updated node positions" });
   }
 
+  function handleRequestAddAfterNode(nodeId: string) {
+    setAddStepIntent({ mode: "after", sourceNodeId: nodeId });
+    setIsAddStepMenuOpen(true);
+  }
+
+  function handleRequestInsertBetween(sourceId: string, targetId: string) {
+    setAddStepIntent({ mode: "between", sourceId, targetId });
+    setIsAddStepMenuOpen(true);
+  }
+
   function handleAddStep(typeName: string) {
     if (!activeWorkflow) {
       return;
     }
-    const { selectedNodeId: createdNodeId, workflow } = addStepToWorkflow(
-      activeWorkflow.workflow,
-      typeName
-    );
+    const { selectedNodeId: createdNodeId, workflow } =
+      addStepIntent.mode === "after"
+        ? addStepAfterNode(activeWorkflow.workflow, typeName, addStepIntent.sourceNodeId)
+        : addStepIntent.mode === "between"
+          ? insertStepBetweenNodes(
+              activeWorkflow.workflow,
+              typeName,
+              addStepIntent.sourceId,
+              addStepIntent.targetId
+            )
+          : addStepToWorkflow(activeWorkflow.workflow, typeName);
     applyActiveWorkflowUpdate((document) => ({
       ...document,
       workflow
@@ -892,6 +938,7 @@ export function EditorShell() {
       lastAction: `Added ${typeName.replace(/_/g, " ")} step`,
       selectedNodeId: createdNodeId
     });
+    setAddStepIntent({ mode: "detached" });
     setIsAddStepMenuOpen(false);
   }
 
@@ -1410,9 +1457,12 @@ export function EditorShell() {
                         onAttachStepToTrigger={handleAttachStepToTrigger}
                         onDeleteStep={handleDeleteSelectedNode}
                         onEdgesCommit={handleEdgesCommit}
+                        onInsertBetween={handleRequestInsertBetween}
                         onPositionsCommit={handlePositionsCommit}
+                        onRequestAddAfterNode={handleRequestAddAfterNode}
                         onSelectNode={(nodeId) => {
                           setIsAddStepMenuOpen(false);
+                          setAddStepIntent({ mode: "detached" });
                           patchWorkflowState({ selectedNodeId: nodeId });
                         }}
                         showControls={false}
@@ -1455,7 +1505,10 @@ export function EditorShell() {
                             ? "border-[#f0a15e]/35 bg-[#e18a46] text-[#140c06]"
                             : "border-black/10 bg-white/92 text-[#334155] hover:border-[#f0a15e]/18 hover:bg-[#fff5ed]"
                         }`}
-                        onClick={() => setIsAddStepMenuOpen((current) => !current)}
+                        onClick={() => {
+                          setAddStepIntent({ mode: "detached" });
+                          setIsAddStepMenuOpen((current) => !current);
+                        }}
                         type="button"
                       >
                         +
@@ -1508,7 +1561,11 @@ export function EditorShell() {
             <aside className="panel-surface grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
               {showNodeBrowser ? (
                 <NodeBrowser
-                  onClose={() => setIsAddStepMenuOpen(false)}
+                  contextHint={nodeBrowserHint}
+                  onClose={() => {
+                    setAddStepIntent({ mode: "detached" });
+                    setIsAddStepMenuOpen(false);
+                  }}
                   onSelectType={handleAddStep}
                   stepCatalog={stepCatalog}
                 />

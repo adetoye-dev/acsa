@@ -109,6 +109,21 @@ export const WorkflowNode = memo(function WorkflowNode({
         position={Position.Right}
         type="source"
       />
+
+      {selected && data.onAddAfter ? (
+        <button
+          aria-label={`Add step after ${data.label}`}
+          className="absolute right-[-18px] top-1/2 z-20 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[#f0a15e]/22 bg-white text-lg font-medium text-[#d37d3e] shadow-[0_10px_24px_rgba(211,125,62,0.16)] transition hover:border-[#f0a15e]/36 hover:bg-[#fff5ed]"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            data.onAddAfter?.(data.nodeId);
+          }}
+          type="button"
+        >
+          +
+        </button>
+      ) : null}
     </div>
   );
 });
@@ -142,7 +157,7 @@ function containerClassName(
   state: NodeExecutionState
 ) {
   const base =
-    "min-w-[240px] cursor-grab rounded-2xl border bg-white/92 px-4 py-3 shadow-[0_10px_28px_rgba(18,31,52,0.08)] transition duration-150 active:cursor-grabbing";
+    "relative min-w-[240px] cursor-grab rounded-2xl border bg-white/92 px-4 py-3 shadow-[0_10px_28px_rgba(18,31,52,0.08)] transition duration-150 active:cursor-grabbing";
   const selectedState = selected ? "border-tide/70 ring-2 ring-tide/15" : "";
   const kindStateDefault =
   kind === "trigger"

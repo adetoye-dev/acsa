@@ -18,6 +18,7 @@
 
 import {
   BaseEdge,
+  EdgeLabelRenderer,
   getSmoothStepPath,
   type EdgeProps
 } from "@xyflow/react";
@@ -25,7 +26,14 @@ import {
 const SELECTED_EDGE_STROKE = "rgba(92, 221, 229, 0.96)";
 const SELECTED_EDGE_WIDTH = 2.8;
 
+type WorkflowEdgeData = {
+  onInsertBetween?: (sourceId: string, targetId: string) => void;
+  sourceId: string;
+  targetId: string;
+};
+
 export function WorkflowEdge({
+  data,
   id,
   markerEnd,
   selected,
@@ -37,7 +45,8 @@ export function WorkflowEdge({
   targetX,
   targetY
 }: EdgeProps) {
-  const [edgePath] = getSmoothStepPath({
+  const edgeData = isWorkflowEdgeData(data) ? data : null;
+  const [edgePath, labelX, labelY] = getSmoothStepPath({
     sourcePosition,
     sourceX,
     sourceY,
@@ -90,7 +99,41 @@ export function WorkflowEdge({
           strokeWidth
         }}
       />
+      {selected && edgeData?.onInsertBetween ? (
+        <EdgeLabelRenderer>
+          <button
+            aria-label="Insert step on connection"
+            className="nodrag nopan absolute flex h-8 w-8 items-center justify-center rounded-full border border-[#7c8fff]/22 bg-white text-base font-medium text-[#5e86ff] shadow-[0_10px_24px_rgba(94,134,255,0.14)] transition hover:border-[#7c8fff]/36 hover:bg-[#eef3ff]"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              edgeData.onInsertBetween?.(edgeData.sourceId, edgeData.targetId);
+            }}
+            style={{
+              pointerEvents: "all",
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`
+            }}
+            type="button"
+          >
+            +
+          </button>
+        </EdgeLabelRenderer>
+      ) : null}
     </>
+  );
+}
+
+function isWorkflowEdgeData(value: unknown): value is WorkflowEdgeData {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<WorkflowEdgeData>;
+  return (
+    typeof candidate.sourceId === "string" &&
+    typeof candidate.targetId === "string" &&
+    (candidate.onInsertBetween === undefined ||
+      typeof candidate.onInsertBetween === "function")
   );
 }
 

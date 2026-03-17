@@ -150,6 +150,7 @@ export type CanvasNodeData = {
   executionState?: NodeExecutionState;
   kind: "step" | "trigger";
   label: string;
+  onAddAfter?: ((nodeId: string) => void) | null;
   nodeId: string;
   onDelete?: ((nodeId: string) => void) | null;
   runtime?: string | null;
@@ -175,14 +176,7 @@ export function addStepToWorkflow(
   workflow: WorkflowDefinition,
   typeName: string
 ): { selectedNodeId: string; workflow: WorkflowDefinition } {
-  const nextIndex = nextStepIndex(workflow.steps, typeName);
-  const stepId = `${slugifyIdentifier(typeName)}_${nextIndex}`;
-  const createdStep: StepDefinition = {
-    id: stepId,
-    next: [],
-    params: defaultStepParamsForType(typeName),
-    type: typeName
-  };
+  const { createdStep, stepId } = createStepForType(workflow, typeName);
 
   return {
     selectedNodeId: stepId,
@@ -196,6 +190,84 @@ export function addStepToWorkflow(
         )
       }
     }
+  };
+}
+
+export function addStepAfterNode(
+  workflow: WorkflowDefinition,
+  typeName: string,
+  sourceNodeId: string
+): { selectedNodeId: string; workflow: WorkflowDefinition } {
+  const { createdStep, stepId } = createStepForType(workflow, typeName);
+  const detachedSteps = new Set(workflow.ui?.detached_steps ?? []);
+  detachedSteps.delete(stepId);
+
+  return {
+    selectedNodeId: stepId,
+    workflow: cleanWorkflow({
+      ...workflow,
+      steps:
+        sourceNodeId === TRIGGER_NODE_ID
+          ? [...workflow.steps, createdStep]
+          : workflow.steps.map((step) =>
+              step.id === sourceNodeId
+                ? {
+                    ...step,
+                    next: Array.from(new Set([...step.next, stepId]))
+                  }
+                : step
+            ).concat(createdStep),
+      ui: {
+        ...(workflow.ui ?? {}),
+        ...(detachedSteps.size > 0
+          ? { detached_steps: Array.from(detachedSteps) }
+          : {})
+      }
+    })
+  };
+}
+
+export function insertStepBetweenNodes(
+  workflow: WorkflowDefinition,
+  typeName: string,
+  sourceNodeId: string,
+  targetNodeId: string
+): { selectedNodeId: string; workflow: WorkflowDefinition } {
+  if (sourceNodeId !== TRIGGER_NODE_ID) {
+    const sourceStep = workflow.steps.find((step) => step.id === sourceNodeId);
+    if (!sourceStep || !sourceStep.next.includes(targetNodeId)) {
+      return { selectedNodeId: targetNodeId, workflow };
+    }
+  }
+
+  const { createdStep, stepId } = createStepForType(workflow, typeName, [targetNodeId]);
+  const detachedSteps = new Set(workflow.ui?.detached_steps ?? []);
+  detachedSteps.delete(stepId);
+
+  return {
+    selectedNodeId: stepId,
+    workflow: cleanWorkflow({
+      ...workflow,
+      steps:
+        sourceNodeId === TRIGGER_NODE_ID
+          ? [...workflow.steps, createdStep]
+          : workflow.steps.map((step) =>
+              step.id === sourceNodeId
+                ? {
+                    ...step,
+                    next: step.next.flatMap((candidate) =>
+                      candidate === targetNodeId ? [stepId] : [candidate]
+                    )
+                  }
+                : step
+            ).concat(createdStep),
+      ui: {
+        ...(workflow.ui ?? {}),
+        ...(detachedSteps.size > 0
+          ? { detached_steps: Array.from(detachedSteps) }
+          : {})
+      }
+    })
   };
 }
 
@@ -923,6 +995,23 @@ function nextStepIndex(steps: StepDefinition[], typeName: string): number {
   }
 
   return maxSuffix + 1;
+}
+
+function createStepForType(
+  workflow: WorkflowDefinition,
+  typeName: string,
+  next: string[] = []
+) {
+  const nextIndex = nextStepIndex(workflow.steps, typeName);
+  const stepId = `${slugifyIdentifier(typeName)}_${nextIndex}`;
+  const createdStep: StepDefinition = {
+    id: stepId,
+    next,
+    params: defaultStepParamsForType(typeName),
+    type: typeName
+  };
+
+  return { createdStep, stepId };
 }
 
 function asRecord(value: unknown, fieldName: string): Record<string, unknown> {

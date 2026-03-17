@@ -284,7 +284,9 @@ export function ExecutionDebugger({
                       onAttachStepToTrigger={() => {}}
                       onDeleteStep={() => {}}
                       onEdgesCommit={() => {}}
+                      onInsertBetween={() => {}}
                       onPositionsCommit={() => {}}
+                      onRequestAddAfterNode={() => {}}
                       onSelectNode={(nodeId) =>
                         setSelectedStepId(nodeId && nodeId !== TRIGGER_NODE_ID ? nodeId : null)
                       }
