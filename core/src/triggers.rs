@@ -25,11 +25,12 @@ use std::{
 
 use axum::{
     body::Bytes,
-    extract::{OriginalUri, Path as AxumPath, Query, State},
+    extract::{ConnectInfo, OriginalUri, Path as AxumPath, Query, State},
     http::{
-        header::{HeaderName, CONTENT_TYPE},
-        HeaderMap, StatusCode,
+        header::{HeaderName, AUTHORIZATION, CONTENT_TYPE},
+        HeaderMap, Request, StatusCode,
     },
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -72,10 +73,17 @@ pub struct TriggerServerConfig {
 
 #[derive(Clone)]
 struct AppState {
+    access_control: EngineAccessControl,
     connectors_dir: PathBuf,
     engine: WorkflowEngine,
     webhook_workflows: Arc<HashMap<String, WebhookWorkflow>>,
     workflows_dir: PathBuf,
+}
+
+#[derive(Clone)]
+struct EngineAccessControl {
+    allow_remote: bool,
+    auth_token: Option<String>,
 }
 
 #[derive(Clone)]
@@ -341,6 +349,21 @@ pub async fn serve(
     engine: WorkflowEngine,
     config: TriggerServerConfig,
 ) -> Result<(), TriggerError> {
+    let access_control = EngineAccessControl::from_env();
+    if !config.bind_addr.ip().is_loopback() && !access_control.allow_remote {
+        return Err(TriggerError::RemoteBindingRequiresExplicitOptIn { bind_addr: config.bind_addr });
+    }
+
+    if !config.bind_addr.ip().is_loopback()
+        && access_control.allow_remote
+        && access_control.auth_token.is_none()
+    {
+        tracing::warn!(
+            bind_addr = %config.bind_addr,
+            "remote engine access enabled without ACSA_ENGINE_AUTH_TOKEN"
+        );
+    }
+
     let workflows = load_workflows_from_dir(&config.workflows_dir)?;
     let mut webhook_workflows = HashMap::new();
     let mut registered_paths = HashSet::new();
@@ -372,8 +395,14 @@ pub async fn serve(
     }
 
     let retention_store = engine.store().clone();
-    let app = Router::new()
-        .route("/healthz", get(health))
+    let state = AppState {
+        access_control,
+        connectors_dir: PathBuf::from("connectors"),
+        engine,
+        webhook_workflows: Arc::new(webhook_workflows),
+        workflows_dir: config.workflows_dir,
+    };
+    let protected_routes = Router::new()
         .route("/metrics", get(export_metrics))
         .route("/api/connectors", get(list_connectors))
         .route("/api/connectors/scaffold", post(create_connector))
@@ -393,17 +422,88 @@ pub async fn serve(
         .route("/api/workflows/{workflow_id}/run-async", post(run_workflow_async))
         .route("/human-tasks", get(list_pending_human_tasks))
         .route("/human-tasks/{task_id}/resolve", post(resolve_human_task))
+        .route_layer(middleware::from_fn_with_state(state.clone(), enforce_engine_access));
+    let app = Router::new()
+        .route("/healthz", get(health))
+        .merge(protected_routes)
         .route("/{*hook}", post(handle_webhook))
-        .with_state(AppState {
-            connectors_dir: PathBuf::from("connectors"),
-            engine,
-            webhook_workflows: Arc::new(webhook_workflows),
-            workflows_dir: config.workflows_dir,
-        });
+        .with_state(state);
     spawn_retention_task(retention_store);
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await?;
     Ok(())
+}
+
+impl EngineAccessControl {
+    fn from_env() -> Self {
+        Self {
+            allow_remote: env_flag("ACSA_ALLOW_REMOTE_ENGINE"),
+            auth_token: env::var("ACSA_ENGINE_AUTH_TOKEN")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
+        }
+    }
+}
+
+async fn enforce_engine_access(
+    State(state): State<AppState>,
+    ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    if remote_addr.ip().is_loopback() {
+        return next.run(request).await;
+    }
+
+    if !state.access_control.allow_remote {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "error": "remote engine access is disabled; bind to loopback or set ACSA_ALLOW_REMOTE_ENGINE=1"
+            })),
+        )
+            .into_response();
+    }
+
+    if let Some(expected_token) = &state.access_control.auth_token {
+        if request_has_engine_token(request.headers(), expected_token) {
+            return next.run(request).await;
+        }
+
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "error": "missing or invalid engine auth token"
+            })),
+        )
+            .into_response();
+    }
+
+    next.run(request).await
+}
+
+fn request_has_engine_token(headers: &HeaderMap, expected_token: &str) -> bool {
+    headers
+        .get("x-acsa-engine-token")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some_and(|token| bool::from(token.as_bytes().ct_eq(expected_token.as_bytes())))
+        || headers
+            .get(AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.trim().strip_prefix("Bearer "))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some_and(|token| bool::from(token.as_bytes().ct_eq(expected_token.as_bytes())))
+}
+
+fn env_flag(name: &str) -> bool {
+    matches!(
+        env::var(name).ok().as_deref(),
+        Some("1" | "true" | "TRUE" | "True" | "yes" | "YES" | "Yes" | "on" | "ON" | "On")
+    )
 }
 
 fn spawn_cron_trigger(engine: WorkflowEngine, plan: WorkflowPlan) {
@@ -2004,22 +2104,24 @@ pub enum TriggerError {
     WorkflowAlreadyExists { workflow_id: String },
     #[error("workflow {workflow_id} was not found")]
     WorkflowNotFound { workflow_id: String },
+    #[error("binding the engine to {bind_addr} requires ACSA_ALLOW_REMOTE_ENGINE=1")]
+    RemoteBindingRequiresExplicitOptIn { bind_addr: SocketAddr },
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use axum::http::{HeaderMap, HeaderValue};
+    use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
     use chrono::Utc;
     use serde_json::json;
     use serde_yaml::Value as YamlValue;
 
     use super::{
         authenticate_webhook, compute_signature, cron_schedule, parse_workflow_document_state,
-        rename_workflow_document, serialize_workflow_yaml, slugify_workflow_name,
-        validate_secret_value, workflow_file_path, RenameWorkflowRequest, TriggerError,
-        WebhookSignatureAuth, WebhookWorkflow,
+        rename_workflow_document, request_has_engine_token, serialize_workflow_yaml,
+        slugify_workflow_name, validate_secret_value, workflow_file_path, RenameWorkflowRequest,
+        TriggerError, WebhookSignatureAuth, WebhookWorkflow,
     };
     use crate::{
         engine::compile_workflow,
@@ -2052,6 +2154,24 @@ mod tests {
             validate_secret_value("trigger", &value).expect_err("inline secret should fail");
 
         assert!(matches!(error, TriggerError::InlineSecretRejected { .. }));
+    }
+
+    #[test]
+    fn accepts_engine_auth_token_from_bearer_or_custom_header() {
+        let mut bearer_headers = HeaderMap::new();
+        bearer_headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer demo-token"));
+        assert!(request_has_engine_token(&bearer_headers, "demo-token"));
+
+        let mut custom_headers = HeaderMap::new();
+        custom_headers.insert("x-acsa-engine-token", HeaderValue::from_static("demo-token"));
+        assert!(request_has_engine_token(&custom_headers, "demo-token"));
+    }
+
+    #[test]
+    fn rejects_invalid_engine_auth_token() {
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer wrong-token"));
+        assert!(!request_has_engine_token(&headers, "demo-token"));
     }
 
     #[test]

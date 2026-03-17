@@ -108,6 +108,7 @@ cargo run -p acsa-core -- connector-test
 ```
 
 **Note:** Generate strong webhook secrets for production with `openssl rand -hex 32`. Shared-secret headers use `ACSA_WEBHOOK_SECRET`; signed webhooks can additionally use `ACSA_WEBHOOK_SIGNATURE_SECRET`.
+Remote engine exposure is opt-in: set `ACSA_ALLOW_REMOTE_ENGINE=1` before binding to a non-loopback host. If you also set `ACSA_ENGINE_AUTH_TOKEN`, engine API routes require either `Authorization: Bearer <token>` or `x-acsa-engine-token: <token>`.
 
 The current CLI can validate workflows, list workflow files, print build metadata, manually execute DAG workflows, serve cron plus webhook triggers, persist and resume human review tasks, scaffold connectors, and test connector manifests locally.
 
