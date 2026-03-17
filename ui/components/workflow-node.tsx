@@ -24,6 +24,10 @@ import {
   type NodeProps
 } from "@xyflow/react";
 
+import {
+  NodeGlyph,
+  nodeAccentClassName
+} from "./node-visuals";
 import type {
   CanvasNode,
   CanvasNodeData,
@@ -37,62 +41,71 @@ export const WorkflowNode = memo(function WorkflowNode({
   const state = data.executionState ?? "idle";
   const footerLabel =
     data.kind === "trigger"
-      ? formatToken(data.typeName)
+      ? "entrypoint"
       : data.runtime
         ? `${formatToken(data.source ?? "connector")} · ${data.runtime}`
         : formatToken(data.source ?? "built_in");
 
   return (
     <div className={containerClassName(data.kind, selected, state)}>
-      <div className="mb-3 flex cursor-grab items-center justify-between rounded-xl border border-black/10 bg-black/[0.03] px-3 py-2 active:cursor-grabbing">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate/60">
-          {data.kind === "trigger" ? "Trigger" : "Step"}
-        </span>
-        <span className="font-mono text-[11px] text-slate/55">::</span>
-      </div>
-
       {data.kind === "step" ? (
         <Handle
-          className="!h-3 !w-3 !border-2 !border-white !bg-ink/85"
+          className="!h-3 !w-3 !border-2 !border-white !bg-[#8ba0bf]"
           position={Position.Left}
           type="target"
         />
       ) : null}
 
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate/70">
-              {data.kind === "trigger" ? "Entrypoint" : formatToken(data.typeName)}
+      <div className="flex items-start gap-3">
+        <NodeGlyph
+          category={data.category}
+          className="shrink-0"
+          kind={data.kind}
+          source={data.source}
+          typeName={data.typeName}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="truncate text-[15px] font-semibold tracking-tight text-ink">
+                {data.label}
+              </div>
+              <div className="mt-1 truncate text-xs leading-5 text-slate">
+                {data.description}
+              </div>
             </div>
-            {data.detached ? (
-              <span className="rounded-md bg-black/[0.04] px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-slate/60">
-                Draft
-              </span>
+            {data.executionLabel ? (
+              <span className={badgeClassName(state)}>{data.executionLabel}</span>
             ) : null}
           </div>
-          <div className="mt-2 truncate text-base font-semibold tracking-tight text-ink">
-            {data.label}
+
+          <div className="mt-4 flex items-center justify-between gap-3">
+            <span
+              className={`inline-flex items-center rounded-md border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.16em] ${nodeAccentClassName({
+                category: data.category,
+                kind: data.kind,
+                source: data.source,
+                typeName: data.typeName
+              })}`}
+            >
+              {data.kind === "trigger" ? formatToken(data.typeName) : footerLabel}
+            </span>
+            <div className="flex items-center gap-2">
+              {data.detached ? (
+                <span className="rounded-md border border-[#9a72ff]/20 bg-[#f2efff] px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-[#7b58d8]">
+                  Draft
+                </span>
+              ) : null}
+              {data.executionMeta ? (
+                <span className="font-mono text-[11px] text-slate/65">{data.executionMeta}</span>
+              ) : null}
+            </div>
           </div>
         </div>
-        {data.executionLabel ? (
-          <span className={badgeClassName(state)}>{data.executionLabel}</span>
-        ) : null}
-      </div>
-
-      <div className="mt-3 text-xs leading-5 text-slate">{data.description}</div>
-
-      <div className="mt-4 flex items-center justify-between gap-3">
-        <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
-          {footerLabel}
-        </span>
-        {data.executionMeta ? (
-          <span className="font-mono text-[11px] text-slate/70">{data.executionMeta}</span>
-        ) : null}
       </div>
 
       <Handle
-        className="!h-3 !w-3 !border-2 !border-white !bg-tide"
+        className={`!h-3 !w-3 !border-2 !border-white ${sourceHandleClassName(data.kind)}`}
         position={Position.Right}
         type="source"
       />
@@ -105,18 +118,22 @@ function badgeClassName(state: NodeExecutionState) {
     "rounded-md px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]";
   switch (state) {
     case "running":
-      return `${base} animate-pulse bg-tide/10 text-tide`;
+      return `${base} animate-pulse border border-tide/25 bg-tide/10 text-[#117d88]`;
     case "success":
-      return `${base} bg-emerald-500/10 text-emerald-700`;
+      return `${base} border border-emerald-400/20 bg-emerald-400/10 text-[#198754]`;
     case "failed":
-      return `${base} bg-ember/10 text-ember`;
+      return `${base} border border-ember/25 bg-ember/10 text-[#cd694d]`;
     case "paused":
-      return `${base} bg-amber-500/10 text-amber-700`;
+      return `${base} border border-amber-400/20 bg-amber-400/10 text-[#b87a20]`;
     case "skipped":
-      return `${base} bg-black/5 text-slate`;
+      return `${base} border border-black/10 bg-black/[0.03] text-slate/70`;
     default:
-      return `${base} bg-sand text-ember`;
+      return `${base} border border-black/10 bg-white/72 text-slate/72`;
   }
+}
+
+function sourceHandleClassName(kind: CanvasNodeData["kind"]) {
+  return kind === "trigger" ? "!bg-[#f0a15e]" : "!bg-[#9a72ff]";
 }
 
 function containerClassName(
@@ -125,24 +142,24 @@ function containerClassName(
   state: NodeExecutionState
 ) {
   const base =
-    "min-w-[240px] cursor-grab rounded-2xl border bg-white px-4 py-3 shadow-none transition duration-150 active:cursor-grabbing";
-  const selectedState = selected ? "border-tide/60 ring-2 ring-tide/15" : "";
+    "min-w-[240px] cursor-grab rounded-2xl border bg-white/92 px-4 py-3 shadow-[0_10px_28px_rgba(18,31,52,0.08)] transition duration-150 active:cursor-grabbing";
+  const selectedState = selected ? "border-tide/70 ring-2 ring-tide/15" : "";
   const kindStateDefault =
-    kind === "trigger"
-      ? "border-ink/20 bg-[#f8f5ef]"
-      : "border-black/10";
+  kind === "trigger"
+      ? "border-[#f4a261]/28 bg-[linear-gradient(180deg,rgba(255,246,238,0.98),rgba(255,255,255,0.96))]"
+      : "border-black/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(249,251,255,0.96))]";
 
   switch (state) {
     case "running":
-      return `${base} ${selected ? selectedState : "border-tide/45"} bg-tide/5`;
+      return `${base} ${selected ? selectedState : "border-tide/45"} bg-[linear-gradient(180deg,rgba(232,251,252,0.98),rgba(255,255,255,0.96))]`;
     case "success":
-      return `${base} ${selected ? selectedState : "border-emerald-500/35"} bg-emerald-500/5`;
+      return `${base} ${selected ? selectedState : "border-emerald-400/30"} bg-[linear-gradient(180deg,rgba(238,251,243,0.98),rgba(255,255,255,0.96))]`;
     case "failed":
-      return `${base} ${selected ? selectedState : "border-ember/45"} bg-ember/5`;
+      return `${base} ${selected ? selectedState : "border-ember/35"} bg-[linear-gradient(180deg,rgba(255,241,237,0.98),rgba(255,255,255,0.96))]`;
     case "paused":
-      return `${base} ${selected ? selectedState : "border-amber-500/45"} bg-amber-500/5`;
+      return `${base} ${selected ? selectedState : "border-amber-400/35"} bg-[linear-gradient(180deg,rgba(255,249,236,0.98),rgba(255,255,255,0.96))]`;
     case "skipped":
-      return `${base} ${selected ? selectedState : "border-black/10"} bg-black/[0.03]`;
+      return `${base} ${selected ? selectedState : "border-black/10"} bg-white/78`;
     default:
       return `${base} ${selectedState} ${kindStateDefault}`;
   }

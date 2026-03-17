@@ -102,8 +102,8 @@ steps:
 ui:
   positions:
     __trigger__:
-      x: -440.0
-      y: -440.0
+      x: -460.0
+      y: -720.0
     collect_news_context:
       x: 40.0
       y: -720.0
@@ -121,4 +121,4 @@ ui:
       y: 0.0
     write_context_snapshot:
       x: 520.0
-      y: -560.0
+      y: -540.0

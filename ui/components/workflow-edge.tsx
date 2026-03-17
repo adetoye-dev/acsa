@@ -22,7 +22,7 @@ import {
   type EdgeProps
 } from "@xyflow/react";
 
-const SELECTED_EDGE_STROKE = "rgba(15, 108, 115, 0.92)";
+const SELECTED_EDGE_STROKE = "rgba(92, 221, 229, 0.96)";
 const SELECTED_EDGE_WIDTH = 2.8;
 
 export function WorkflowEdge({
@@ -46,7 +46,9 @@ export function WorkflowEdge({
     targetY
   });
   const stroke =
-    selected ? SELECTED_EDGE_STROKE : asStringStyle(style?.stroke, "rgba(16, 26, 29, 0.64)");
+    selected
+      ? SELECTED_EDGE_STROKE
+      : asStringStyle(style?.stroke, "rgba(121, 141, 242, 0.68)");
   const strokeWidth = selected
     ? SELECTED_EDGE_WIDTH
     : asNumericStyle(style?.strokeWidth, 2);

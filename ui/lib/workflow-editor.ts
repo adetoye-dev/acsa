@@ -23,8 +23,8 @@ import {
 import YAML from "yaml";
 
 export const ENGINE_PROXY_BASE = "/engine";
-export const EDGE_STROKE = "rgba(16, 26, 29, 0.64)";
-export const TRIGGER_EDGE_STROKE = "rgba(16, 26, 29, 0.44)";
+export const EDGE_STROKE = "rgba(121, 141, 242, 0.68)";
+export const TRIGGER_EDGE_STROKE = "rgba(244, 166, 97, 0.58)";
 export const TRIGGER_NODE_ID = "__trigger__";
 
 export type RetryPolicy = {
@@ -142,6 +142,7 @@ export type NodeExecutionState =
   | "success";
 
 export type CanvasNodeData = {
+  category?: string | null;
   description: string;
   detached?: boolean;
   executionLabel?: string | null;
@@ -473,10 +474,11 @@ export function workflowToCanvas(
       position: triggerPos,
       type: "workflowNode",
       data: {
-        description: "Workflow entrypoint. Select it to configure trigger settings.",
+        category: "trigger",
+        description: workflow.name,
         detached: false,
         kind: "trigger",
-        label: workflow.name,
+        label: `${titleCase(workflow.trigger.type)} trigger`,
         nodeId: TRIGGER_NODE_ID,
         onDelete: null,
         typeName: workflow.trigger.type
@@ -497,10 +499,11 @@ export function workflowToCanvas(
       position,
       type: "workflowNode",
       data: {
-        description: catalogEntry?.description ?? "Connector or custom step.",
+        category: catalogEntry?.category ?? inferStepCategory(step.type, catalogEntry?.source),
+        description: step.id,
         detached: detachedSteps.has(step.id),
         kind: "step",
-        label: step.id,
+        label: catalogEntry?.label ?? titleCase(step.type),
         nodeId: step.id,
         onDelete: null,
         runtime: catalogEntry?.runtime ?? null,
@@ -746,6 +749,33 @@ function defaultStepParams(typeName: string): Record<string, unknown> {
     default:
       return {};
   }
+}
+
+function inferStepCategory(typeName: string, source?: string | null): string {
+  if (source && source !== "built_in") {
+    return "integration";
+  }
+
+  if (/(llm|embedding|retrieval|classification|extraction|agent)/.test(typeName)) {
+    return "ai";
+  }
+  if (/(approval|manual_input|human)/.test(typeName)) {
+    return "human";
+  }
+  if (/(condition|switch|loop|parallel|if|branch)/.test(typeName)) {
+    return "flow";
+  }
+  if (/(http|database|file|webhook)/.test(typeName)) {
+    return "integration";
+  }
+
+  return "core";
+}
+
+function titleCase(value: string) {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 function isBuiltInStepType(typeName: string): boolean {

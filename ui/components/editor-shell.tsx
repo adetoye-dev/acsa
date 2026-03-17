@@ -24,8 +24,9 @@ import {
   type XYPosition
 } from "@xyflow/react";
 
+import { ExecutionDebugger } from "./execution-debugger";
+import { NodeBrowser } from "./node-browser";
 import { NodeInspector } from "./node-inspector";
-import { RunHistoryPanel } from "./run-history-panel";
 import { TopBar, type WorkspaceView } from "./top-bar";
 import { WorkflowCanvas } from "./workflow-canvas";
 import {
@@ -166,7 +167,8 @@ export function EditorShell() {
   const [centerView, setCenterView] = useState<WorkspaceView>("canvas");
   const [frameRequestKey, setFrameRequestKey] = useState(0);
   const [isAddStepMenuOpen, setIsAddStepMenuOpen] = useState(false);
-  const addStepMenuRef = useRef<HTMLDivElement | null>(null);
+  const [liveRunId, setLiveRunId] = useState<string | null>(null);
+  const [liveRunDetail, setLiveRunDetail] = useState<RunDetailResponse | null>(null);
   const canvas = useMemo(
     () =>
       activeWorkflow
@@ -175,8 +177,8 @@ export function EditorShell() {
     [activeWorkflow, stepCatalog]
   );
   const displayNodes = useMemo(
-    () => decorateNodesForSelectedRun(canvas.nodes, activeWorkflow, runDetail),
-    [activeWorkflow, canvas.nodes, runDetail]
+    () => decorateNodesForSelectedRun(canvas.nodes, activeWorkflow, liveRunDetail),
+    [activeWorkflow, canvas.nodes, liveRunDetail]
   );
   const selectedNode =
     selectedNodeId === null
@@ -203,36 +205,24 @@ export function EditorShell() {
   }, []);
 
   useEffect(() => {
-    if (!isAddStepMenuOpen) {
-      return;
-    }
-
-    function handlePointerDown(event: PointerEvent) {
-      if (!addStepMenuRef.current?.contains(event.target as Node)) {
-        setIsAddStepMenuOpen(false);
-      }
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setIsAddStepMenuOpen(false);
-      }
-    }
-
-    window.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isAddStepMenuOpen]);
-
-  useEffect(() => {
     if (isBooting) {
       return;
     }
     void refreshRunHistory(selectedRunId);
   }, [isBooting, runStatusFilter, selectedRunId]);
+
+  useEffect(() => {
+    if (!activeWorkflow) {
+      setLiveRunId(null);
+      setLiveRunDetail(null);
+      return;
+    }
+
+    if (liveRunDetail && liveRunDetail.run.workflow_name !== activeWorkflow.workflow.name) {
+      setLiveRunId(null);
+      setLiveRunDetail(null);
+    }
+  }, [activeWorkflow, liveRunDetail]);
 
   useEffect(() => {
     if (!activeWorkflow) {
@@ -278,7 +268,7 @@ export function EditorShell() {
   }, [isBooting, logLevelFilter, logSearch, selectedRunId]);
 
   useEffect(() => {
-    if (!selectedRunId || !isRunning) {
+    if (!liveRunId || !isRunning) {
       return;
     }
 
@@ -286,15 +276,17 @@ export function EditorShell() {
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const poll = async () => {
-      const detail = await loadRunDetail(selectedRunId);
+      const detail = await loadLiveRunDetail(liveRunId);
       if (cancelled) {
         return;
       }
 
-      if (!detail || detail.run.id !== selectedRunId) {
+      if (!detail || detail.run.id !== liveRunId) {
         timer = setTimeout(poll, 900);
         return;
       }
+
+      setLiveRunDetail(detail);
 
       if (detail.run.status === "running") {
         timer = setTimeout(poll, 900);
@@ -330,6 +322,7 @@ export function EditorShell() {
             : null,
         runStatus: null
       });
+      setLiveRunId(null);
       await refreshHumanTasks();
       await refreshRunHistory(detail.run.id, detail.run.workflow_name);
     };
@@ -342,7 +335,7 @@ export function EditorShell() {
         clearTimeout(timer);
       }
     };
-  }, [isRunning, selectedRunId, logLevelFilter, logSearch]);
+  }, [isRunning, liveRunId]);
 
   async function bootstrap() {
     patchWorkflowState({
@@ -512,6 +505,15 @@ export function EditorShell() {
         runDetail: detailResponse
       });
       return detailResponse;
+    } catch (error) {
+      patchWorkflowState({ globalError: errorMessage(error) });
+      return null;
+    }
+  }
+
+  async function loadLiveRunDetail(runId: string) {
+    try {
+      return await fetchEngineJson<RunDetailResponse>(`/api/runs/${runId}`);
     } catch (error) {
       patchWorkflowState({ globalError: errorMessage(error) });
       return null;
@@ -949,6 +951,8 @@ export function EditorShell() {
       lastRun: null,
       runStatus: null
     });
+    setLiveRunDetail(null);
+    setLiveRunId(null);
     patchObservabilityState({
       logs: null,
       runDetail: null,
@@ -968,9 +972,12 @@ export function EditorShell() {
       patchWorkflowState({
         globalError: null
       });
+      setLiveRunId(response.run_id);
       patchObservabilityState({ selectedRunId: response.run_id });
       await refreshRunHistory(response.run_id, response.workflow_name);
     } catch (error) {
+      setLiveRunId(null);
+      setLiveRunDetail(null);
       patchWorkflowState({
         globalError: errorMessage(error),
         isRunning: false,
@@ -1269,20 +1276,20 @@ export function EditorShell() {
   }
 
   const showCanvasView = centerView === "canvas";
-  const showNodeRail = showCanvasView && Boolean(selectedNode);
-  const activeRunStatus = isRunning ? "running" : runDetail?.run.status ?? runStatus ?? null;
+  const showNodeBrowser = showCanvasView && isAddStepMenuOpen;
+  const showNodeRail = showCanvasView && !showNodeBrowser && Boolean(selectedNode);
+  const showRightRail = showNodeBrowser || showNodeRail;
+  const activeRunStatus = isRunning ? "running" : liveRunDetail?.run.status ?? runStatus ?? null;
   const draftNotice = workflowDraftNotice(activeWorkflow);
   const centerViewLabel =
     centerView === "canvas"
       ? "Canvas"
       : centerView === "preview"
         ? "Preview"
-        : centerView === "history"
-          ? "History"
-          : "Logs";
+        : "Executions";
 
   return (
-    <main className="h-[100dvh] overflow-hidden bg-[#edf2f1] p-4 text-ink">
+    <main className="h-[100dvh] overflow-hidden bg-transparent p-3 text-ink xl:p-4">
       <div
         className={`mx-auto grid h-full max-w-[1880px] gap-4 ${
           globalError ? "grid-rows-[58px_auto_minmax(0,1fr)]" : "grid-rows-[58px_minmax(0,1fr)]"
@@ -1304,21 +1311,21 @@ export function EditorShell() {
         />
 
         {globalError ? (
-          <section className="rounded-2xl border border-ember/20 bg-ember/5 px-4 py-3 text-sm leading-6 text-ember">
+          <section className="rounded-2xl border border-ember/20 bg-[#fff0eb] px-4 py-3 text-sm leading-6 text-[#cd694d]">
             {globalError}
           </section>
         ) : null}
 
         <section
           className={`grid min-h-0 gap-4 ${
-            showNodeRail
+            showRightRail
               ? "xl:grid-cols-[256px_minmax(0,1fr)_336px]"
               : "xl:grid-cols-[256px_minmax(0,1fr)]"
           }`}
         >
           <aside className="panel-surface grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
             <div className="border-b border-black/10 px-4 py-4">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/55">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/60">
                 Navigation
               </div>
               <div className="mt-1 text-lg font-semibold tracking-tight text-ink">
@@ -1367,7 +1374,7 @@ export function EditorShell() {
           <section className="panel-surface grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
             <div className="flex items-center justify-between border-b border-black/10 px-4 py-3">
               <div className="min-w-0">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/55">
+                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/60">
                   Center workspace
                 </div>
                 <div className="mt-1 text-lg font-semibold tracking-tight text-ink">
@@ -1375,40 +1382,44 @@ export function EditorShell() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 rounded-2xl border border-black/10 bg-white/80 p-1">
-                {(["canvas", "preview", "history", "logs"] as WorkspaceView[]).map((view) => (
+              <div className="flex items-center gap-1.5 rounded-2xl border border-black/10 bg-white/75 p-1">
+                {(["canvas", "preview", "history"] as WorkspaceView[]).map((view) => (
                   <button
                     key={view}
-                    className={`rounded-xl px-3 py-2 font-mono text-[11px] uppercase tracking-[0.16em] ${
-                      centerView === view ? "bg-ink text-white" : "text-slate/68"
-                    }`}
+                    className={workspaceTabClassName(view, centerView === view)}
                     onClick={() => setCenterView(view)}
                     type="button"
                   >
-                    {view}
+                    {view === "history" ? "executions" : view}
                   </button>
                 ))}
               </div>
             </div>
 
             {showCanvasView ? (
-              <div className="relative h-full min-h-0">
+              <div className="h-full min-h-0 p-4">
                 {activeWorkflow ? (
-                  <>
-                    <WorkflowCanvas
-                      key={activeWorkflow.id}
-                      edges={canvas.edges}
-                      frameRequestKey={frameRequestKey}
-                      nodes={displayNodes}
-                      onAttachStepToTrigger={handleAttachStepToTrigger}
-                      onDeleteStep={handleDeleteSelectedNode}
-                      onEdgesCommit={handleEdgesCommit}
-                      onPositionsCommit={handlePositionsCommit}
-                      onSelectNode={(nodeId) => patchWorkflowState({ selectedNodeId: nodeId })}
-                      showControls={false}
-                      showMiniMap={false}
-                      showViewportPanel={false}
-                    />
+                  <div className="relative h-full min-h-0 overflow-hidden rounded-[22px] border border-black/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.92),rgba(246,249,253,0.96))] shadow-[inset_0_1px_0_rgba(255,255,255,0.48)]">
+                    <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(125,119,255,0.08),transparent_26%),radial-gradient(circle_at_bottom_left,rgba(240,161,94,0.08),transparent_22%),radial-gradient(circle_at_right,rgba(69,197,182,0.05),transparent_20%),linear-gradient(180deg,rgba(255,255,255,0.06),rgba(240,245,251,0.12))]" />
+                    <div className="relative h-full min-h-0">
+                      <WorkflowCanvas
+                        key={activeWorkflow.id}
+                        edges={canvas.edges}
+                        frameRequestKey={frameRequestKey}
+                        nodes={displayNodes}
+                        onAttachStepToTrigger={handleAttachStepToTrigger}
+                        onDeleteStep={handleDeleteSelectedNode}
+                        onEdgesCommit={handleEdgesCommit}
+                        onPositionsCommit={handlePositionsCommit}
+                        onSelectNode={(nodeId) => {
+                          setIsAddStepMenuOpen(false);
+                          patchWorkflowState({ selectedNodeId: nodeId });
+                        }}
+                        showControls={false}
+                        showMiniMap={false}
+                        showViewportPanel={false}
+                      />
+                    </div>
                     {draftNotice ? (
                       <div className="pointer-events-none absolute left-4 top-4 z-20 max-w-sm">
                         <div className="rounded-2xl border border-black/10 bg-white/92 px-4 py-3 text-sm leading-6 text-slate shadow-panel">
@@ -1419,14 +1430,14 @@ export function EditorShell() {
                     <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-end p-4">
                       <div className="pointer-events-auto flex flex-wrap items-center gap-2">
                         <button
-                          className="ui-button !px-2.5 !py-2 !text-[10px]"
+                          className="ui-button !border-[#5e86ff]/14 !bg-white/88 !px-2.5 !py-2 !text-[10px] !text-[#4b61c8] hover:!border-[#5e86ff]/26 hover:!bg-[#eff4ff]"
                           onClick={() => setFrameRequestKey((current) => current + 1)}
                           type="button"
                         >
                           Frame
                         </button>
                         <button
-                          className="ui-button !px-2.5 !py-2 !text-[10px]"
+                          className="ui-button !border-[#8f69ff]/14 !bg-white/88 !px-2.5 !py-2 !text-[10px] !text-[#7b58d8] hover:!border-[#8f69ff]/26 hover:!bg-[#f3ecff]"
                           onClick={handleAutoLayout}
                           type="button"
                         >
@@ -1434,35 +1445,26 @@ export function EditorShell() {
                         </button>
                       </div>
                     </div>
-                    <div
-                      className="absolute bottom-4 right-4 z-20"
-                      ref={addStepMenuRef}
-                    >
+                    <div className="absolute bottom-4 right-4 z-20">
                       <button
                         aria-expanded={isAddStepMenuOpen}
                         aria-haspopup="menu"
                         aria-label="Add step"
-                        className={`flex h-11 w-11 items-center justify-center rounded-2xl border text-xl text-white shadow-panel transition ${
+                        className={`flex h-11 w-11 items-center justify-center rounded-2xl border text-xl shadow-panel transition ${
                           isAddStepMenuOpen
-                            ? "border-black/10 bg-slate"
-                            : "border-black/10 bg-ink hover:bg-slate"
+                            ? "border-[#f0a15e]/35 bg-[#e18a46] text-[#140c06]"
+                            : "border-black/10 bg-white/92 text-[#334155] hover:border-[#f0a15e]/18 hover:bg-[#fff5ed]"
                         }`}
                         onClick={() => setIsAddStepMenuOpen((current) => !current)}
                         type="button"
                       >
                         +
                       </button>
-                      {isAddStepMenuOpen ? (
-                        <AddStepMenu
-                          groupedStepCatalog={groupedOptions(stepCatalog)}
-                          onSelectType={handleAddStep}
-                        />
-                      ) : null}
                     </div>
-                  </>
+                  </div>
                 ) : (
                   <div className="flex h-full items-center justify-center px-10 text-center text-sm leading-7 text-slate">
-                {isBooting
+                    {isBooting
                       ? "Booting the editor..."
                       : "No valid workflow is loaded yet. Create a new workflow or fix invalid YAML files from the sidebar."}
                   </div>
@@ -1476,91 +1478,105 @@ export function EditorShell() {
                 />
               </div>
             ) : (
-              <RunHistoryPanel
-                embedded
+              <ExecutionDebugger
+                defaultPane="output"
+                edges={canvas.edges}
                 isLoading={isRefreshingHistory}
                 logLevelFilter={logLevelFilter}
                 logSearch={logSearch}
                 logs={runLogs}
-                metrics={metrics}
-                onLogLevelFilterChange={(value) => patchObservabilityState({ logLevelFilter: value })}
+                nodes={canvas.nodes}
+                onLogLevelFilterChange={(value) =>
+                  patchObservabilityState({ logLevelFilter: value })
+                }
                 onLogSearchChange={(value) => patchObservabilityState({ logSearch: value })}
                 onRefresh={() => void refreshRunHistory(selectedRunId)}
-                onRunStatusFilterChange={(value) => patchObservabilityState({ runStatusFilter: value })}
+                onRunStatusFilterChange={(value) =>
+                  patchObservabilityState({ runStatusFilter: value })
+                }
                 onSelectRun={(runId) => patchObservabilityState({ selectedRunId: runId })}
                 runDetail={runDetail}
                 runPage={runPage}
                 runStatusFilter={runStatusFilter}
                 selectedRunId={selectedRunId}
-                view={centerView === "logs" ? "logs" : "history"}
                 workflowName={activeWorkflow?.workflow.name ?? null}
               />
             )}
           </section>
 
-          {showNodeRail ? (
+          {showRightRail ? (
             <aside className="panel-surface grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
-              <div className="border-b border-black/10 px-4 py-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/55">
-                      Selected node
-                    </div>
-                    {selectedStep ? (
-                      <div className="mt-2 space-y-1.5">
-                        <input
-                          aria-label="Step id"
-                          className="w-full rounded-xl border border-black/10 bg-black/[0.03] px-2 py-1 font-mono text-[15px] font-semibold tracking-tight text-ink outline-none transition focus:border-tide/45 focus:bg-white focus:ring-2 focus:ring-tide/15 placeholder:text-slate/45"
-                          id="selected-step-name"
-                          onChange={(event) => handleSelectedNodeIdChange(event.target.value)}
-                          placeholder="rename-step"
-                          spellCheck={false}
-                          type="text"
-                          value={selectedStep.id}
-                        />
-                      </div>
-                    ) : (
-                      <div className="mt-1 text-lg font-semibold tracking-tight text-ink">
-                        Trigger
-                      </div>
-                    )}
-                  </div>
-                  {selectedStep ? (
-                    <button
-                      aria-label={`Delete ${selectedStep.id}`}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 bg-black/[0.03] text-slate/70 transition hover:border-ember/25 hover:bg-ember/5 hover:text-ember"
-                      onClick={() => handleDeleteSelectedNode(selectedStep.id)}
-                      type="button"
-                    >
-                      <TrashIcon />
-                    </button>
-                  ) : (
-                    <ShellBadge
-                      label={activeWorkflow?.workflow.trigger.type ?? "manual"}
-                      tone="info"
-                    />
-                  )}
-                </div>
-              </div>
-
-              <div className="sleek-scroll min-h-0 overflow-y-auto px-3 py-3">
-                <NodeInspector
-                  activeWorkflow={activeWorkflow}
-                  inspectorError={inspectorError}
-                  onSelectedNodeParamsChange={handleSelectedNodeParamsChange}
-                  onSelectedNodeRetryAttemptsChange={handleSelectedNodeRetryAttemptsChange}
-                  onSelectedNodeRetryBackoffChange={handleSelectedNodeRetryBackoffChange}
-                  onSelectedNodeTimeoutChange={handleSelectedNodeTimeoutChange}
-                  onSelectedNodeTypeChange={handleSelectedNodeTypeChange}
-                  onTriggerDetailsChange={handleTriggerDetailsChange}
-                  onTriggerTypeChange={handleTriggerTypeChange}
-                  selectedNode={selectedNode}
+              {showNodeBrowser ? (
+                <NodeBrowser
+                  onClose={() => setIsAddStepMenuOpen(false)}
+                  onSelectType={handleAddStep}
                   stepCatalog={stepCatalog}
-                  stepParamsDraft={stepParamsDraft}
-                  triggerCatalog={triggerCatalog}
-                  triggerDetailsDraft={triggerDetailsDraft}
                 />
-              </div>
+              ) : (
+                <>
+                  <div className="border-b border-black/10 px-4 py-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/60">
+                          Selected node
+                        </div>
+                        {selectedStep ? (
+                          <div className="mt-2 space-y-1.5">
+                            <input
+                              aria-label="Step id"
+                              className="w-full rounded-xl border border-black/10 bg-white/85 px-2 py-1 font-mono text-[15px] font-semibold tracking-tight text-ink outline-none transition focus:border-tide/45 focus:bg-white focus:ring-2 focus:ring-tide/15 placeholder:text-slate/45"
+                              id="selected-step-name"
+                              onChange={(event) => handleSelectedNodeIdChange(event.target.value)}
+                              placeholder="rename-step"
+                              spellCheck={false}
+                              type="text"
+                              value={selectedStep.id}
+                            />
+                          </div>
+                        ) : (
+                          <div className="mt-1 text-lg font-semibold tracking-tight text-ink">
+                            Trigger
+                          </div>
+                        )}
+                      </div>
+                      {selectedStep ? (
+                        <button
+                          aria-label={`Delete ${selectedStep.id}`}
+                          className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 bg-white/70 text-slate/70 transition hover:border-ember/25 hover:bg-ember/10 hover:text-ember"
+                          onClick={() => handleDeleteSelectedNode(selectedStep.id)}
+                          type="button"
+                        >
+                          <TrashIcon />
+                        </button>
+                      ) : (
+                        <ShellBadge
+                          label={activeWorkflow?.workflow.trigger.type ?? "manual"}
+                          tone="info"
+                        />
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="sleek-scroll min-h-0 overflow-y-auto px-3 py-3">
+                    <NodeInspector
+                      activeWorkflow={activeWorkflow}
+                      inspectorError={inspectorError}
+                      onSelectedNodeParamsChange={handleSelectedNodeParamsChange}
+                      onSelectedNodeRetryAttemptsChange={handleSelectedNodeRetryAttemptsChange}
+                      onSelectedNodeRetryBackoffChange={handleSelectedNodeRetryBackoffChange}
+                      onSelectedNodeTimeoutChange={handleSelectedNodeTimeoutChange}
+                      onSelectedNodeTypeChange={handleSelectedNodeTypeChange}
+                      onTriggerDetailsChange={handleTriggerDetailsChange}
+                      onTriggerTypeChange={handleTriggerTypeChange}
+                      selectedNode={selectedNode}
+                      stepCatalog={stepCatalog}
+                      stepParamsDraft={stepParamsDraft}
+                      triggerCatalog={triggerCatalog}
+                      triggerDetailsDraft={triggerDetailsDraft}
+                    />
+                  </div>
+                </>
+              )}
             </aside>
           ) : null}
         </section>
@@ -1581,58 +1597,13 @@ function SidebarBlock({
   return (
     <section className="mb-4">
       <div className="mb-3 flex items-center justify-between gap-3 px-1">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/55">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/60">
           {title}
         </div>
         {accessory}
       </div>
       {children}
     </section>
-  );
-}
-
-function AddStepMenu({
-  groupedStepCatalog,
-  onSelectType
-}: {
-  groupedStepCatalog: [string, StepTypeEntry[]][];
-  onSelectType: (typeName: string) => void;
-}) {
-  return (
-    <div className="absolute bottom-[calc(100%+0.75rem)] right-0 z-30 w-[320px] rounded-2xl border border-black/10 bg-white p-2 shadow-panel">
-      <div className="sleek-scroll max-h-[360px] space-y-3 overflow-y-auto pr-1">
-        {groupedStepCatalog.map(([category, entries]) => (
-          <section key={category}>
-            <div className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/55">
-              {titleCase(category)}
-            </div>
-            <div className="space-y-1.5">
-              {entries.map((entry) => (
-                <button
-                  key={entry.type_name}
-                  className="group w-full rounded-xl border border-transparent bg-white px-3 py-2 text-left transition hover:border-black/10 hover:bg-black/[0.02]"
-                  onClick={() => onSelectType(entry.type_name)}
-                  title={entry.description}
-                  type="button"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-medium text-ink">{entry.label}</div>
-                    {entry.runtime ? (
-                      <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-slate/58">
-                        {entry.runtime}
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className="max-h-0 overflow-hidden text-xs leading-5 text-slate opacity-0 transition-all duration-150 group-hover:mt-1 group-hover:max-h-16 group-hover:opacity-100">
-                    {entry.description}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </section>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -1644,11 +1615,11 @@ function ShellBadge({
   tone: "info" | "info-dark" | "neutral" | "neutral-dark" | "warn";
 }) {
   const toneMap = {
-    info: "border-tide/15 bg-tide/10 text-tide",
-    "info-dark": "border-tide/10 bg-tide/15 text-[#8be2e6]",
-    neutral: "border-black/10 bg-black/[0.04] text-slate/72",
-    "neutral-dark": "border-white/10 bg-white/10 text-white/72",
-    warn: "border-ember/15 bg-ember/10 text-ember"
+    info: "border-tide/20 bg-tide/10 text-tide",
+    "info-dark": "border-[#7c8fff]/18 bg-[#eef1ff] text-[#5e70d6]",
+    neutral: "border-black/10 bg-white/70 text-[#76869d]",
+    "neutral-dark": "border-[#8f69ff]/18 bg-[#f2efff] text-[#7b58d8]",
+    warn: "border-ember/20 bg-ember/10 text-[#cd694d]"
   } as const;
 
   return (
@@ -1658,6 +1629,19 @@ function ShellBadge({
       {label}
     </span>
   );
+}
+
+function workspaceTabClassName(view: WorkspaceView, active: boolean) {
+  const activeTone =
+    view === "canvas"
+      ? "bg-[#e18a46] text-[#140c06]"
+      : view === "preview"
+        ? "bg-[#8f69ff] text-[#120a20]"
+        : "bg-[#5e86ff] text-[#081326]";
+
+  return `rounded-xl px-3 py-2 font-mono text-[11px] uppercase tracking-[0.16em] transition ${
+    active ? activeTone : "text-slate/70 hover:bg-[#f3f6fb]"
+  }`;
 }
 
 function SidebarQuickStatus({
@@ -1670,14 +1654,14 @@ function SidebarQuickStatus({
   metrics: MetricsSummary | null;
 }) {
   return (
-    <div className="rounded-2xl border border-black/10 bg-white/70 px-3 py-3">
+    <div className="rounded-2xl border border-black/10 bg-white/72 px-3 py-3">
       <div className="grid grid-cols-3 gap-2">
-        <StatPill label="runs" value={String(metrics?.workflowRunsTotal ?? 0)} />
-        <StatPill label="paused" value={String(metrics?.workflowRunsPaused ?? 0)} />
-        <StatPill label="errors" value={String(invalidFileCount)} />
+        <StatPill label="runs" tone="violet" value={String(metrics?.workflowRunsTotal ?? 0)} />
+        <StatPill label="paused" tone="amber" value={String(metrics?.workflowRunsPaused ?? 0)} />
+        <StatPill label="errors" tone="rose" value={String(invalidFileCount)} />
       </div>
-      <div className="mt-3 rounded-xl border border-black/10 bg-black/[0.03] px-2.5 py-2">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate/55">
+      <div className={`mt-3 rounded-xl border px-2.5 py-2 ${runStatusCardClassName(activeRunStatus)}`}>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate/60">
           Status
         </div>
         <div className="mt-1 font-mono text-[11px] uppercase tracking-[0.14em] text-ink">
@@ -1688,10 +1672,25 @@ function SidebarQuickStatus({
   );
 }
 
-function StatPill({ label, value }: { label: string; value: string }) {
+function StatPill({
+  label,
+  tone,
+  value
+}: {
+  label: string;
+  tone: "amber" | "rose" | "violet";
+  value: string;
+}) {
+  const toneClass =
+    tone === "amber"
+      ? "border-amber-400/18 bg-amber-400/10"
+      : tone === "rose"
+        ? "border-rose-400/18 bg-rose-400/10"
+        : "border-[#7c8fff]/18 bg-[#7c8fff]/10";
+
   return (
-    <div className="rounded-xl border border-black/10 bg-black/[0.03] px-2.5 py-2">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate/55">
+    <div className={`rounded-xl border px-2.5 py-2 ${toneClass}`}>
+      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate/60">
         {label}
       </div>
       <div className="mt-1 font-mono text-[11px] uppercase tracking-[0.14em] text-ink">
@@ -1699,6 +1698,26 @@ function StatPill({ label, value }: { label: string; value: string }) {
       </div>
     </div>
   );
+}
+
+function runStatusCardClassName(activeRunStatus: string | null) {
+  if (!activeRunStatus) {
+    return "border-black/10 bg-white/60";
+  }
+
+  const status = activeRunStatus.split(" • ")[0];
+  switch (status) {
+    case "running":
+      return "border-tide/18 bg-tide/10";
+    case "success":
+      return "border-emerald-400/18 bg-emerald-400/10";
+    case "failed":
+      return "border-rose-400/18 bg-rose-400/10";
+    case "paused":
+      return "border-amber-400/18 bg-amber-400/10";
+    default:
+      return "border-[#7c8fff]/18 bg-[#7c8fff]/10";
+  }
 }
 
 function WorkflowList({
@@ -1728,9 +1747,7 @@ function WorkflowList({
         return (
           <article
             key={workflow.id}
-            className={`rounded-2xl border px-3 py-3 ${
-              isActive ? "border-tide/20 bg-tide/10" : "border-black/10 bg-white/70"
-            }`}
+            className={`rounded-2xl border px-3 py-3 ${workflowCardClassName(isActive)}`}
           >
             <div className="flex items-start gap-2">
               <button
@@ -1738,7 +1755,14 @@ function WorkflowList({
                 onClick={() => onSelectWorkflow(workflow.id)}
                 type="button"
               >
-                <div className="truncate text-sm font-semibold text-ink">{workflow.name}</div>
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      isActive ? "bg-[#f0a15e]" : "bg-[#7d77ff]"
+                    }`}
+                  />
+                  <div className="truncate text-sm font-semibold text-ink">{workflow.name}</div>
+                </div>
                 <div className="mt-2 font-mono text-[10px] uppercase tracking-[0.16em] text-slate/58">
                   {workflow.file_name}
                 </div>
@@ -1756,13 +1780,13 @@ function WorkflowList({
       })}
 
       {invalidFiles.length > 0 ? (
-        <div className="rounded-2xl border border-ember/20 bg-ember/5 p-3">
+        <div className="rounded-2xl border border-ember/20 bg-[#fff0eb] p-3">
           <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ember">
             Needs attention
           </div>
           <div className="mt-2 space-y-2">
             {invalidFiles.map((file) => (
-              <div key={file.id} className="rounded-xl border border-ember/15 bg-white/80 p-3">
+              <div key={file.id} className="rounded-xl border border-ember/15 bg-white/78 p-3">
                 <div className="text-sm font-semibold text-ink">{file.file_name}</div>
                 <div className="mt-1 text-sm leading-6 text-slate">{file.error}</div>
               </div>
@@ -1772,6 +1796,12 @@ function WorkflowList({
       ) : null}
     </div>
   );
+}
+
+function workflowCardClassName(isActive: boolean) {
+  return isActive
+    ? "border-[#7c8fff]/22 bg-[linear-gradient(180deg,rgba(124,143,255,0.14),rgba(240,161,94,0.08)_120%)] shadow-[0_8px_28px_rgba(112,126,207,0.08)]"
+    : "border-black/10 bg-white/72 hover:border-[#7c8fff]/18 hover:bg-white/82";
 }
 
 function WorkflowCardMenu({
@@ -1818,7 +1848,7 @@ function WorkflowCardMenu({
       <button
         aria-expanded={isOpen}
         aria-haspopup="menu"
-        className="flex h-7 w-7 cursor-pointer list-none items-center justify-center rounded-lg border border-black/10 bg-black/[0.03] text-slate/68 transition hover:border-black/20 hover:bg-black/[0.06] [&::-webkit-details-marker]:hidden"
+        className="flex h-7 w-7 cursor-pointer list-none items-center justify-center rounded-lg border border-black/10 bg-white/70 text-slate/68 transition hover:border-black/20 hover:bg-white [&::-webkit-details-marker]:hidden"
         onClick={() => setIsOpen((current) => !current)}
         type="button"
       >
@@ -1829,7 +1859,7 @@ function WorkflowCardMenu({
       {isOpen ? (
         <div className="absolute right-0 top-[calc(100%+0.35rem)] z-20 min-w-[148px] rounded-lg border border-black/10 bg-white p-1 shadow-panel">
           <button
-            className="flex w-full items-center rounded-md px-2.5 py-2 text-left text-sm text-ink transition hover:bg-black/[0.04] disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex w-full items-center rounded-md px-2.5 py-2 text-left text-sm text-ink transition hover:bg-[#f4f7fb] disabled:cursor-not-allowed disabled:opacity-60"
             disabled={disabled}
             onClick={() => {
               setIsOpen(false);
@@ -1840,7 +1870,7 @@ function WorkflowCardMenu({
             Rename
           </button>
           <button
-            className="flex w-full items-center rounded-md px-2.5 py-2 text-left text-sm text-ink transition hover:bg-black/[0.04] disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex w-full items-center rounded-md px-2.5 py-2 text-left text-sm text-ink transition hover:bg-[#f4f7fb] disabled:cursor-not-allowed disabled:opacity-60"
             disabled={disabled}
             onClick={() => {
               setIsOpen(false);
@@ -1851,7 +1881,7 @@ function WorkflowCardMenu({
             Duplicate
           </button>
           <button
-            className="flex w-full items-center rounded-md px-2.5 py-2 text-left text-sm text-ember transition hover:bg-ember/5 disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex w-full items-center rounded-md px-2.5 py-2 text-left text-sm text-ember transition hover:bg-ember/10 disabled:cursor-not-allowed disabled:opacity-60"
             disabled={disabled}
             onClick={() => {
               setIsOpen(false);
@@ -1912,7 +1942,7 @@ function WorkflowYamlCard({
 }) {
   return (
     <div
-      className={`rounded-2xl border border-black/10 bg-[#101517] p-3 ${
+      className={`rounded-2xl border border-black/10 bg-white/74 p-3 ${
         fullHeight ? "grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]" : ""
       }`}
     >
@@ -1921,7 +1951,7 @@ function WorkflowYamlCard({
         <ShellBadge label="monospace" tone="neutral-dark" />
       </div>
       <pre
-        className={`sleek-scroll rounded-xl border border-white/10 bg-black/20 p-3 font-mono text-[12px] leading-6 text-[#E9F8F3] ${
+        className={`sleek-scroll rounded-xl border border-[#1a2230] bg-[#0d1118] p-3 font-mono text-[12px] leading-6 text-[#dce7f6] ${
           fullHeight ? "min-h-0 overflow-auto" : "overflow-x-auto"
         }`}
       >
@@ -2032,16 +2062,6 @@ function finalizeDocument(document: WorkflowDocument): WorkflowDocument {
     workflow,
     yaml: workflowToYaml(workflow)
   };
-}
-
-function groupedOptions(stepCatalog: StepTypeEntry[]) {
-  const groups = new Map<string, StepTypeEntry[]>();
-  for (const entry of stepCatalog) {
-    const bucket = groups.get(entry.category) ?? [];
-    bucket.push(entry);
-    groups.set(entry.category, bucket);
-  }
-  return Array.from(groups.entries());
 }
 
 function renamePositionKey(
@@ -2224,10 +2244,6 @@ function clearStoredWorkflowPositions(workflowId: string) {
 
 function workflowLayoutStorageKey(workflowId: string) {
   return `acsa:workflow-layout:${workflowId}`;
-}
-
-function titleCase(value: string) {
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function normalizeExecutionState(status: string): NodeExecutionState {

@@ -66,7 +66,7 @@ export function NodeInspector({
 
   if (!activeWorkflow || !selectedNode) {
     return (
-      <div className="rounded-2xl border border-dashed border-black/10 bg-white/70 px-4 py-5 text-sm leading-6 text-slate">
+      <div className="rounded-2xl border border-dashed border-black/10 bg-white/68 px-4 py-5 text-sm leading-6 text-slate">
         Select a node on the canvas to configure it here.
       </div>
     );
@@ -85,7 +85,9 @@ export function NodeInspector({
                 Configure how this workflow starts.
               </div>
             </div>
-            <span className="ui-badge">Entrypoint</span>
+            <span className="rounded-md border border-[#f0a15e]/20 bg-[#fff2e7] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#c06e29]">
+              Entrypoint
+            </span>
           </div>
 
           <label
@@ -133,7 +135,11 @@ export function NodeInspector({
                 Tune runtime behavior and parameters for this step.
               </div>
             </div>
-            {selectedStepIsDetached ? <span className="ui-badge">Detached</span> : null}
+            {selectedStepIsDetached ? (
+              <span className="rounded-md border border-[#9a72ff]/20 bg-[#f2efff] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#7b58d8]">
+                Detached
+              </span>
+            ) : null}
           </div>
 
           <div className="mt-4 grid gap-3">
@@ -227,7 +233,7 @@ export function NodeInspector({
       ) : null}
 
       {inspectorError ? (
-        <div className="rounded-2xl border border-ember/20 bg-ember/5 px-3 py-2.5 text-sm leading-6 text-ember">
+        <div className="rounded-2xl border border-ember/20 bg-[#fff0eb] px-3 py-2.5 text-sm leading-6 text-[#cd694d]">
           {inspectorError}
         </div>
       ) : null}

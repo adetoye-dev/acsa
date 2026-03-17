@@ -67,6 +67,7 @@ type WorkflowCanvasProps = {
   onEdgesCommit: (edges: Edge[]) => void;
   onPositionsCommit: (positions: Record<string, XYPosition>) => void;
   onSelectNode: (nodeId: string | null) => void;
+  readOnly?: boolean;
   showControls?: boolean;
   showMiniMap?: boolean;
   showViewportPanel?: boolean;
@@ -81,6 +82,7 @@ export function WorkflowCanvas({
   onEdgesCommit,
   onPositionsCommit,
   onSelectNode,
+  readOnly = false,
   showControls = true,
   showMiniMap = true,
   showViewportPanel = true
@@ -117,6 +119,9 @@ export function WorkflowCanvas({
   }, [edges]);
 
   function handleNodesChange(changes: NodeChange<CanvasNode>[]) {
+    if (readOnly) {
+      return;
+    }
     const removedIds = changes
       .filter(
         (change): change is Extract<NodeChange<CanvasNode>, { id: string; type: "remove" }> =>
@@ -132,11 +137,17 @@ export function WorkflowCanvas({
   }
 
   function handleNodeDragStop(_: unknown, node: CanvasNode) {
+    if (readOnly) {
+      return;
+    }
     const nextPositions = positionsFromNodes(localNodesRef.current, node.id, node.position);
     onPositionsCommit(nextPositions);
   }
 
   function handleEdgesChange(changes: EdgeChange<Edge>[]) {
+    if (readOnly) {
+      return;
+    }
     const nextEdges = applyEdgeChanges(changes, localEdgesRef.current);
     setLocalEdges(nextEdges);
     if (changes.some((change) => change.type === "remove")) {
@@ -158,6 +169,9 @@ export function WorkflowCanvas({
   );
 
   function handleConnect(connection: Connection) {
+    if (readOnly) {
+      return;
+    }
     if (
       !connection.source ||
       !connection.target ||
@@ -195,6 +209,10 @@ export function WorkflowCanvas({
   }
 
   useEffect(() => {
+    if (readOnly) {
+      return;
+    }
+
     function handleKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
       if (
@@ -231,7 +249,7 @@ export function WorkflowCanvas({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleDeleteEdges, onDeleteStep]);
+  }, [handleDeleteEdges, onDeleteStep, readOnly]);
 
   return (
     <ReactFlowProvider>
@@ -259,12 +277,12 @@ export function WorkflowCanvas({
         minZoom={0.35}
         nodeTypes={nodeTypes}
         nodes={localNodes}
-        nodesDraggable
-        onConnect={handleConnect}
-        onEdgesChange={handleEdgesChange}
+        nodesDraggable={!readOnly}
+        onConnect={readOnly ? undefined : handleConnect}
+        onEdgesChange={readOnly ? undefined : handleEdgesChange}
         onNodeClick={(_, node) => onSelectNode(node.id)}
-        onNodeDragStop={handleNodeDragStop}
-        onNodesChange={handleNodesChange}
+        onNodeDragStop={readOnly ? undefined : handleNodeDragStop}
+        onNodesChange={readOnly ? undefined : handleNodesChange}
         onPaneClick={() => onSelectNode(null)}
         panOnDrag={false}
         panOnScroll
@@ -282,11 +300,11 @@ export function WorkflowCanvas({
           <MiniMap
             pannable
             zoomable
-            className="!rounded-xl !border !border-black/10 !bg-white/85"
+            className="!rounded-xl !border !border-black/10 !bg-white/90"
           />
         ) : null}
         {showControls ? (
-          <Controls className="!rounded-xl !border !border-black/10 !bg-white/85" />
+          <Controls className="!rounded-xl !border !border-black/10 !bg-white/90" />
         ) : null}
         <Background
           color="rgba(16, 26, 29, 0.035)"
@@ -369,7 +387,7 @@ function ViewportPanel() {
 
   return (
     <Panel position="top-right">
-      <div className="flex items-center gap-2 rounded-xl border border-black/10 bg-white/90 p-2 backdrop-blur">
+      <div className="flex items-center gap-2 rounded-xl border border-black/10 bg-white/92 p-2">
         <button
           className="ui-button !px-2.5 !py-2 !text-[10px]"
           onClick={() => void reactFlow.fitView({ duration: 180, maxZoom: 1.05, padding: 0.18 })}

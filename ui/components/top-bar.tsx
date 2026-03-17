@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-export type WorkspaceView = "canvas" | "preview" | "history" | "logs";
+export type WorkspaceView = "canvas" | "preview" | "history";
 
 type TopBarProps = {
   activeWorkflowFile: string;
@@ -49,11 +49,11 @@ export function TopBar({
     <section className="panel-surface overflow-hidden">
       <div className="flex h-[58px] items-center justify-between gap-4 px-4">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="rounded-xl border border-black/10 bg-ink px-3 py-2 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-white">
+          <div className="rounded-xl border border-[#f0a15e]/25 bg-[linear-gradient(135deg,rgba(240,161,94,0.18),rgba(125,119,255,0.12))] px-3 py-2 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8c4f18]">
             Acsa
           </div>
           <div className="min-w-0">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate/55">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate/60">
               Workflow studio
             </div>
             <div className="mt-0.5 truncate text-[15px] font-semibold text-ink">
@@ -68,11 +68,15 @@ export function TopBar({
         </div>
 
         <div className="flex items-center gap-2">
-          <button className="ui-button" onClick={onRefresh} type="button">
+          <button
+            className="ui-button border-[#6c85ff]/20 bg-[#eef3ff] text-[#4b61c8] hover:border-[#6c85ff]/35 hover:bg-[#e3ebff]"
+            onClick={onRefresh}
+            type="button"
+          >
             Refresh
           </button>
           <button
-            className="ui-button"
+            className="ui-button border-[#9a72ff]/20 bg-[#f3ecff] text-[#7b58d8] hover:border-[#9a72ff]/35 hover:bg-[#ece1ff]"
             disabled={saveDisabled}
             onClick={onSave}
             title={saveDisabledReason ?? undefined}
@@ -103,9 +107,9 @@ function ShellBadge({
   tone: "info" | "neutral" | "warn";
 }) {
   const toneMap = {
-    info: "border-tide/15 bg-tide/10 text-tide",
-    neutral: "border-black/10 bg-black/[0.04] text-slate/72",
-    warn: "border-ember/15 bg-ember/10 text-ember"
+    info: "border-tide/20 bg-tide/10 text-[#117d88]",
+    neutral: "border-[#7b74ff]/16 bg-[#f2efff] text-[#6f61da]",
+    warn: "border-ember/20 bg-ember/10 text-[#cd694d]"
   } as const;
 
   return (

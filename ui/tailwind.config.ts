@@ -22,13 +22,13 @@ const config: Config = {
       colors: {
         ink: "#101A1D",
         mist: "#E5F0EF",
-        tide: "#0F6C73",
-        ember: "#E98133",
-        sand: "#F6E8D2",
-        slate: "#304347"
+        tide: "#5ED3DB",
+        ember: "#F28B62",
+        sand: "#F4E8D6",
+        slate: "#4A5E74"
       },
       boxShadow: {
-        panel: "0 0 0 1px rgba(16, 26, 29, 0.04)"
+        panel: "0 18px 48px rgba(20, 29, 44, 0.1)"
       },
       fontFamily: {
         display: ["Inter", "IBM Plex Sans", ...defaultTheme.fontFamily.sans],
