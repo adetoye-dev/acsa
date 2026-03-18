@@ -66,7 +66,7 @@ export function NodeInspector({
 
   if (!activeWorkflow || !selectedNode) {
     return (
-      <div className="rounded-2xl border border-dashed border-black/10 bg-white/68 px-4 py-5 text-sm leading-6 text-slate">
+      <div className="rounded-[12px] border border-dashed border-black/10 bg-white px-4 py-5 text-sm leading-6 text-slate">
         Select a node on the canvas to configure it here.
       </div>
     );
@@ -81,11 +81,11 @@ export function NodeInspector({
               <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62">
                 Trigger
               </div>
-              <div className="mt-1 text-sm text-slate">
+              <div className="mt-1 text-[13px] text-slate">
                 Configure how this workflow starts.
               </div>
             </div>
-            <span className="rounded-md border border-[#f0a15e]/20 bg-[#fff2e7] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#c06e29]">
+            <span className="rounded-[8px] border border-black/10 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#636b75]">
               Entrypoint
             </span>
           </div>
@@ -131,12 +131,12 @@ export function NodeInspector({
               <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62">
                 Step configuration
               </div>
-              <div className="mt-1 text-sm text-slate">
+              <div className="mt-1 text-[13px] text-slate">
                 Tune runtime behavior and parameters for this step.
               </div>
             </div>
             {selectedStepIsDetached ? (
-              <span className="rounded-md border border-[#9a72ff]/20 bg-[#f2efff] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#7b58d8]">
+              <span className="rounded-[8px] border border-black/10 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#666c75]">
                 Detached
               </span>
             ) : null}

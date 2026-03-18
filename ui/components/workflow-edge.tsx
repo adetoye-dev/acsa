@@ -23,7 +23,7 @@ import {
   type EdgeProps
 } from "@xyflow/react";
 
-const SELECTED_EDGE_STROKE = "rgba(92, 221, 229, 0.96)";
+const SELECTED_EDGE_STROKE = "rgba(111, 99, 255, 0.96)";
 const SELECTED_EDGE_WIDTH = 2.8;
 
 type WorkflowEdgeData = {
@@ -57,7 +57,7 @@ export function WorkflowEdge({
   const stroke =
     selected
       ? SELECTED_EDGE_STROKE
-      : asStringStyle(style?.stroke, "rgba(121, 141, 242, 0.68)");
+      : asStringStyle(style?.stroke, "rgba(111, 99, 255, 0.68)");
   const strokeWidth = selected
     ? SELECTED_EDGE_WIDTH
     : asNumericStyle(style?.strokeWidth, 2);
@@ -103,7 +103,7 @@ export function WorkflowEdge({
         <EdgeLabelRenderer>
           <button
             aria-label="Insert step on connection"
-            className="nodrag nopan absolute flex h-8 w-8 items-center justify-center rounded-full border border-[#7c8fff]/22 bg-white text-base font-medium text-[#5e86ff] shadow-[0_10px_24px_rgba(94,134,255,0.14)] transition hover:border-[#7c8fff]/36 hover:bg-[#eef3ff]"
+            className="nodrag nopan absolute flex h-8 w-8 items-center justify-center rounded-[10px] border border-[#6f63ff]/24 bg-white text-base font-medium text-[#5d52d8] shadow-[0_1px_4px_rgba(16,20,20,0.08)] transition hover:border-[#6f63ff]/36 hover:bg-[#f6f4ff]"
             onClick={(event) => {
               event.preventDefault();
               event.stopPropagation();

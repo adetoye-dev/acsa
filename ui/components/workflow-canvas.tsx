@@ -315,15 +315,15 @@ export function WorkflowCanvas({
           <MiniMap
             pannable
             zoomable
-            className="!rounded-xl !border !border-black/10 !bg-white/90"
+            className="!rounded-[10px] !border !border-black/10 !bg-white"
           />
         ) : null}
         {showControls ? (
-          <Controls className="!rounded-xl !border !border-black/10 !bg-white/90" />
+          <Controls className="!rounded-[10px] !border !border-black/10 !bg-white" />
         ) : null}
         <Background
-          color="rgba(16, 26, 29, 0.035)"
-          gap={28}
+          color="rgba(16, 20, 20, 0.045)"
+          gap={26}
           size={1}
           variant={BackgroundVariant.Lines}
         />
@@ -433,7 +433,7 @@ function ViewportPanel() {
 
   return (
     <Panel position="top-right">
-      <div className="flex items-center gap-2 rounded-xl border border-black/10 bg-white/92 p-2">
+      <div className="flex items-center gap-1.5 rounded-[10px] border border-black/10 bg-white p-1.5">
         <button
           className="ui-button !px-2.5 !py-2 !text-[10px]"
           onClick={() => void reactFlow.fitView({ duration: 180, maxZoom: 1.05, padding: 0.18 })}

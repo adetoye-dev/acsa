@@ -14,14 +14,17 @@
  * limitations under the License.
  */
 
+import type { ReactNode } from "react";
+
 export type WorkspaceView = "canvas" | "preview" | "history";
 
 type TopBarProps = {
   activeWorkflowFile: string;
-  activeWorkflowName: string;
+  activeView: WorkspaceView;
   hasUnsavedChanges: boolean;
   isRunning: boolean;
   isSaving: boolean;
+  onChangeView: (view: WorkspaceView) => void;
   runDisabled: boolean;
   runDisabledReason?: string | null;
   onRefresh: () => void;
@@ -33,10 +36,11 @@ type TopBarProps = {
 
 export function TopBar({
   activeWorkflowFile,
-  activeWorkflowName,
+  activeView,
   hasUnsavedChanges,
   isRunning,
   isSaving,
+  onChangeView,
   runDisabled,
   runDisabledReason,
   onRefresh,
@@ -46,77 +50,204 @@ export function TopBar({
   saveDisabledReason
 }: TopBarProps) {
   return (
-    <section className="panel-surface overflow-hidden">
-      <div className="flex h-[58px] items-center justify-between gap-4 px-4">
+    <section className="overflow-hidden border-b border-black/10 bg-[rgba(255,255,255,0.84)]">
+      <div className="flex h-[52px] items-center justify-between gap-4 px-4">
         <div className="flex min-w-0 items-center gap-3">
-          <div className="rounded-xl border border-[#f0a15e]/25 bg-[linear-gradient(135deg,rgba(240,161,94,0.18),rgba(125,119,255,0.12))] px-3 py-2 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8c4f18]">
+          <div className="rounded-[7px] bg-[#171b20] px-3 py-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-white">
             Acsa
           </div>
           <div className="min-w-0">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate/60">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate/55">
               Workflow studio
-            </div>
-            <div className="mt-0.5 truncate text-[15px] font-semibold text-ink">
-              {activeWorkflowName}
             </div>
           </div>
         </div>
 
-        <div className="hidden min-w-0 flex-1 items-center justify-center gap-2 lg:flex">
-          <ShellBadge label={activeWorkflowFile} tone="neutral" />
-          {hasUnsavedChanges ? <ShellBadge label="unsaved" tone="warn" /> : null}
+        <div className="hidden min-w-0 flex-1 items-center justify-center lg:flex">
+          <div className="flex min-w-0 items-center gap-5">
+            <div className="inline-flex min-w-0 max-w-[300px] items-center gap-2 rounded-[9px] bg-black/[0.04] px-3 py-1.5">
+              <FileIcon />
+              <div className="min-w-0 truncate text-sm font-medium text-ink">
+                {activeWorkflowFile}
+              </div>
+            </div>
+            <div
+              aria-label="Workspace view"
+              className="flex items-center gap-0.5 rounded-[9px] bg-black/[0.06] p-0.5"
+              role="tablist"
+            >
+            {(["canvas", "preview", "history"] as WorkspaceView[]).map((view) => (
+              <button
+                aria-selected={activeView === view}
+                key={view}
+                className={workspaceTabClassName(activeView === view)}
+                onClick={() => onChangeView(view)}
+                role="tab"
+                type="button"
+              >
+                {view === "history" ? "Executions" : view.charAt(0).toUpperCase() + view.slice(1)}
+              </button>
+            ))}
+            </div>
+          </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            className="ui-button border-[#6c85ff]/20 bg-[#eef3ff] text-[#4b61c8] hover:border-[#6c85ff]/35 hover:bg-[#e3ebff]"
+          <TopBarActionButton
+            icon={<RefreshIcon />}
+            label="Refresh"
             onClick={onRefresh}
-            type="button"
-          >
-            Refresh
-          </button>
-          <button
-            className="ui-button border-[#9a72ff]/20 bg-[#f3ecff] text-[#7b58d8] hover:border-[#9a72ff]/35 hover:bg-[#ece1ff]"
-            disabled={saveDisabled}
-            onClick={onSave}
-            title={saveDisabledReason ?? undefined}
-            type="button"
-          >
-            {isSaving ? "Saving..." : "Save"}
-          </button>
-          <button
-            className="ui-button ui-button-primary"
+            variant="soft"
+          />
+          {hasUnsavedChanges || isSaving ? (
+            <TopBarActionButton
+              disabled={saveDisabled}
+              icon={<SaveIcon />}
+              label={isSaving ? "Saving..." : "Save"}
+              onClick={onSave}
+              title={saveDisabledReason ?? undefined}
+              variant="ghost"
+            />
+          ) : (
+            <div className="px-1 text-[13px] font-medium tracking-[-0.01em] text-black/42">
+              Saved
+            </div>
+          )}
+          <TopBarActionButton
             disabled={runDisabled}
+            icon={<RunIcon />}
+            label={isRunning ? "Running..." : "Run"}
             onClick={onRun}
             title={runDisabledReason ?? undefined}
-            type="button"
-          >
-            {isRunning ? "Running..." : "Run"}
-          </button>
+            variant="accent"
+          />
         </div>
       </div>
     </section>
   );
 }
 
-function ShellBadge({
+function workspaceTabClassName(active: boolean) {
+  return `inline-flex h-7 items-center rounded-[7px] px-2.5 text-[12.5px] font-medium tracking-[-0.01em] transition-colors duration-150 ${
+    active
+      ? "bg-white text-[#12161b] shadow-[0_1px_2px_rgba(16,20,20,0.06)]"
+      : "text-black/58 hover:bg-white/55 hover:text-[#1c1f24]"
+  }`;
+}
+
+function TopBarActionButton({
+  disabled = false,
+  icon,
   label,
-  tone
+  onClick,
+  title,
+  variant
 }: {
+  disabled?: boolean;
+  icon: ReactNode;
   label: string;
-  tone: "info" | "neutral" | "warn";
+  onClick: () => void;
+  title?: string;
+  variant: "accent" | "ghost" | "soft";
 }) {
-  const toneMap = {
-    info: "border-tide/20 bg-tide/10 text-[#117d88]",
-    neutral: "border-[#7b74ff]/16 bg-[#f2efff] text-[#6f61da]",
-    warn: "border-ember/20 bg-ember/10 text-[#cd694d]"
-  } as const;
+  const className =
+    variant === "accent"
+      ? "bg-[#ddd4ff] text-[#4b3786] hover:bg-[#d2c7ff]"
+      : variant === "soft"
+        ? "bg-black/[0.04] text-[#1c1f24] hover:bg-black/[0.055]"
+        : "bg-transparent text-[#2a2e34] hover:bg-black/[0.032]";
 
   return (
-    <span
-      className={`rounded-md border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.16em] ${toneMap[tone]}`}
+    <button
+      className={`inline-flex h-8 items-center gap-1.5 rounded-[8px] px-3 text-[13px] font-medium tracking-[-0.01em] transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+      disabled={disabled}
+      onClick={onClick}
+      title={title}
+      type="button"
     >
-      {label}
-    </span>
+      <span className="shrink-0 opacity-80">{icon}</span>
+      <span>{label}</span>
+    </button>
+  );
+}
+
+function RefreshIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-3.5 w-3.5"
+      fill="none"
+      viewBox="0 0 16 16"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M12.75 5.5A5.25 5.25 0 1 0 13 8m-.25-4v2.5H10.25"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.35"
+      />
+    </svg>
+  );
+}
+
+function SaveIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-3.5 w-3.5"
+      fill="none"
+      viewBox="0 0 16 16"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M3 3.25h7.4l2.35 2.35v7.15H3V3.25Zm2.25 0V6h4V3.25m-4 7.5h5.5"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.35"
+      />
+    </svg>
+  );
+}
+
+function RunIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-3.5 w-3.5"
+      fill="none"
+      viewBox="0 0 16 16"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.35" />
+      <path
+        d="M6.75 5.9 10.4 8l-3.65 2.1V5.9Z"
+        fill="currentColor"
+        stroke="currentColor"
+        strokeLinejoin="round"
+        strokeWidth="0.35"
+      />
+    </svg>
+  );
+}
+
+function FileIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-3.5 w-3.5 shrink-0 text-black/42"
+      fill="none"
+      viewBox="0 0 16 16"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M4 2.75h5l3 3v7.5H4v-10.5Zm5 0v3h3"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.2"
+      />
+    </svg>
   );
 }

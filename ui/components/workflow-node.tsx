@@ -50,7 +50,7 @@ export const WorkflowNode = memo(function WorkflowNode({
     <div className={containerClassName(data.kind, selected, state)}>
       {data.kind === "step" ? (
         <Handle
-          className="!h-3 !w-3 !border-2 !border-white !bg-[#8ba0bf]"
+          className="!h-3 !w-3 !border-2 !border-white !bg-[#96a0ab]"
           position={Position.Left}
           type="target"
         />
@@ -67,10 +67,10 @@ export const WorkflowNode = memo(function WorkflowNode({
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <div className="truncate text-[15px] font-semibold tracking-tight text-ink">
+              <div className="truncate text-[14px] font-medium tracking-tight text-ink">
                 {data.label}
               </div>
-              <div className="mt-1 truncate text-xs leading-5 text-slate">
+              <div className="mt-0.5 truncate text-[12px] leading-5 text-slate">
                 {data.description}
               </div>
             </div>
@@ -79,9 +79,9 @@ export const WorkflowNode = memo(function WorkflowNode({
             ) : null}
           </div>
 
-          <div className="mt-4 flex items-center justify-between gap-3">
+          <div className="mt-3 flex items-center justify-between gap-3">
             <span
-              className={`inline-flex items-center rounded-md border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.16em] ${nodeAccentClassName({
+              className={`inline-flex items-center rounded-[8px] border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${nodeAccentClassName({
                 category: data.category,
                 kind: data.kind,
                 source: data.source,
@@ -92,7 +92,7 @@ export const WorkflowNode = memo(function WorkflowNode({
             </span>
             <div className="flex items-center gap-2">
               {data.detached ? (
-                <span className="rounded-md border border-[#9a72ff]/20 bg-[#f2efff] px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-[#7b58d8]">
+                <span className="rounded-[8px] border border-black/10 bg-[#f6f7f9] px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-[#666c75]">
                   Draft
                 </span>
               ) : null}
@@ -113,7 +113,7 @@ export const WorkflowNode = memo(function WorkflowNode({
       {selected && data.onAddAfter ? (
         <button
           aria-label={`Add step after ${data.label}`}
-          className="absolute right-[-18px] top-1/2 z-20 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-[#f0a15e]/22 bg-white text-lg font-medium text-[#d37d3e] shadow-[0_10px_24px_rgba(211,125,62,0.16)] transition hover:border-[#f0a15e]/36 hover:bg-[#fff5ed]"
+          className="absolute right-[-14px] top-1/2 z-20 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-[10px] border border-black/10 bg-white text-lg font-medium text-[#3b4653] shadow-[0_1px_4px_rgba(16,20,20,0.08)] transition hover:border-[#6f63ff]/24 hover:bg-[#f7f7fb]"
           onClick={(event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -130,25 +130,25 @@ export const WorkflowNode = memo(function WorkflowNode({
 
 function badgeClassName(state: NodeExecutionState) {
   const base =
-    "rounded-md px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em]";
+    "rounded-[8px] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em]";
   switch (state) {
     case "running":
-      return `${base} animate-pulse border border-tide/25 bg-tide/10 text-[#117d88]`;
+      return `${base} animate-pulse border border-[#6f63ff]/26 bg-[#f6f4ff] text-[#5d52d8]`;
     case "success":
-      return `${base} border border-emerald-400/20 bg-emerald-400/10 text-[#198754]`;
+      return `${base} border border-emerald-400/20 bg-[#eff9f2] text-[#2e7b54]`;
     case "failed":
-      return `${base} border border-ember/25 bg-ember/10 text-[#cd694d]`;
+      return `${base} border border-ember/22 bg-[#fdf1ec] text-[#c25f47]`;
     case "paused":
-      return `${base} border border-amber-400/20 bg-amber-400/10 text-[#b87a20]`;
+      return `${base} border border-amber-400/20 bg-[#fdf8eb] text-[#a47123]`;
     case "skipped":
-      return `${base} border border-black/10 bg-black/[0.03] text-slate/70`;
+      return `${base} border border-black/10 bg-[#f6f7f9] text-slate/70`;
     default:
-      return `${base} border border-black/10 bg-white/72 text-slate/72`;
+      return `${base} border border-black/10 bg-white text-slate/72`;
   }
 }
 
 function sourceHandleClassName(kind: CanvasNodeData["kind"]) {
-  return kind === "trigger" ? "!bg-[#f0a15e]" : "!bg-[#9a72ff]";
+  return kind === "trigger" ? "!bg-[#6f63ff]" : "!bg-[#8376ff]";
 }
 
 function containerClassName(
@@ -157,24 +157,24 @@ function containerClassName(
   state: NodeExecutionState
 ) {
   const base =
-    "relative min-w-[240px] cursor-grab rounded-2xl border bg-white/92 px-4 py-3 shadow-[0_10px_28px_rgba(18,31,52,0.08)] transition duration-150 active:cursor-grabbing";
-  const selectedState = selected ? "border-tide/70 ring-2 ring-tide/15" : "";
+    "relative min-w-[232px] cursor-grab rounded-[12px] border bg-white px-4 py-3 shadow-[0_1px_2px_rgba(16,20,20,0.04)] transition duration-150 active:cursor-grabbing";
+  const selectedState = selected ? "border-[#6f63ff] ring-1 ring-[#6f63ff]/18" : "";
   const kindStateDefault =
   kind === "trigger"
-      ? "border-[#f4a261]/28 bg-[linear-gradient(180deg,rgba(255,246,238,0.98),rgba(255,255,255,0.96))]"
-      : "border-black/10 bg-[linear-gradient(180deg,rgba(255,255,255,0.98),rgba(249,251,255,0.96))]";
+      ? "border-black/10 bg-white"
+      : "border-black/10 bg-white";
 
   switch (state) {
     case "running":
-      return `${base} ${selected ? selectedState : "border-tide/45"} bg-[linear-gradient(180deg,rgba(232,251,252,0.98),rgba(255,255,255,0.96))]`;
+      return `${base} ${selected ? selectedState : "border-[#6f63ff]/26"} bg-[#faf9ff]`;
     case "success":
-      return `${base} ${selected ? selectedState : "border-emerald-400/30"} bg-[linear-gradient(180deg,rgba(238,251,243,0.98),rgba(255,255,255,0.96))]`;
+      return `${base} ${selected ? selectedState : "border-emerald-400/24"} bg-white`;
     case "failed":
-      return `${base} ${selected ? selectedState : "border-ember/35"} bg-[linear-gradient(180deg,rgba(255,241,237,0.98),rgba(255,255,255,0.96))]`;
+      return `${base} ${selected ? selectedState : "border-ember/24"} bg-white`;
     case "paused":
-      return `${base} ${selected ? selectedState : "border-amber-400/35"} bg-[linear-gradient(180deg,rgba(255,249,236,0.98),rgba(255,255,255,0.96))]`;
+      return `${base} ${selected ? selectedState : "border-amber-400/24"} bg-white`;
     case "skipped":
-      return `${base} ${selected ? selectedState : "border-black/10"} bg-white/78`;
+      return `${base} ${selected ? selectedState : "border-black/10"} bg-[#f8f8fa]`;
     default:
       return `${base} ${selectedState} ${kindStateDefault}`;
   }

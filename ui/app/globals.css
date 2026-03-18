@@ -20,11 +20,11 @@
 
 :root {
   color-scheme: light;
-  --background: #f4f7fb;
-  --foreground: #101a1d;
-  --surface: rgba(255, 255, 255, 0.84);
-  --surface-strong: rgba(255, 255, 255, 0.94);
-  --border: rgba(24, 37, 56, 0.12);
+  --background: #f7f7f8;
+  --foreground: #101414;
+  --surface: rgba(255, 255, 255, 0.92);
+  --surface-strong: rgba(255, 255, 255, 0.98);
+  --border: rgba(18, 22, 27, 0.09);
 }
 
 * {
@@ -36,23 +36,20 @@ body {
   margin: 0;
   min-height: 100%;
   background:
-    radial-gradient(circle at top left, rgba(244, 150, 81, 0.16), transparent 24%),
-    radial-gradient(circle at top right, rgba(91, 116, 255, 0.12), transparent 24%),
-    radial-gradient(circle at bottom left, rgba(193, 124, 255, 0.1), transparent 24%),
-    radial-gradient(circle at bottom right, rgba(20, 181, 162, 0.1), transparent 24%),
-    linear-gradient(rgba(16, 26, 29, 0.028) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(16, 26, 29, 0.028) 1px, transparent 1px),
-    linear-gradient(180deg, #faf7f1 0%, #edf4fb 100%);
+    linear-gradient(rgba(16, 20, 20, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(16, 20, 20, 0.018) 1px, transparent 1px),
+    linear-gradient(180deg, #fbfbfc 0%, #f3f4f6 100%);
   background-size:
-    auto,
-    auto,
-    auto,
-    auto,
-    26px 26px,
-    26px 26px,
+    28px 28px,
+    28px 28px,
     auto;
   color: var(--foreground);
-  font-family: "IBM Plex Sans", Inter, "Segoe UI", sans-serif;
+  font-family:
+    "SF Pro Text",
+    "IBM Plex Sans",
+    Inter,
+    "Segoe UI",
+    sans-serif;
 }
 
 body {
@@ -71,7 +68,7 @@ a {
 .react-flow__edge-path {
   fill: none;
   filter: none;
-  stroke: rgba(110, 126, 207, 0.62);
+  stroke: rgba(111, 99, 255, 0.58);
   stroke-linecap: square;
   stroke-linejoin: round;
   stroke-width: 2;
@@ -79,7 +76,7 @@ a {
 
 .react-flow__connection-path {
   fill: none;
-  stroke: rgba(79, 176, 186, 0.72);
+  stroke: rgba(111, 99, 255, 0.72);
   stroke-width: 2;
 }
 
@@ -90,7 +87,7 @@ a {
 }
 
 .react-flow__background path {
-  stroke: rgba(24, 37, 56, 0.06);
+  stroke: rgba(18, 22, 27, 0.05);
 }
 
 .react-flow__controls,
@@ -99,7 +96,7 @@ a {
 }
 
 .yaml-editor .cm-editor {
-  border-radius: 1rem;
+  border-radius: 10px;
   border: 1px solid rgba(157, 176, 207, 0.12);
   background: #0a0d14;
 }
@@ -132,8 +129,8 @@ a {
 
 .yaml-editor .cm-focused {
   outline: none;
-  border-color: rgba(94, 211, 219, 0.35);
-  box-shadow: 0 0 0 1px rgba(94, 211, 219, 0.18);
+  border-color: rgba(111, 99, 255, 0.35);
+  box-shadow: 0 0 0 1px rgba(111, 99, 255, 0.14);
 }
 
 .yaml-editor .cm-gutters {
@@ -165,11 +162,12 @@ a {
 
 @layer components {
   .panel-surface {
-    @apply rounded-[18px] border border-black/10 bg-white/80 shadow-panel backdrop-blur;
+    @apply rounded-[12px] border border-black/10 bg-white shadow-[0_1px_2px_rgba(16,20,20,0.04)];
+    background-color: rgba(255, 255, 255, 0.92);
   }
 
   .section-kicker {
-    @apply text-[10px] font-semibold uppercase tracking-[0.24em] text-[#6f8098];
+    @apply text-[10px] font-semibold uppercase tracking-[0.22em] text-[#767b81];
   }
 
   .section-title {
@@ -177,34 +175,34 @@ a {
   }
 
   .ui-button {
-    @apply inline-flex items-center gap-2 rounded-md border border-black/10 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-[#182232] transition hover:border-black/20 hover:bg-white/95 disabled:cursor-not-allowed disabled:opacity-60;
+    @apply inline-flex items-center gap-2 rounded-[10px] border border-black/10 bg-white px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-[#1c242c] transition hover:border-black/20 hover:bg-[#fafaf8] disabled:cursor-not-allowed disabled:opacity-60;
   }
 
   .ui-button-primary {
-    @apply border-transparent bg-[#e18a46] text-[#140c06] hover:border-transparent hover:bg-[#f2a160];
+    @apply border-[#171b20] bg-[#171b20] text-white hover:border-[#171b20] hover:bg-[#262d36];
   }
 
   .ui-button-tide {
-    @apply border-transparent bg-tide text-white hover:border-transparent hover:bg-[#43c5ce];
+    @apply border-[#2d4f55] bg-[#2d4f55] text-white hover:border-[#2d4f55] hover:bg-[#3c666d];
   }
 
   .ui-button-danger {
-    @apply border-ember/25 text-[#ff8b78] hover:border-ember/45 hover:bg-ember/10;
+    @apply border-ember/20 text-[#c65a72] hover:border-ember/35 hover:bg-ember/10;
   }
 
   .ui-input {
-    @apply w-full rounded-xl border border-black/10 bg-white px-3 py-2.5 text-sm text-[#182232] outline-none transition placeholder:text-[#78879b] focus:border-tide/45;
+    @apply w-full rounded-[10px] border border-black/10 bg-white px-3 py-2 text-sm text-[#182232] outline-none transition placeholder:text-[#7a828b] focus:border-[#6f63ff]/45;
   }
 
   .ui-panel-card {
-    @apply rounded-2xl border border-black/10 bg-white/75;
+    @apply rounded-[12px] border border-black/10 bg-white;
   }
 
   .ui-badge {
-    @apply rounded-md border border-black/10 bg-white/80 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#5a67bf];
+    @apply rounded-[8px] border border-black/10 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#5e6772];
   }
 
   .ui-meta {
-    @apply font-mono text-[11px] uppercase tracking-[0.16em] text-[#6f8098];
+    @apply font-mono text-[11px] uppercase tracking-[0.14em] text-[#757d88];
   }
 }

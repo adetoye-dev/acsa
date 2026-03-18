@@ -19,10 +19,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { StepTypeEntry } from "../lib/workflow-editor";
-import {
-  NodeGlyph,
-  nodeAccentClassName
-} from "./node-visuals";
+import { NodeGlyph } from "./node-visuals";
 
 type NodeBrowserProps = {
   contextHint?: string | null;
@@ -217,25 +214,25 @@ export function NodeBrowser({
 
   return (
     <div
-      className="grid h-full min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto]"
+      className="grid h-full min-h-0 grid-rows-[auto_auto_minmax(0,1fr)]"
       onKeyDown={handleKeyDown}
     >
-      <div className="border-b border-black/10 px-4 py-4">
+      <div className="border-b border-black/10 px-4 py-3">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/60">
               Step library
             </div>
-            <div className="mt-1 text-lg font-semibold tracking-tight text-ink">
+            <div className="mt-1 text-[16px] font-medium tracking-tight text-ink">
               Add a step
             </div>
             {contextHint ? (
-              <div className="mt-1 text-xs text-slate">{contextHint}</div>
+              <div className="mt-1 text-[12px] text-slate">{contextHint}</div>
             ) : null}
           </div>
           <button
             aria-label="Close node browser"
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 bg-white/72 text-slate/70 transition hover:border-black/20 hover:bg-white"
+            className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-black/10 bg-white text-slate/70 transition hover:border-black/20 hover:bg-[#fafaf8]"
             onClick={onClose}
             type="button"
           >
@@ -244,7 +241,7 @@ export function NodeBrowser({
         </div>
       </div>
 
-      <div className="border-b border-black/10 px-4 py-4">
+      <div className="border-b border-black/10 px-4 py-3">
         <label className="sr-only" htmlFor="node-browser-search">
           Search nodes
         </label>
@@ -259,11 +256,11 @@ export function NodeBrowser({
         />
       </div>
 
-      <div className="sleek-scroll min-h-0 overflow-y-auto px-3 py-3">
+      <div className="sleek-scroll min-h-0 overflow-y-auto px-2.5 py-2.5">
         {search.trim().length === 0 && recentEntries.length > 0 ? (
-          <section className="mb-5">
+          <section className="mb-4">
             <SectionHeader
-              accentClassName="bg-[#5e86ff]"
+              accentClassName="bg-[#6a727b]"
               count={recentEntries.length}
               title="Recent"
             />
@@ -282,9 +279,9 @@ export function NodeBrowser({
         ) : null}
 
         {search.trim().length === 0 && suggestedEntries.length > 0 ? (
-          <section className="mb-5">
+          <section className="mb-4">
             <SectionHeader
-              accentClassName="bg-[#f0a15e]"
+              accentClassName="bg-[#8a8176]"
               count={suggestedEntries.length}
               title="Suggested"
             />
@@ -304,7 +301,7 @@ export function NodeBrowser({
 
         {groupedEntries.length > 0 ? (
           groupedEntries.map(([category, entries]) => (
-            <section key={category} className="mb-5">
+            <section key={category} className="mb-4">
               <SectionHeader
                 accentClassName={categoryAccentClassName(category)}
                 count={entries.length}
@@ -325,18 +322,12 @@ export function NodeBrowser({
             </section>
           ))
         ) : (
-          <div className="rounded-2xl border border-dashed border-black/10 bg-white/68 px-4 py-8 text-center text-sm leading-6 text-slate">
+          <div className="rounded-[12px] border border-dashed border-black/10 bg-[#fbfbfa] px-4 py-8 text-center text-sm leading-6 text-slate">
             No node matched your search. Try a broader keyword like <span className="font-medium text-ink">http</span>, <span className="font-medium text-ink">ai</span>, or <span className="font-medium text-ink">flow</span>.
           </div>
         )}
       </div>
 
-      <div className="border-t border-black/10 px-4 py-3">
-        <div className="flex items-center justify-between gap-3 font-mono text-[10px] uppercase tracking-[0.16em] text-slate/55">
-          <span>steps only</span>
-          <span>↑ ↓ navigate • enter add • esc close</span>
-        </div>
-      </div>
     </div>
   );
 }
@@ -358,7 +349,7 @@ function SectionHeader({
           {title}
         </div>
       </div>
-      <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-slate/55">
+      <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-slate/55">
         {count}
       </span>
     </div>
@@ -378,10 +369,10 @@ function NodeOption({
 }) {
   return (
     <button
-      className={`group flex w-full items-start gap-3 rounded-2xl border px-3 py-3 text-left transition ${
+      className={`group flex w-full items-start gap-3 rounded-[12px] border px-3 py-3 text-left transition ${
         highlighted
-          ? "border-[#7c8fff]/24 bg-[#f7f9ff] shadow-[0_10px_24px_rgba(94,134,255,0.08)]"
-          : "border-black/10 bg-white/74 hover:border-[#7c8fff]/18 hover:bg-white"
+          ? "border-[#171b20]/18 bg-[#f5f5f2]"
+          : "border-black/10 bg-white hover:border-black/20 hover:bg-[#fafaf8]"
       }`}
       id={optionId(entry.type_name)}
       onClick={onSelect}
@@ -399,19 +390,12 @@ function NodeOption({
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-ink">{entry.label}</div>
-            <div className="mt-1 truncate text-xs leading-5 text-slate">
+            <div className="truncate text-sm font-medium text-ink">{entry.label}</div>
+            <div className="mt-0.5 truncate text-[12px] leading-5 text-slate">
               {entry.description}
             </div>
           </div>
-          <span
-            className={`inline-flex shrink-0 items-center rounded-md border px-1.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${nodeAccentClassName({
-              category: entry.category,
-              kind: "step",
-              source: entry.source,
-              typeName: entry.type_name
-            })}`}
-          >
+          <span className="inline-flex shrink-0 items-center rounded-[8px] border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-[#6a717a]">
             {entry.runtime ?? entry.source}
           </span>
         </div>
@@ -423,17 +407,17 @@ function NodeOption({
 function categoryAccentClassName(category: string) {
   switch (category.toLowerCase()) {
     case "ai":
-      return "bg-[#7c8fff]";
+      return "bg-[#5d6670]";
     case "human":
-      return "bg-[#f0a15e]";
+      return "bg-[#7b7166]";
     case "flow":
     case "logic":
-      return "bg-[#9a72ff]";
+      return "bg-[#6c737c]";
     case "integration":
     case "connector":
-      return "bg-[#45c5b6]";
+      return "bg-[#858c95]";
     default:
-      return "bg-[#7b879a]";
+      return "bg-[#9ba1a8]";
   }
 }
 

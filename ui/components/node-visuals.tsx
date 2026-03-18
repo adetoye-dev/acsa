@@ -35,18 +35,8 @@ export function nodeAccentClassName({
   typeName
 }: Omit<NodeGlyphProps, "className">) {
   switch (resolveNodeFamily({ category, kind, source, typeName })) {
-    case "trigger":
-      return "bg-[#f0a15e] text-[#c06e29] border-[#f0a15e]/20";
-    case "ai":
-      return "bg-[#eef1ff] text-[#5868d7] border-[#7c8fff]/18";
-    case "human":
-      return "bg-[#fff3ea] text-[#c8743d] border-[#f2b07d]/18";
-    case "flow":
-      return "bg-[#f2efff] text-[#7b58d8] border-[#9a72ff]/18";
-    case "app":
-      return "bg-[#e8f8f3] text-[#1d9a77] border-[#45c5b6]/18";
     default:
-      return "bg-[#eef4f7] text-[#5e748d] border-black/10";
+      return "bg-[#f6f7f9] text-[#59616d] border-black/10";
   }
 }
 
@@ -61,7 +51,7 @@ export function NodeGlyph({
 
   return (
     <span
-      className={`inline-flex h-10 w-10 items-center justify-center rounded-xl border ${nodeAccentClassName({
+      className={`inline-flex h-9 w-9 items-center justify-center rounded-[10px] border ${nodeAccentClassName({
         category,
         kind,
         source,
