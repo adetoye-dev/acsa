@@ -147,15 +147,17 @@ export function ExecutionInspector({
         </div>
       </section>
 
-      <div className="sleek-scroll min-h-0 overflow-y-auto px-4 py-4">
-        {selectedStepRun?.error_message ? (
-          <div className="mb-3 rounded-[10px] border border-rose-400/18 bg-rose-50 px-3 py-3 text-sm leading-6 text-[#c65a72]">
-            {selectedStepRun.error_message}
-          </div>
-        ) : null}
-
+      <div className="min-h-0 overflow-hidden px-4 py-4">
         {detailPane === "logs" ? (
-          <div className="space-y-3">
+          <div className="grid h-full min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] gap-3">
+            {selectedStepRun?.error_message ? (
+              <div className="rounded-[10px] border border-rose-400/18 bg-rose-50 px-3 py-3 text-sm leading-6 text-[#c65a72]">
+                {selectedStepRun.error_message}
+              </div>
+            ) : (
+              <div className="hidden" />
+            )}
+
             <div className="grid gap-2">
               <select
                 aria-label="Filter by log level"
@@ -178,39 +180,50 @@ export function ExecutionInspector({
               />
             </div>
 
-            {visibleLogs.length > 0 ? (
-              visibleLogs.map((log) => (
-                <div
-                  key={log.id}
-                  className={`rounded-[10px] border px-3 py-3 text-sm ${
-                    log.level === "error"
-                      ? "border-rose-500/20 bg-[#140d12] text-[#f6dde5]"
-                      : log.level === "warn"
-                        ? "border-amber-500/20 bg-[#141109] text-[#f7ead0]"
-                        : "border-[#1a2230] bg-[#0d1118] text-[#dce7f6]"
-                  }`}
-                >
-                  <div className="flex flex-wrap items-center gap-3 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-white/60">
-                    <span>{log.level}</span>
-                    <span>{formatTimestamp(log.timestamp)}</span>
-                    {log.step_id ? <span>{log.step_id}</span> : null}
-                  </div>
-                  <p className="mt-3 whitespace-pre-wrap font-mono leading-6 text-white/88">
-                    {log.message}
-                  </p>
-                </div>
-              ))
-            ) : (
-              <EmptyState>
-                No log entries matched the current filters for this step.
-              </EmptyState>
-            )}
+            <div className="sleek-scroll min-h-0 overflow-y-auto">
+              <div className="space-y-3">
+                {visibleLogs.length > 0 ? (
+                  visibleLogs.map((log) => (
+                    <div
+                      key={log.id}
+                      className={`rounded-[10px] border px-3 py-3 text-sm ${
+                        log.level === "error"
+                          ? "border-rose-500/20 bg-[#140d12] text-[#f6dde5]"
+                          : log.level === "warn"
+                            ? "border-amber-500/20 bg-[#141109] text-[#f7ead0]"
+                            : "border-[#1a2230] bg-[#0d1118] text-[#dce7f6]"
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-center gap-3 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-white/60">
+                        <span>{log.level}</span>
+                        <span>{formatTimestamp(log.timestamp)}</span>
+                        {log.step_id ? <span>{log.step_id}</span> : null}
+                      </div>
+                      <p className="mt-3 whitespace-pre-wrap font-mono leading-6 text-white/88">
+                        {log.message}
+                      </p>
+                    </div>
+                  ))
+                ) : (
+                  <EmptyState>
+                    No log entries matched the current filters for this step.
+                  </EmptyState>
+                )}
+              </div>
+            </div>
           </div>
         ) : selectedStepRun ? (
-          <PayloadBox
-            label={detailPane === "input" ? "Input" : "Output"}
-            value={detailPane === "input" ? selectedStepRun.input : selectedStepRun.output}
-          />
+          <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
+            {selectedStepRun.error_message ? (
+              <div className="rounded-[10px] border border-rose-400/18 bg-rose-50 px-3 py-3 text-sm leading-6 text-[#c65a72]">
+                {selectedStepRun.error_message}
+              </div>
+            ) : null}
+            <PayloadBox
+              label={detailPane === "input" ? "Input" : "Output"}
+              value={detailPane === "input" ? selectedStepRun.input : selectedStepRun.output}
+            />
+          </div>
         ) : (
           <EmptyState>Select a step from the run to inspect its payloads and logs.</EmptyState>
         )}
@@ -272,11 +285,11 @@ function EmptyState({ children }: { children: ReactNode }) {
 
 function PayloadBox({ label, value }: { label: string; value?: string | null }) {
   return (
-    <div className="h-full rounded-[12px] border border-[#1a2230] bg-[#0d1118] p-4 text-white">
+    <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-[12px] border border-[#1a2230] bg-[#0d1118] p-4 text-white">
       <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/60">
         {label}
       </div>
-      <pre className="sleek-scroll mt-3 h-[calc(100%-1.75rem)] overflow-auto whitespace-pre-wrap font-mono text-xs leading-6 text-[#dce7f6]">
+      <pre className="sleek-scroll mt-3 min-h-0 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-[#dce7f6]">
         {value ?? "Hidden or unavailable"}
       </pre>
     </div>

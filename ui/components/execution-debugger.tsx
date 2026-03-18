@@ -166,7 +166,7 @@ export function ExecutionDebugger({
         </div>
       </aside>
 
-      <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_296px]">
+      <div className="grid min-h-0 grid-rows-[minmax(0,1fr)_400px]">
         {runDetail ? (
           <>
             <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] border-b border-black/10">
@@ -174,9 +174,6 @@ export function ExecutionDebugger({
                 <div className="min-w-0">
                   <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/60">
                     Selected run
-                  </div>
-                  <div className="mt-1 truncate text-[15px] font-medium tracking-tight text-ink">
-                    {runDetail.run.workflow_name}
                   </div>
                   <div className="mt-1 font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
                     {runDetail.run.id.slice(0, 8)} • {formatTimestamp(runDetail.run.started_at)}
@@ -191,9 +188,10 @@ export function ExecutionDebugger({
                 </div>
               </div>
 
-              <div className="min-h-0 p-4">
-                <div className="h-full min-h-0 overflow-hidden rounded-[12px] border border-black/10 bg-white">
+              <div className="min-h-0">
+                <div className="h-full min-h-0 overflow-hidden bg-white">
                   <WorkflowCanvas
+                    key={`execution-${runDetail.run.id}-${frameRequestKey}`}
                     edges={edges}
                     frameRequestKey={frameRequestKey}
                     nodes={graphNodes}

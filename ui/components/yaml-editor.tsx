@@ -85,7 +85,7 @@ type YamlEditorProps = {
 
 export function YamlEditor({ id, minHeight, onChange, value }: YamlEditorProps) {
   const extensions = useMemo(
-    () => [yaml(), yamlEditorTheme, syntaxHighlighting(yamlHighlightStyle)],
+    () => [yaml(), EditorView.lineWrapping, yamlEditorTheme, syntaxHighlighting(yamlHighlightStyle)],
     []
   );
 

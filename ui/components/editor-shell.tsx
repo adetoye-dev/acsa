@@ -1562,7 +1562,7 @@ export function EditorShell() {
                 )}
               </div>
             ) : showPreviewView ? (
-              <div className="min-h-0 overflow-hidden">
+              <div className="grid h-full min-h-0 overflow-hidden">
                 <WorkflowYamlCard
                   fullHeight
                   workflowYaml={activeWorkflow?.yaml ?? ""}
@@ -2038,7 +2038,7 @@ function WorkflowYamlCard({
 }) {
   return (
     <div
-      className={`h-full border-black/10 bg-white ${
+      className={`h-full min-h-0 border-black/10 bg-white ${
         fullHeight ? "grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]" : ""
       }`}
     >
@@ -2046,13 +2046,17 @@ function WorkflowYamlCard({
         <ShellBadge label="canonical" tone="info-dark" />
         <ShellBadge label="monospace" tone="neutral-dark" />
       </div>
-      <pre
-        className={`sleek-scroll bg-[#f6f7fa] px-4 py-4 font-mono text-[12px] leading-6 text-[#273140] ${
-          fullHeight ? "min-h-0 overflow-auto border-t border-black/10" : "overflow-x-auto border border-black/10"
-        }`}
-      >
-        {workflowYaml || "# No workflow selected"}
-      </pre>
+      {fullHeight ? (
+        <div className="sleek-scroll min-h-0 overflow-auto border-t border-black/10 bg-[#f6f7fa]">
+          <pre className="min-h-full whitespace-pre-wrap break-words px-4 py-4 font-mono text-[12px] leading-6 text-[#273140]">
+            {workflowYaml || "# No workflow selected"}
+          </pre>
+        </div>
+      ) : (
+        <pre className="overflow-x-auto border border-black/10 bg-[#f6f7fa] px-4 py-4 font-mono text-[12px] leading-6 text-[#273140]">
+          {workflowYaml || "# No workflow selected"}
+        </pre>
+      )}
     </div>
   );
 }

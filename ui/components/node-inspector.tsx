@@ -125,7 +125,7 @@ export function NodeInspector({
       ) : null}
 
       {selectedStep ? (
-        <section className="ui-panel-card p-3">
+        <section className="p-2">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62">
@@ -225,7 +225,7 @@ export function NodeInspector({
           </label>
           <YamlEditor
             id="step-params"
-            minHeight={208}
+            minHeight={300}
             onChange={onSelectedNodeParamsChange}
             value={stepParamsDraft}
           />
