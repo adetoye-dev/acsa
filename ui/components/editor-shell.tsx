@@ -17,6 +17,7 @@
 "use client";
 
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useShallow } from "zustand/react/shallow";
 
 import {
@@ -24,8 +25,6 @@ import {
   type XYPosition
 } from "@xyflow/react";
 
-import { ExecutionDebugger } from "./execution-debugger";
-import { ExecutionInspector } from "./execution-inspector";
 import { NodeBrowser } from "./node-browser";
 import { NodeInspector } from "./node-inspector";
 import { TopBar, type WorkspaceView } from "./top-bar";
@@ -38,13 +37,11 @@ import {
 import {
   formatDuration,
   parseMetricsSummary,
-  type LogPageResponse,
   type MetricsSummary,
   type RunDetailResponse,
   type RunPageResponse
 } from "../lib/observability";
 import {
-  observabilityStoreState,
   useObservabilityActions,
   useObservabilityStore
 } from "../lib/observability-store";
@@ -105,7 +102,20 @@ type AddStepIntent =
   | { mode: "after"; sourceNodeId: string }
   | { mode: "between"; sourceId: string; targetId: string };
 
-export function EditorShell() {
+type EditorShellProps = {
+  createDraftOnBoot?: boolean;
+  embeddedInProductShell?: boolean;
+  requestedWorkflowId?: string | null;
+  syncRoute?: boolean;
+};
+
+export function EditorShell({
+  createDraftOnBoot = false,
+  embeddedInProductShell = false,
+  requestedWorkflowId = null,
+  syncRoute = false
+}: EditorShellProps) {
+  const router = useRouter();
   const {
     activeWorkflowId,
     documents,
@@ -149,25 +159,11 @@ export function EditorShell() {
   );
   const {
     isRefreshingHistory,
-    logLevelFilter,
-    logSearch,
-    metrics,
-    runDetail,
-    runLogs,
-    runPage,
-    runStatusFilter,
-    selectedRunId
+    metrics
   } = useObservabilityStore(
     useShallow((state) => ({
       isRefreshingHistory: state.isRefreshingHistory,
-      logLevelFilter: state.logLevelFilter,
-      logSearch: state.logSearch,
-      metrics: state.metrics,
-      runDetail: state.runDetail,
-      runLogs: state.logs,
-      runPage: state.runPage,
-      runStatusFilter: state.runStatusFilter,
-      selectedRunId: state.selectedRunId
+      metrics: state.metrics
     }))
   );
   const { patch: patchWorkflowState, setDocuments, setWorkflows } = useWorkflowActions();
@@ -180,11 +176,7 @@ export function EditorShell() {
   const [addStepIntent, setAddStepIntent] = useState<AddStepIntent>({ mode: "detached" });
   const [liveRunId, setLiveRunId] = useState<string | null>(null);
   const [liveRunDetail, setLiveRunDetail] = useState<RunDetailResponse | null>(null);
-  const [executionFrameRequestKey, setExecutionFrameRequestKey] = useState(0);
-  const [executionDetailPane, setExecutionDetailPane] = useState<"input" | "logs" | "output">(
-    "output"
-  );
-  const [selectedExecutionStepId, setSelectedExecutionStepId] = useState<string | null>(null);
+  const hasCreatedDraftOnBoot = useRef(false);
   const canvas = useMemo(
     () =>
       activeWorkflow
@@ -237,6 +229,13 @@ export function EditorShell() {
   const canSave = !isSaving && !saveDisabledReason;
   const canRun = !isRunning && !runDisabledReason;
 
+  function navigateToWorkflowRoute(workflowId: string | null) {
+    if (!syncRoute) {
+      return;
+    }
+    router.replace(workflowId ? `/workflows/${workflowId}` : "/workflows");
+  }
+
   function applyInspectorDraftState(
     document: WorkflowDocument | null,
     nextSelectedNodeId: string | null
@@ -248,12 +247,24 @@ export function EditorShell() {
     void bootstrap();
   }, []);
 
-  useEffect(function refreshRunHistoryEffect() {
-    if (isBooting) {
+  useEffect(function syncRequestedWorkflowRouteEffect() {
+    if (!syncRoute || isBooting || createDraftOnBoot || !requestedWorkflowId) {
       return;
     }
-    void refreshRunHistory(selectedRunId);
-  }, [isBooting, runStatusFilter, selectedRunId]);
+
+    if (requestedWorkflowId === activeWorkflowId) {
+      return;
+    }
+
+    if (!workflows.some((workflow) => workflow.id === requestedWorkflowId)) {
+      if (activeWorkflowId) {
+        navigateToWorkflowRoute(activeWorkflowId);
+      }
+      return;
+    }
+
+    void handleSelectWorkflow(requestedWorkflowId);
+  }, [activeWorkflowId, createDraftOnBoot, isBooting, requestedWorkflowId, syncRoute, workflows]);
 
   useEffect(function clearLiveRunForWorkflowSwitchEffect() {
     if (!activeWorkflow) {
@@ -267,38 +278,6 @@ export function EditorShell() {
       setLiveRunDetail(null);
     }
   }, [activeWorkflow, liveRunDetail]);
-
-  useEffect(function syncSelectedRunDetailEffect() {
-    if (isBooting || !selectedRunId) {
-      if (!selectedRunId) {
-        patchObservabilityState({
-          logs: null,
-          runDetail: null
-        });
-        setSelectedExecutionStepId(null);
-      }
-      return;
-    }
-
-    let cancelled = false;
-    const runId = selectedRunId;
-
-    async function loadSelectedRunDetail() {
-      const detail = await loadRunDetail(runId);
-      if (cancelled) {
-        return;
-      }
-      setSelectedExecutionStepId((current) =>
-        preferredExecutionStepId(detail, current)
-      );
-    }
-
-    void loadSelectedRunDetail();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isBooting, logLevelFilter, logSearch, selectedRunId]);
 
   useEffect(function pollLiveRunDetailEffect() {
     if (!liveRunId || !isRunning) {
@@ -357,7 +336,7 @@ export function EditorShell() {
       });
       setLiveRunId(null);
       await refreshHumanTasks();
-      await refreshRunHistory(detail.run.id, detail.run.workflow_name);
+      await refreshRunHistory(detail.run.workflow_name);
     };
 
     void poll();
@@ -382,28 +361,53 @@ export function EditorShell() {
         fetchEngineJson<HumanTaskResponse>("/human-tasks")
       ]);
 
+      const persistedWorkflows = mergeWorkflowSummaries({}, inventory.workflows);
       patchWorkflowState({
         invalidFiles: inventory.invalid_files,
         newStepType: catalog.step_types[0]?.type_name ?? "noop",
         pendingTasks: tasks.tasks,
         stepCatalog: catalog.step_types,
         triggerCatalog: catalog.trigger_types,
-        workflows: mergeWorkflowSummaries({}, inventory.workflows)
+        workflows: persistedWorkflows
       });
 
+      if (createDraftOnBoot && !hasCreatedDraftOnBoot.current) {
+        hasCreatedDraftOnBoot.current = true;
+        const workflowId = nextDraftWorkflowId(persistedWorkflows);
+        const document = persistDocumentLayout(createLocalWorkflowDocument(workflowId));
+        setDocuments((current) => ({
+          ...current,
+          [document.id]: document
+        }));
+        setWorkflows((current) => upsertWorkflowSummary(current, document.summary));
+        patchWorkflowState({
+          activeWorkflowId: document.id,
+          lastAction: `Created ${document.summary.file_name} draft`,
+          selectedNodeId: TRIGGER_NODE_ID
+        });
+        applyInspectorDraftState(document, TRIGGER_NODE_ID);
+        navigateToWorkflowRoute(document.id);
+        await refreshRunHistory(document.workflow.name);
+        return;
+      }
+
       const preferredWorkflowId =
+        inventory.workflows.find((workflow) => workflow.id === requestedWorkflowId)?.id ??
         inventory.workflows.find(
           (workflow) => workflow.id === workflowStoreState().activeWorkflowId
         )?.id ??
         inventory.workflows[0]?.id ??
         null;
       patchWorkflowState({ activeWorkflowId: preferredWorkflowId });
+      if (requestedWorkflowId !== preferredWorkflowId) {
+        navigateToWorkflowRoute(preferredWorkflowId);
+      }
       let workflowName: string | null = null;
       if (preferredWorkflowId) {
         const response = await loadWorkflowDocument(preferredWorkflowId);
         workflowName = response?.summary.name ?? null;
       }
-      await refreshRunHistory(undefined, workflowName);
+      await refreshRunHistory(workflowName);
       patchWorkflowState({
         lastAction: "Loaded workflow inventory, node catalog, and pending tasks"
       });
@@ -469,11 +473,7 @@ export function EditorShell() {
     return nextWorkflowId;
   }
 
-  async function refreshRunHistory(
-    preferredRunId?: string | null,
-    workflowNameOverride?: string | null
-  ) {
-    const currentObservabilityState = observabilityStoreState();
+  async function refreshRunHistory(workflowNameOverride?: string | null) {
     patchObservabilityState({ isRefreshingHistory: true });
     try {
       const query = new URLSearchParams();
@@ -482,9 +482,6 @@ export function EditorShell() {
       if (workflowName) {
         query.set("workflow_name", workflowName);
       }
-      if (currentObservabilityState.runStatusFilter.trim()) {
-        query.set("status", currentObservabilityState.runStatusFilter.trim());
-      }
       query.set("page", "1");
       query.set("page_size", "12");
 
@@ -492,59 +489,15 @@ export function EditorShell() {
         fetchEngineJson<RunPageResponse>(`/api/runs?${query.toString()}`),
         fetchEngineText("/metrics")
       ]);
-
-      const nextRunId =
-        preferredRunId ??
-        (currentObservabilityState.selectedRunId
-          ? pageResponse.runs.find(
-              (run) => run.id === currentObservabilityState.selectedRunId
-            )?.id
-          : undefined) ??
-        null;
       patchObservabilityState({
         isRefreshingHistory: false,
-        logs: nextRunId ? currentObservabilityState.logs : null,
         metrics: parseMetricsSummary(metricsText),
-        runDetail:
-          nextRunId && currentObservabilityState.runDetail?.run.id === nextRunId
-            ? currentObservabilityState.runDetail
-            : null,
-        runPage: pageResponse,
-        selectedRunId: nextRunId
+        runPage: pageResponse
       });
     } catch (error) {
       patchWorkflowState({ globalError: errorMessage(error) });
     } finally {
       patchObservabilityState({ isRefreshingHistory: false });
-    }
-  }
-
-  async function loadRunDetail(runId: string) {
-    const currentObservabilityState = observabilityStoreState();
-    try {
-      const [detailResponse, logResponse] = await Promise.all([
-        fetchEngineJson<RunDetailResponse>(`/api/runs/${runId}`),
-        fetchEngineJson<LogPageResponse>(
-          `/api/runs/${runId}/logs?${new URLSearchParams({
-            ...(currentObservabilityState.logLevelFilter
-              ? { level: currentObservabilityState.logLevelFilter }
-              : {}),
-            ...(currentObservabilityState.logSearch
-              ? { search: currentObservabilityState.logSearch }
-              : {}),
-            page: "1",
-            page_size: "80"
-          }).toString()}`
-        )
-      ]);
-      patchObservabilityState({
-        logs: logResponse,
-        runDetail: detailResponse
-      });
-      return detailResponse;
-    } catch (error) {
-      patchWorkflowState({ globalError: errorMessage(error) });
-      return null;
     }
   }
 
@@ -611,7 +564,8 @@ export function EditorShell() {
       selectedNodeId: TRIGGER_NODE_ID
     });
     applyInspectorDraftState(document, TRIGGER_NODE_ID);
-    await refreshRunHistory(undefined, document.workflow.name);
+    navigateToWorkflowRoute(document.id);
+    await refreshRunHistory(document.workflow.name);
   }
 
   async function handleDeleteWorkflow(workflowId: string) {
@@ -638,16 +592,16 @@ export function EditorShell() {
         lastAction: `Discarded ${workflowId}.yaml draft`,
         selectedNodeId: null
       });
+      navigateToWorkflowRoute(nextWorkflowId);
       if (nextWorkflowId && !workflowStoreState().documents[nextWorkflowId]) {
         const response = await loadWorkflowDocument(nextWorkflowId, null);
-        await refreshRunHistory(undefined, response?.summary.name ?? nextWorkflowId);
+        await refreshRunHistory(response?.summary.name ?? nextWorkflowId);
       } else {
         applyInspectorDraftState(
           nextWorkflowId ? workflowStoreState().documents[nextWorkflowId] ?? null : null,
           null
         );
         await refreshRunHistory(
-          undefined,
           nextWorkflowId ? workflowStoreState().documents[nextWorkflowId]?.workflow.name ?? null : null
         );
       }
@@ -679,12 +633,13 @@ export function EditorShell() {
       } else {
         applyInspectorDraftState(null, null);
       }
-      await refreshRunHistory(undefined, workflowName);
+      await refreshRunHistory(workflowName);
       patchWorkflowState({
         globalError: null,
         lastAction: `Deleted ${workflowId}.yaml`,
         selectedNodeId: null
       });
+      navigateToWorkflowRoute(nextWorkflowId);
     } catch (error) {
       patchWorkflowState({
         globalError: errorMessage(error),
@@ -736,7 +691,8 @@ export function EditorShell() {
         selectedNodeId: null
       });
       applyInspectorDraftState(duplicateDocument, null);
-      await refreshRunHistory(undefined, duplicateDocument.workflow.name);
+      navigateToWorkflowRoute(targetId);
+      await refreshRunHistory(duplicateDocument.workflow.name);
       return;
     }
 
@@ -759,8 +715,9 @@ export function EditorShell() {
         selectedNodeId: null
       });
       applyInspectorDraftState(nextDocument, null);
+      navigateToWorkflowRoute(response.id);
       await refreshInventory(response.id);
-      await refreshRunHistory(undefined, response.summary.name);
+      await refreshRunHistory(response.summary.name);
     } catch (error) {
       patchWorkflowState({
         globalError: errorMessage(error),
@@ -833,6 +790,7 @@ export function EditorShell() {
       });
       if (activeWorkflowId === workflowId) {
         applyInspectorDraftState(renamedDocument, selectedNodeId);
+        navigateToWorkflowRoute(targetId);
       }
       return;
     }
@@ -881,9 +839,10 @@ export function EditorShell() {
       });
       if (activeWorkflowId === workflowId) {
         applyInspectorDraftState(renamedDocument, selectedNodeId);
+        navigateToWorkflowRoute(response.id);
       }
       await refreshInventory(activeWorkflowId === workflowId ? response.id : activeWorkflowId);
-      await refreshRunHistory(undefined, response.summary.name);
+      await refreshRunHistory(response.summary.name);
     } catch (error) {
       patchWorkflowState({
         globalError: errorMessage(error),
@@ -1013,7 +972,7 @@ export function EditorShell() {
           workflowName = response?.summary.name ?? workflowName;
         }
       }
-      await refreshRunHistory(selectedRunId, workflowName);
+      await refreshRunHistory(workflowName);
       patchWorkflowState({
         globalError: null,
         lastAction: "Refreshed workflow inventory, tasks, and run history"
@@ -1045,13 +1004,6 @@ export function EditorShell() {
     });
     setLiveRunDetail(null);
     setLiveRunId(null);
-    setExecutionDetailPane("output");
-    setSelectedExecutionStepId(null);
-    patchObservabilityState({
-      logs: null,
-      runDetail: null,
-      selectedRunId: null
-    });
     try {
       const response = await fetchEngineJson<RunStartResponse>(
         `/api/workflows/${activeWorkflow.id}/run-async`,
@@ -1067,8 +1019,7 @@ export function EditorShell() {
         globalError: null
       });
       setLiveRunId(response.run_id);
-      patchObservabilityState({ selectedRunId: response.run_id });
-      await refreshRunHistory(response.run_id, response.workflow_name);
+      await refreshRunHistory(response.workflow_name);
     } catch (error) {
       setLiveRunId(null);
       setLiveRunDetail(null);
@@ -1126,6 +1077,7 @@ export function EditorShell() {
         selectedNodeId
       });
       applyInspectorDraftState(nextDocument, selectedNodeId);
+      navigateToWorkflowRoute(response.id);
       await refreshInventory(response.id);
     } catch (error) {
       patchWorkflowState({
@@ -1144,12 +1096,14 @@ export function EditorShell() {
       selectedNodeId: null
     });
     if (!documents[workflowId]) {
+      navigateToWorkflowRoute(workflowId);
       const response = await loadWorkflowDocument(workflowId, null);
-      await refreshRunHistory(selectedRunId, response?.summary.name ?? workflowId);
+      await refreshRunHistory(response?.summary.name ?? workflowId);
       return;
     }
     applyInspectorDraftState(documents[workflowId], null);
-    await refreshRunHistory(selectedRunId, documents[workflowId].workflow.name);
+    navigateToWorkflowRoute(workflowId);
+    await refreshRunHistory(documents[workflowId].workflow.name);
     patchWorkflowState({ lastAction: `Opened ${workflowId}.yaml` });
   }
 
@@ -1377,19 +1331,6 @@ export function EditorShell() {
 
   function handleChangeCenterView(nextView: WorkspaceView) {
     setCenterView(nextView);
-    if (nextView === "history") {
-      setExecutionDetailPane("output");
-      setExecutionFrameRequestKey((current) => current + 1);
-    }
-  }
-
-  function handleSelectRun(runId: string) {
-    setExecutionDetailPane("output");
-    setSelectedExecutionStepId(null);
-    if (centerView === "history") {
-      setExecutionFrameRequestKey((current) => current + 1);
-    }
-    patchObservabilityState({ selectedRunId: runId });
   }
 
   function handleSelectCanvasNode(nodeId: string | null) {
@@ -1401,17 +1342,21 @@ export function EditorShell() {
 
   const showCanvasView = centerView === "canvas";
   const showNodeBrowser = showCanvasView && isAddStepMenuOpen;
-  const showExecutionsView = centerView === "history";
   const showPreviewView = centerView === "preview";
-  const showRightRail =
-    showNodeBrowser ||
-    (showCanvasView && Boolean(selectedNode)) ||
-    (showExecutionsView && Boolean(selectedRunId));
+  const showRightRail = showNodeBrowser || (showCanvasView && Boolean(selectedNode));
   const activeRunStatus = isRunning ? "running" : liveRunDetail?.run.status ?? runStatus ?? null;
   const draftNotice = workflowDraftNotice(activeWorkflow);
+  const showWorkflowSidebar = !embeddedInProductShell;
+  const workspaceGridClassName = showRightRail
+    ? showWorkflowSidebar
+      ? "xl:grid-cols-[256px_minmax(0,1fr)_324px]"
+      : "xl:grid-cols-[minmax(0,1fr)_324px]"
+    : showWorkflowSidebar
+      ? "xl:grid-cols-[256px_minmax(0,1fr)]"
+      : "xl:grid-cols-[minmax(0,1fr)]";
 
   return (
-    <main className="h-[100dvh] overflow-hidden bg-[#f7f7f8] text-ink">
+    <main className={`${embeddedInProductShell ? "h-full" : "h-[100dvh]"} overflow-hidden bg-[#f7f7f8] text-ink`}>
       <div
         className={`grid h-full ${
           globalError ? "grid-rows-[52px_auto_minmax(0,1fr)]" : "grid-rows-[52px_minmax(0,1fr)]"
@@ -1431,6 +1376,7 @@ export function EditorShell() {
           runDisabledReason={runDisabledReason}
           saveDisabled={!canSave}
           saveDisabledReason={saveDisabledReason}
+          showBrand={!embeddedInProductShell}
         />
 
         {globalError ? (
@@ -1439,51 +1385,47 @@ export function EditorShell() {
           </section>
         ) : null}
 
-        <section
-          className={`grid min-h-0 bg-[rgba(255,255,255,0.76)] ${
-            showRightRail
-              ? "xl:grid-cols-[256px_minmax(0,1fr)_324px]"
-              : "xl:grid-cols-[256px_minmax(0,1fr)]"
-          }`}
-        >
-          <aside className="grid min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden border-r border-black/10 bg-[rgba(255,255,255,0.7)]">
-            <div className="sleek-scroll flex min-h-0 flex-col overflow-y-auto px-3 py-3">
-              <SidebarBlock
-                accessory={
-                  <button
-                    className="ui-button !px-2.5 !py-2 !text-[10px]"
-                    disabled={isBusy}
-                    onClick={() => void handleCreateWorkflow()}
-                    type="button"
-                  >
-                    New
-                  </button>
-                }
-                title="Workflows"
-              >
-                <WorkflowList
-                  activeWorkflowId={activeWorkflowId}
-                  invalidFiles={invalidFiles}
-                  isBusy={isBusy}
-                  onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
-                  onDuplicateWorkflow={(workflowId) => void handleDuplicateWorkflow(workflowId)}
-                  onRenameWorkflow={(workflowId) => void handleRenameWorkflow(workflowId)}
-                  onSelectWorkflow={(workflowId) => void handleSelectWorkflow(workflowId)}
-                  workflows={workflows}
-                />
-              </SidebarBlock>
-
-              <div className="mt-auto border-t border-black/10 px-1 pt-3">
-                <SidebarBlock title="Quick status">
-                  <SidebarQuickStatus
-                    activeRunStatus={activeRunStatus}
-                    invalidFileCount={invalidFiles.length}
-                    metrics={metrics}
+        <section className={`grid min-h-0 bg-[rgba(255,255,255,0.76)] ${workspaceGridClassName}`}>
+          {showWorkflowSidebar ? (
+            <aside className="grid min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden border-r border-black/10 bg-[rgba(255,255,255,0.7)]">
+              <div className="sleek-scroll flex min-h-0 flex-col overflow-y-auto px-3 py-3">
+                <SidebarBlock
+                  accessory={
+                    <button
+                      className="ui-button !px-2.5 !py-2 !text-[10px]"
+                      disabled={isBusy}
+                      onClick={() => void handleCreateWorkflow()}
+                      type="button"
+                    >
+                      New
+                    </button>
+                  }
+                  title="Workflows"
+                >
+                  <WorkflowList
+                    activeWorkflowId={activeWorkflowId}
+                    invalidFiles={invalidFiles}
+                    isBusy={isBusy}
+                    onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
+                    onDuplicateWorkflow={(workflowId) => void handleDuplicateWorkflow(workflowId)}
+                    onRenameWorkflow={(workflowId) => void handleRenameWorkflow(workflowId)}
+                    onSelectWorkflow={(workflowId) => void handleSelectWorkflow(workflowId)}
+                    workflows={workflows}
                   />
                 </SidebarBlock>
+
+                <div className="mt-auto border-t border-black/10 px-1 pt-3">
+                  <SidebarBlock title="Quick status">
+                    <SidebarQuickStatus
+                      activeRunStatus={activeRunStatus}
+                      invalidFileCount={invalidFiles.length}
+                      metrics={metrics}
+                    />
+                  </SidebarBlock>
+                </div>
               </div>
-            </div>
-          </aside>
+            </aside>
+          ) : null}
 
           <section className="min-h-0 overflow-hidden bg-[rgba(255,255,255,0.7)]">
             {showCanvasView ? (
@@ -1568,28 +1510,7 @@ export function EditorShell() {
                   workflowYaml={activeWorkflow?.yaml ?? ""}
                 />
               </div>
-            ) : (
-              <div className="h-full min-h-0 overflow-hidden">
-                <ExecutionDebugger
-                  edges={canvas.edges}
-                  frameRequestKey={executionFrameRequestKey}
-                  isLoading={isRefreshingHistory}
-                  nodes={canvas.nodes}
-                  onRefresh={() => void refreshRunHistory(selectedRunId)}
-                  onRunStatusFilterChange={(value) =>
-                    patchObservabilityState({ runStatusFilter: value })
-                  }
-                  onSelectRun={handleSelectRun}
-                  onSelectStepId={setSelectedExecutionStepId}
-                  runDetail={runDetail}
-                  runPage={runPage}
-                  runStatusFilter={runStatusFilter}
-                  selectedRunId={selectedRunId}
-                  selectedStepId={selectedExecutionStepId}
-                  workflowName={activeWorkflow?.workflow.name ?? null}
-                />
-              </div>
-            )}
+            ) : null}
           </section>
 
           {showRightRail ? (
@@ -1604,23 +1525,6 @@ export function EditorShell() {
                   onSelectType={handleAddStep}
                   stepCatalog={stepCatalog}
                 />
-              ) : showExecutionsView ? (
-                <div className="sleek-scroll min-h-0 overflow-y-auto">
-                  <ExecutionInspector
-                    detailPane={executionDetailPane}
-                    logLevelFilter={logLevelFilter}
-                    logSearch={logSearch}
-                    logs={runLogs}
-                    nodes={canvas.nodes}
-                    onDetailPaneChange={setExecutionDetailPane}
-                    onLogLevelFilterChange={(value) =>
-                      patchObservabilityState({ logLevelFilter: value })
-                    }
-                    onLogSearchChange={(value) => patchObservabilityState({ logSearch: value })}
-                    runDetail={runDetail}
-                    selectedStepId={selectedExecutionStepId}
-                  />
-                </div>
               ) : selectedNode ? (
                 <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
                   <div className="border-b border-black/10 px-3 py-2.5">

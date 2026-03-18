@@ -27,8 +27,6 @@ import {
   formatDuration,
   formatTimestamp
 } from "../lib/observability";
-import type { CanvasNode } from "../lib/workflow-editor";
-
 type DetailPane = "input" | "logs" | "output";
 
 type ExecutionInspectorProps = {
@@ -36,7 +34,7 @@ type ExecutionInspectorProps = {
   logLevelFilter: string;
   logSearch: string;
   logs: LogPageResponse | null;
-  nodes: CanvasNode[];
+  nodeLabels: Record<string, string>;
   onDetailPaneChange: (value: DetailPane) => void;
   onLogLevelFilterChange: (value: string) => void;
   onLogSearchChange: (value: string) => void;
@@ -49,21 +47,20 @@ export function ExecutionInspector({
   logLevelFilter,
   logSearch,
   logs,
-  nodes,
+  nodeLabels,
   onDetailPaneChange,
   onLogLevelFilterChange,
   onLogSearchChange,
   runDetail,
   selectedStepId
 }: ExecutionInspectorProps) {
-  const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const latestStepRuns = useMemo(
     () => latestAttemptByStep(runDetail?.step_runs ?? []),
     [runDetail]
   );
   const selectedStepRun =
     latestStepRuns.find((stepRun) => stepRun.step_id === selectedStepId) ?? null;
-  const selectedStepNode = selectedStepId ? nodeById.get(selectedStepId) ?? null : null;
+  const selectedStepLabel = selectedStepId ? nodeLabels[selectedStepId] ?? selectedStepId : null;
   const visibleLogs = useMemo(() => {
     if (!logs) {
       return [];
@@ -111,7 +108,7 @@ export function ExecutionInspector({
               Step detail
             </div>
             <div className="mt-1 truncate text-[15px] font-medium tracking-tight text-ink">
-              {selectedStepNode?.data.label ?? selectedStepRun?.step_id ?? "No step selected"}
+              {selectedStepLabel ?? selectedStepRun?.step_id ?? "No step selected"}
             </div>
             {selectedStepRun ? (
               <div className="mt-1 text-[12px] leading-5 text-slate">

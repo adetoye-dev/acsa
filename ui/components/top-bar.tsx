@@ -16,7 +16,7 @@
 
 import type { ReactNode } from "react";
 
-export type WorkspaceView = "canvas" | "preview" | "history";
+export type WorkspaceView = "canvas" | "preview";
 
 type TopBarProps = {
   activeWorkflowFile: string;
@@ -32,6 +32,7 @@ type TopBarProps = {
   onSave: () => void;
   saveDisabled: boolean;
   saveDisabledReason?: string | null;
+  showBrand?: boolean;
 };
 
 export function TopBar({
@@ -47,24 +48,31 @@ export function TopBar({
   onRun,
   onSave,
   saveDisabled,
-  saveDisabledReason
+  saveDisabledReason,
+  showBrand = true
 }: TopBarProps) {
   return (
     <section className="overflow-hidden border-b border-black/10 bg-[rgba(255,255,255,0.84)]">
       <div className="flex h-[52px] items-center justify-between gap-4 px-4">
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="rounded-[7px] bg-[#171b20] px-3 py-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-white">
-            Acsa
-          </div>
-          <div className="min-w-0">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate/55">
-              Workflow studio
+        {showBrand ? (
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="rounded-[7px] bg-[#171b20] px-3 py-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-white">
+              Acsa
+            </div>
+            <div className="min-w-0">
+              <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate/55">
+                Workflow studio
+              </div>
             </div>
           </div>
-        </div>
+        ) : null}
 
-        <div className="hidden min-w-0 flex-1 items-center justify-center lg:flex">
-          <div className="flex min-w-0 items-center gap-5">
+        <div
+          className={`hidden min-w-0 flex-1 items-center lg:flex ${
+            showBrand ? "justify-center" : "justify-start"
+          }`}
+        >
+          <div className="flex min-w-0 items-center gap-4">
             <div className="inline-flex min-w-0 max-w-[300px] items-center gap-2 rounded-[9px] bg-black/[0.04] px-3 py-1.5">
               <FileIcon />
               <div className="min-w-0 truncate text-sm font-medium text-ink">
@@ -76,7 +84,7 @@ export function TopBar({
               className="flex items-center gap-0.5 rounded-[9px] bg-black/[0.06] p-0.5"
               role="tablist"
             >
-            {(["canvas", "preview", "history"] as WorkspaceView[]).map((view) => (
+            {(["canvas", "preview"] as WorkspaceView[]).map((view) => (
               <button
                 aria-selected={activeView === view}
                 key={view}
@@ -85,7 +93,7 @@ export function TopBar({
                 role="tab"
                 type="button"
               >
-                {view === "history" ? "Executions" : view.charAt(0).toUpperCase() + view.slice(1)}
+                {view.charAt(0).toUpperCase() + view.slice(1)}
               </button>
             ))}
             </div>

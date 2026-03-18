@@ -148,9 +148,9 @@ impl WorkflowEngine {
         initial_payload: Value,
     ) -> Result<ExecutionSummary, EngineError> {
         self.sync_connectors()?;
-        let workflow = load_workflow_from_path(path)?;
+        let (workflow, editor_snapshot) = load_workflow_document_from_path(path)?;
         let plan = compile_workflow(workflow)?;
-        self.execute_plan(&plan, initial_payload).await
+        self.execute_plan_with_editor_snapshot(&plan, initial_payload, Some(editor_snapshot)).await
     }
 
     pub async fn start_workflow_path(
@@ -159,9 +159,9 @@ impl WorkflowEngine {
         initial_payload: Value,
     ) -> Result<StartedExecution, EngineError> {
         self.sync_connectors()?;
-        let workflow = load_workflow_from_path(path)?;
+        let (workflow, editor_snapshot) = load_workflow_document_from_path(path)?;
         let plan = compile_workflow(workflow)?;
-        self.start_plan(plan, initial_payload).await
+        self.start_plan_with_editor_snapshot(plan, initial_payload, Some(editor_snapshot)).await
     }
 
     pub async fn execute_plan(
@@ -169,10 +169,27 @@ impl WorkflowEngine {
         plan: &WorkflowPlan,
         initial_payload: Value,
     ) -> Result<ExecutionSummary, EngineError> {
+        let editor_snapshot = fallback_editor_snapshot(&plan.workflow)?;
+        self.execute_plan_with_editor_snapshot(plan, initial_payload, Some(editor_snapshot)).await
+    }
+
+    async fn execute_plan_with_editor_snapshot(
+        &self,
+        plan: &WorkflowPlan,
+        initial_payload: Value,
+        editor_snapshot: Option<String>,
+    ) -> Result<ExecutionSummary, EngineError> {
         self.sync_connectors()?;
         let workflow_snapshot = serde_json::to_string(&plan.workflow)?;
-        let run =
-            self.store.start_run(&plan.workflow.name, &workflow_snapshot, &initial_payload).await?;
+        let run = self
+            .store
+            .start_run(
+                &plan.workflow.name,
+                &workflow_snapshot,
+                editor_snapshot.as_deref(),
+                &initial_payload,
+            )
+            .await?;
         record_log(
             &self.store,
             LogLevel::Info,
@@ -189,10 +206,27 @@ impl WorkflowEngine {
         plan: WorkflowPlan,
         initial_payload: Value,
     ) -> Result<StartedExecution, EngineError> {
+        let editor_snapshot = fallback_editor_snapshot(&plan.workflow)?;
+        self.start_plan_with_editor_snapshot(plan, initial_payload, Some(editor_snapshot)).await
+    }
+
+    async fn start_plan_with_editor_snapshot(
+        &self,
+        plan: WorkflowPlan,
+        initial_payload: Value,
+        editor_snapshot: Option<String>,
+    ) -> Result<StartedExecution, EngineError> {
         self.sync_connectors()?;
         let workflow_snapshot = serde_json::to_string(&plan.workflow)?;
-        let run =
-            self.store.start_run(&plan.workflow.name, &workflow_snapshot, &initial_payload).await?;
+        let run = self
+            .store
+            .start_run(
+                &plan.workflow.name,
+                &workflow_snapshot,
+                editor_snapshot.as_deref(),
+                &initial_payload,
+            )
+            .await?;
         record_log(
             &self.store,
             LogLevel::Info,
@@ -643,6 +677,13 @@ pub fn compile_workflow(workflow: Workflow) -> Result<WorkflowPlan, EngineError>
 }
 
 pub fn load_workflow_from_path(path: impl AsRef<Path>) -> Result<Workflow, EngineError> {
+    let (workflow, _) = load_workflow_document_from_path(path)?;
+    Ok(workflow)
+}
+
+fn load_workflow_document_from_path(
+    path: impl AsRef<Path>,
+) -> Result<(Workflow, String), EngineError> {
     let path = path.as_ref();
     let path_display = path.display().to_string();
     let raw = fs::read_to_string(path)
@@ -653,7 +694,7 @@ pub fn load_workflow_from_path(path: impl AsRef<Path>) -> Result<Workflow, Engin
 
     validate_workflow(&workflow)?;
 
-    Ok(workflow)
+    Ok((workflow, raw))
 }
 
 pub fn load_workflows_from_dir(path: impl AsRef<Path>) -> Result<Vec<Workflow>, EngineError> {
@@ -678,6 +719,11 @@ pub fn load_workflows_from_dir(path: impl AsRef<Path>) -> Result<Vec<Workflow>, 
 
     workflow_paths.sort();
     workflow_paths.into_iter().map(load_workflow_from_path).collect()
+}
+
+fn fallback_editor_snapshot(workflow: &Workflow) -> Result<String, EngineError> {
+    serde_yaml::to_string(workflow)
+        .map_err(|source| EngineError::SerializeWorkflowSnapshot { source })
 }
 
 pub fn validate_workflow(workflow: &Workflow) -> Result<(), EngineError> {
@@ -760,6 +806,11 @@ pub enum EngineError {
         path: String,
         #[source]
         source: std::io::Error,
+    },
+    #[error("failed to serialize workflow snapshot: {source}")]
+    SerializeWorkflowSnapshot {
+        #[source]
+        source: serde_yaml::Error,
     },
     #[error("failed to load connectors: {0}")]
     ConnectorLoad(String),

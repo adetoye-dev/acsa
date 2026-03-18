@@ -310,7 +310,7 @@ function buildLatestStepRunMap(stepRuns: StepRunView[]) {
   return latestByStep;
 }
 
-function decorateNodesForExecution(
+export function decorateNodesForExecution(
   nodes: CanvasNode[],
   workflowName: string | null,
   runDetail: RunDetailResponse | null

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { EditorShell } from "../components/editor-shell";
+import { redirect } from "next/navigation";
 
 export default function HomePage() {
-  return <EditorShell />;
+  redirect("/workflows");
 }

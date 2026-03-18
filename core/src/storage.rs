@@ -71,6 +71,7 @@ impl RunStore {
         &self,
         workflow_name: &str,
         workflow_snapshot: &str,
+        editor_snapshot: Option<&str>,
         initial_payload: &Value,
     ) -> Result<RunRecord, StorageError> {
         let record = RunRecord {
@@ -82,6 +83,7 @@ impl RunStore {
             error_message: None,
             initial_payload: Some(serde_json::to_string(initial_payload)?),
             state_json: None,
+            editor_snapshot: editor_snapshot.map(str::to_string),
             workflow_snapshot: Some(workflow_snapshot.to_string()),
         };
 
@@ -94,11 +96,12 @@ impl RunStore {
               started_at,
               finished_at,
               error_message,
+              editor_snapshot,
               workflow_snapshot,
               initial_payload,
               state_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&record.id)
@@ -107,6 +110,7 @@ impl RunStore {
         .bind(record.started_at)
         .bind(record.finished_at)
         .bind(&record.error_message)
+        .bind(&record.editor_snapshot)
         .bind(&record.workflow_snapshot)
         .bind(&record.initial_payload)
         .bind(&record.state_json)
@@ -119,7 +123,7 @@ impl RunStore {
     pub async fn get_run(&self, run_id: &str) -> Result<RunRecord, StorageError> {
         let row = sqlx::query(
             r#"
-            SELECT id, workflow_name, status, started_at, finished_at, error_message, workflow_snapshot, initial_payload, state_json
+            SELECT id, workflow_name, status, started_at, finished_at, error_message, editor_snapshot, workflow_snapshot, initial_payload, state_json
             FROM runs
             WHERE id = ?
             "#,
@@ -449,7 +453,7 @@ impl RunStore {
     ) -> Result<PaginatedResponse<RunRecord>, StorageError> {
         let total = count_runs(self, query).await?;
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "SELECT id, workflow_name, status, started_at, finished_at, error_message, workflow_snapshot, initial_payload, state_json FROM runs WHERE 1 = 1",
+            "SELECT id, workflow_name, status, started_at, finished_at, error_message, editor_snapshot, workflow_snapshot, initial_payload, state_json FROM runs WHERE 1 = 1",
         );
         apply_run_filters(&mut builder, query);
         builder.push(" ORDER BY started_at DESC LIMIT ");
@@ -885,6 +889,7 @@ impl RunStore {
               started_at INTEGER NOT NULL,
               finished_at INTEGER,
               error_message TEXT,
+              editor_snapshot TEXT,
               workflow_snapshot TEXT,
               initial_payload TEXT,
               state_json TEXT
@@ -893,6 +898,7 @@ impl RunStore {
         )
         .execute(&self.pool)
         .await?;
+        self.ensure_column("runs", "editor_snapshot", "TEXT").await?;
         self.ensure_column("runs", "workflow_snapshot", "TEXT").await?;
         self.ensure_column("runs", "initial_payload", "TEXT").await?;
         self.ensure_column("runs", "state_json", "TEXT").await?;
@@ -1060,6 +1066,7 @@ pub struct RunRecord {
     pub started_at: i64,
     pub finished_at: Option<i64>,
     pub error_message: Option<String>,
+    pub editor_snapshot: Option<String>,
     pub workflow_snapshot: Option<String>,
     pub initial_payload: Option<String>,
     pub state_json: Option<String>,
@@ -1280,6 +1287,7 @@ fn map_run_row(row: sqlx::sqlite::SqliteRow) -> Result<RunRecord, StorageError> 
         started_at: row.try_get("started_at")?,
         finished_at: row.try_get("finished_at")?,
         error_message: row.try_get("error_message")?,
+        editor_snapshot: row.try_get("editor_snapshot")?,
         workflow_snapshot: row.try_get("workflow_snapshot")?,
         initial_payload: row.try_get("initial_payload")?,
         state_json: row.try_get("state_json")?,

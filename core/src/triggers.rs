@@ -307,9 +307,11 @@ struct LogPageResponse {
 
 #[derive(Debug, Clone, Serialize)]
 struct RunDetailResponse {
+    editor_snapshot: Option<String>,
     human_tasks: Vec<HumanTaskView>,
     run: RunView,
     step_runs: Vec<StepRunView>,
+    workflow_snapshot: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -351,7 +353,9 @@ pub async fn serve(
 ) -> Result<(), TriggerError> {
     let access_control = EngineAccessControl::from_env();
     if !config.bind_addr.ip().is_loopback() && !access_control.allow_remote {
-        return Err(TriggerError::RemoteBindingRequiresExplicitOptIn { bind_addr: config.bind_addr });
+        return Err(TriggerError::RemoteBindingRequiresExplicitOptIn {
+            bind_addr: config.bind_addr,
+        });
     }
 
     if !config.bind_addr.ip().is_loopback()
@@ -750,9 +754,11 @@ async fn get_run_detail(
         Ok((run, step_runs, human_tasks)) => (
             StatusCode::OK,
             Json(json!(RunDetailResponse {
+                editor_snapshot: run.editor_snapshot.clone(),
                 human_tasks: human_tasks.into_iter().map(human_task_view).collect(),
-                run: run_view(run),
+                run: run_view(run.clone()),
                 step_runs: step_runs.into_iter().map(step_run_view).collect(),
+                workflow_snapshot: run.workflow_snapshot.clone(),
             })),
         )
             .into_response(),
@@ -2112,7 +2118,7 @@ pub enum TriggerError {
 mod tests {
     use std::collections::BTreeMap;
 
-    use axum::http::{HeaderMap, HeaderValue, header::AUTHORIZATION};
+    use axum::http::{header::AUTHORIZATION, HeaderMap, HeaderValue};
     use chrono::Utc;
     use serde_json::json;
     use serde_yaml::Value as YamlValue;

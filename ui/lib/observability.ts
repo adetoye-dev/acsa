@@ -48,9 +48,11 @@ export type MetricsSummary = {
 };
 
 export type RunDetailResponse = {
+  editor_snapshot?: string | null;
   human_tasks: HumanTaskView[];
   run: RunView;
   step_runs: StepRunView[];
+  workflow_snapshot?: string | null;
 };
 
 export type RunLogRecord = {
