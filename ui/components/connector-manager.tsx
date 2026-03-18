@@ -52,7 +52,7 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
     [inventory?.connectors]
   );
 
-  useEffect(() => {
+  useEffect(function loadConnectorInventoryOnMountEffect() {
     void refreshInventory();
   }, []);
 

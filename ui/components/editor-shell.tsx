@@ -237,18 +237,25 @@ export function EditorShell() {
   const canSave = !isSaving && !saveDisabledReason;
   const canRun = !isRunning && !runDisabledReason;
 
-  useEffect(() => {
+  function applyInspectorDraftState(
+    document: WorkflowDocument | null,
+    nextSelectedNodeId: string | null
+  ) {
+    patchWorkflowState(buildInspectorDraftState(document, nextSelectedNodeId));
+  }
+
+  useEffect(function bootstrapEditorEffect() {
     void bootstrap();
   }, []);
 
-  useEffect(() => {
+  useEffect(function refreshRunHistoryEffect() {
     if (isBooting) {
       return;
     }
     void refreshRunHistory(selectedRunId);
   }, [isBooting, runStatusFilter, selectedRunId]);
 
-  useEffect(() => {
+  useEffect(function clearLiveRunForWorkflowSwitchEffect() {
     if (!activeWorkflow) {
       setLiveRunId(null);
       setLiveRunDetail(null);
@@ -261,50 +268,39 @@ export function EditorShell() {
     }
   }, [activeWorkflow, liveRunDetail]);
 
-  useEffect(() => {
-    if (!activeWorkflow) {
-      patchWorkflowState({
-        inspectorError: null,
-        stepParamsDraft: "{}",
-        triggerDetailsDraft: "{}"
-      });
-      return;
-    }
-
-    const nextWorkflowDraftState: {
-      inspectorError: string | null;
-      stepParamsDraft: string;
-      triggerDetailsDraft: string;
-    } = {
-      inspectorError: null,
-      stepParamsDraft: "{}",
-      triggerDetailsDraft: formatYaml(extractTriggerDetails(activeWorkflow.workflow.trigger))
-    };
-
-    if (selectedNode?.data.kind === "step") {
-      const selectedStep = activeWorkflow.workflow.steps.find(
-        (step) => step.id === selectedNode.id
-      );
-      nextWorkflowDraftState.stepParamsDraft = formatYaml(selectedStep?.params ?? {});
-    }
-
-    patchWorkflowState(nextWorkflowDraftState);
-  }, [activeWorkflow, selectedNode?.data.kind, selectedNode?.id]);
-
-  useEffect(() => {
+  useEffect(function syncSelectedRunDetailEffect() {
     if (isBooting || !selectedRunId) {
       if (!selectedRunId) {
         patchObservabilityState({
           logs: null,
           runDetail: null
         });
+        setSelectedExecutionStepId(null);
       }
       return;
     }
-    void loadRunDetail(selectedRunId);
+
+    let cancelled = false;
+    const runId = selectedRunId;
+
+    async function loadSelectedRunDetail() {
+      const detail = await loadRunDetail(runId);
+      if (cancelled) {
+        return;
+      }
+      setSelectedExecutionStepId((current) =>
+        preferredExecutionStepId(detail, current)
+      );
+    }
+
+    void loadSelectedRunDetail();
+
+    return () => {
+      cancelled = true;
+    };
   }, [isBooting, logLevelFilter, logSearch, selectedRunId]);
 
-  useEffect(() => {
+  useEffect(function pollLiveRunDetailEffect() {
     if (!liveRunId || !isRunning) {
       return;
     }
@@ -374,17 +370,6 @@ export function EditorShell() {
     };
   }, [isRunning, liveRunId]);
 
-  useEffect(() => {
-    setExecutionDetailPane("output");
-  }, [selectedRunId]);
-
-  useEffect(() => {
-    if (centerView !== "history") {
-      return;
-    }
-    setExecutionFrameRequestKey((current) => current + 1);
-  }, [centerView, selectedRunId]);
-
   async function bootstrap() {
     patchWorkflowState({
       globalError: null,
@@ -432,13 +417,17 @@ export function EditorShell() {
     }
   }
 
-  async function loadWorkflowDocument(workflowId: string) {
+  async function loadWorkflowDocument(
+    workflowId: string,
+    nextSelectedNodeId: string | null = workflowStoreState().selectedNodeId
+  ) {
     patchWorkflowState({ isLoadingWorkflow: true });
     try {
       const response = await fetchEngineJson<WorkflowDocumentResponse>(
         `/api/workflows/${workflowId}`
       );
-      applyWorkflowResponse(response);
+      const nextDocument = applyWorkflowResponse(response);
+      applyInspectorDraftState(nextDocument, nextSelectedNodeId);
       patchWorkflowState({ lastAction: `Opened ${response.summary.file_name}` });
       return response;
     } catch (error) {
@@ -572,7 +561,7 @@ export function EditorShell() {
     updater: (document: WorkflowDocument) => WorkflowDocument
   ) {
     if (!activeWorkflow) {
-      return;
+      return null;
     }
     const nextDocument = persistDocumentLayout(finalizeDocument(updater(activeWorkflow)));
     setDocuments((current) => ({
@@ -584,20 +573,27 @@ export function EditorShell() {
         workflow.id === nextDocument.id ? nextDocument.summary : workflow
       )
     );
+    return nextDocument;
   }
 
   function applyWorkflowResponse(response: WorkflowDocumentResponse) {
+    let nextDocument: WorkflowDocument | null = null;
     setDocuments((current) => ({
       ...current,
-      [response.id]: persistDocumentLayout(
-        workflowDocumentFromResponse(
-          response,
-          current[response.id],
-          readStoredWorkflowPositions(response.id)
-        )
-      )
+      [response.id]: (() => {
+        const hydratedDocument = persistDocumentLayout(
+          workflowDocumentFromResponse(
+            response,
+            current[response.id],
+            readStoredWorkflowPositions(response.id)
+          )
+        );
+        nextDocument = hydratedDocument;
+        return hydratedDocument;
+      })()
     }));
     setWorkflows((current) => upsertWorkflowSummary(current, response.summary));
+    return nextDocument;
   }
 
   async function handleCreateWorkflow() {
@@ -614,6 +610,7 @@ export function EditorShell() {
       lastAction: `Created ${document.summary.file_name} draft`,
       selectedNodeId: TRIGGER_NODE_ID
     });
+    applyInspectorDraftState(document, TRIGGER_NODE_ID);
     await refreshRunHistory(undefined, document.workflow.name);
   }
 
@@ -642,9 +639,13 @@ export function EditorShell() {
         selectedNodeId: null
       });
       if (nextWorkflowId && !workflowStoreState().documents[nextWorkflowId]) {
-        const response = await loadWorkflowDocument(nextWorkflowId);
+        const response = await loadWorkflowDocument(nextWorkflowId, null);
         await refreshRunHistory(undefined, response?.summary.name ?? nextWorkflowId);
       } else {
+        applyInspectorDraftState(
+          nextWorkflowId ? workflowStoreState().documents[nextWorkflowId] ?? null : null,
+          null
+        );
         await refreshRunHistory(
           undefined,
           nextWorkflowId ? workflowStoreState().documents[nextWorkflowId]?.workflow.name ?? null : null
@@ -672,9 +673,11 @@ export function EditorShell() {
         if (draftDocument?.localDraft) {
           workflowName = draftDocument.workflow.name;
         } else {
-          const response = await loadWorkflowDocument(nextWorkflowId);
+          const response = await loadWorkflowDocument(nextWorkflowId, null);
           workflowName = response?.summary.name ?? null;
         }
+      } else {
+        applyInspectorDraftState(null, null);
       }
       await refreshRunHistory(undefined, workflowName);
       patchWorkflowState({
@@ -732,6 +735,7 @@ export function EditorShell() {
         lastAction: `Duplicated ${workflowId}.yaml to ${duplicateDocument.summary.file_name}`,
         selectedNodeId: null
       });
+      applyInspectorDraftState(duplicateDocument, null);
       await refreshRunHistory(undefined, duplicateDocument.workflow.name);
       return;
     }
@@ -747,13 +751,14 @@ export function EditorShell() {
           method: "POST"
         }
       );
-      applyWorkflowResponse(response);
+      const nextDocument = applyWorkflowResponse(response);
       patchWorkflowState({
         activeWorkflowId: response.id,
         globalError: null,
         lastAction: `Duplicated ${workflowId}.yaml to ${response.summary.file_name}`,
         selectedNodeId: null
       });
+      applyInspectorDraftState(nextDocument, null);
       await refreshInventory(response.id);
       await refreshRunHistory(undefined, response.summary.name);
     } catch (error) {
@@ -826,6 +831,9 @@ export function EditorShell() {
         globalError: null,
         lastAction: `Renamed ${workflowId}.yaml to ${renamedDocument.summary.file_name}`
       });
+      if (activeWorkflowId === workflowId) {
+        applyInspectorDraftState(renamedDocument, selectedNodeId);
+      }
       return;
     }
 
@@ -844,18 +852,21 @@ export function EditorShell() {
           method: "POST"
         }
       );
+      let renamedDocument: WorkflowDocument | null = null;
       setDocuments((current) => {
         const nextDocuments = { ...current };
         if (workflowId !== response.id) {
           delete nextDocuments[workflowId];
         }
-        nextDocuments[response.id] = persistDocumentLayout(
+        const hydratedDocument = persistDocumentLayout(
           workflowDocumentFromResponse(
             response,
             current[workflowId] ?? current[response.id],
             readStoredWorkflowPositions(response.id)
           )
         );
+        renamedDocument = hydratedDocument;
+        nextDocuments[response.id] = hydratedDocument;
         return nextDocuments;
       });
       setWorkflows((current) => {
@@ -868,6 +879,9 @@ export function EditorShell() {
         globalError: null,
         lastAction: `Renamed ${workflowId}.yaml to ${response.summary.file_name}`
       });
+      if (activeWorkflowId === workflowId) {
+        applyInspectorDraftState(renamedDocument, selectedNodeId);
+      }
       await refreshInventory(activeWorkflowId === workflowId ? response.id : activeWorkflowId);
       await refreshRunHistory(undefined, response.summary.name);
     } catch (error) {
@@ -949,7 +963,7 @@ export function EditorShell() {
               addStepIntent.targetId
             )
           : addStepToWorkflow(activeWorkflow.workflow, typeName);
-    applyActiveWorkflowUpdate((document) => ({
+    const nextDocument = applyActiveWorkflowUpdate((document) => ({
       ...document,
       workflow
     }));
@@ -957,6 +971,7 @@ export function EditorShell() {
       lastAction: `Added ${typeName.replace(/_/g, " ")} step`,
       selectedNodeId: createdNodeId
     });
+    applyInspectorDraftState(nextDocument, createdNodeId);
     setAddStepIntent({ mode: "detached" });
     setIsAddStepMenuOpen(false);
   }
@@ -982,8 +997,19 @@ export function EditorShell() {
         const draftDocument = workflowStoreState().documents[workflowIdToLoad];
         if (draftDocument?.localDraft) {
           workflowName = draftDocument.workflow.name;
+          applyInspectorDraftState(
+            draftDocument,
+            workflowIdToLoad === workflowStoreState().activeWorkflowId
+              ? workflowStoreState().selectedNodeId
+              : null
+          );
         } else {
-          const response = await loadWorkflowDocument(workflowIdToLoad);
+          const response = await loadWorkflowDocument(
+            workflowIdToLoad,
+            workflowIdToLoad === workflowStoreState().activeWorkflowId
+              ? workflowStoreState().selectedNodeId
+              : null
+          );
           workflowName = response?.summary.name ?? workflowName;
         }
       }
@@ -1019,6 +1045,8 @@ export function EditorShell() {
     });
     setLiveRunDetail(null);
     setLiveRunId(null);
+    setExecutionDetailPane("output");
+    setSelectedExecutionStepId(null);
     patchObservabilityState({
       logs: null,
       runDetail: null,
@@ -1080,7 +1108,7 @@ export function EditorShell() {
           method: activeWorkflow.localDraft ? "POST" : "PUT"
         }
       );
-      applyWorkflowResponse(response);
+      const nextDocument = applyWorkflowResponse(response);
       if (activeWorkflow.localDraft) {
         setDocuments((current) => {
           const nextDocuments = { ...current };
@@ -1097,6 +1125,7 @@ export function EditorShell() {
         lastAction: `Saved ${response.summary.file_name}`,
         selectedNodeId
       });
+      applyInspectorDraftState(nextDocument, selectedNodeId);
       await refreshInventory(response.id);
     } catch (error) {
       patchWorkflowState({
@@ -1115,10 +1144,11 @@ export function EditorShell() {
       selectedNodeId: null
     });
     if (!documents[workflowId]) {
-      const response = await loadWorkflowDocument(workflowId);
+      const response = await loadWorkflowDocument(workflowId, null);
       await refreshRunHistory(selectedRunId, response?.summary.name ?? workflowId);
       return;
     }
+    applyInspectorDraftState(documents[workflowId], null);
     await refreshRunHistory(selectedRunId, documents[workflowId].workflow.name);
     patchWorkflowState({ lastAction: `Opened ${workflowId}.yaml` });
   }
@@ -1127,7 +1157,7 @@ export function EditorShell() {
     if (!activeWorkflow) {
       return;
     }
-    applyActiveWorkflowUpdate((document) => ({
+    const nextDocument = applyActiveWorkflowUpdate((document) => ({
       ...document,
       workflow: {
         ...document.workflow,
@@ -1141,6 +1171,7 @@ export function EditorShell() {
       lastAction: `Updated trigger type to ${triggerType}`,
       triggerDetailsDraft: formatYaml(defaultTriggerDetailsForType(triggerType, activeWorkflow.id))
     });
+    applyInspectorDraftState(nextDocument, selectedNodeId);
   }
 
   function handleTriggerDetailsChange(text: string) {
@@ -1185,7 +1216,7 @@ export function EditorShell() {
       return;
     }
 
-    applyActiveWorkflowUpdate((document) => ({
+    const nextDocument = applyActiveWorkflowUpdate((document) => ({
       ...document,
       positions: renamePositionKey(document.positions, selectedNode.id, nextId),
       workflow: {
@@ -1214,13 +1245,14 @@ export function EditorShell() {
       lastAction: `Renamed step ${selectedNode.id} to ${nextId}`,
       selectedNodeId: nextId
     });
+    applyInspectorDraftState(nextDocument, nextId);
   }
 
   function handleSelectedNodeTypeChange(typeName: string) {
     if (!selectedNode || selectedNode.data.kind !== "step") {
       return;
     }
-    applyActiveWorkflowUpdate((document) => ({
+    const nextDocument = applyActiveWorkflowUpdate((document) => ({
       ...document,
       workflow: withStepUpdated(document.workflow, selectedNode.id, (step) => ({
         ...step,
@@ -1232,6 +1264,7 @@ export function EditorShell() {
       inspectorError: null,
       lastAction: `Changed ${selectedNode.id} to ${typeName}`
     });
+    applyInspectorDraftState(nextDocument, selectedNode.id);
   }
 
   function handleSelectedNodeTimeoutChange(value: string) {
@@ -1329,7 +1362,7 @@ export function EditorShell() {
       return;
     }
 
-    applyActiveWorkflowUpdate((document) => ({
+    const nextDocument = applyActiveWorkflowUpdate((document) => ({
       ...document,
       positions: omitPosition(document.positions, targetStepId),
       workflow: removeStepFromWorkflow(document.workflow, targetStepId)
@@ -1339,6 +1372,31 @@ export function EditorShell() {
       lastAction: `Removed step ${targetStepId}`,
       selectedNodeId: null
     });
+    applyInspectorDraftState(nextDocument, null);
+  }
+
+  function handleChangeCenterView(nextView: WorkspaceView) {
+    setCenterView(nextView);
+    if (nextView === "history") {
+      setExecutionDetailPane("output");
+      setExecutionFrameRequestKey((current) => current + 1);
+    }
+  }
+
+  function handleSelectRun(runId: string) {
+    setExecutionDetailPane("output");
+    setSelectedExecutionStepId(null);
+    if (centerView === "history") {
+      setExecutionFrameRequestKey((current) => current + 1);
+    }
+    patchObservabilityState({ selectedRunId: runId });
+  }
+
+  function handleSelectCanvasNode(nodeId: string | null) {
+    setIsAddStepMenuOpen(false);
+    setAddStepIntent({ mode: "detached" });
+    patchWorkflowState({ selectedNodeId: nodeId });
+    applyInspectorDraftState(activeWorkflow, nodeId);
   }
 
   const showCanvasView = centerView === "canvas";
@@ -1365,7 +1423,7 @@ export function EditorShell() {
           hasUnsavedChanges={activeWorkflow?.dirty ?? false}
           isRunning={isRunning}
           isSaving={isSaving}
-          onChangeView={setCenterView}
+          onChangeView={handleChangeCenterView}
           onRefresh={() => void handleRefresh()}
           onRun={() => void handleRun()}
           onSave={() => void handleSave()}
@@ -1444,11 +1502,7 @@ export function EditorShell() {
                         onInsertBetween={handleRequestInsertBetween}
                         onPositionsCommit={handlePositionsCommit}
                         onRequestAddAfterNode={handleRequestAddAfterNode}
-                        onSelectNode={(nodeId) => {
-                          setIsAddStepMenuOpen(false);
-                          setAddStepIntent({ mode: "detached" });
-                          patchWorkflowState({ selectedNodeId: nodeId });
-                        }}
+                        onSelectNode={handleSelectCanvasNode}
                         showControls={false}
                         showMiniMap={false}
                         showViewportPanel={false}
@@ -1525,7 +1579,7 @@ export function EditorShell() {
                   onRunStatusFilterChange={(value) =>
                     patchObservabilityState({ runStatusFilter: value })
                   }
-                  onSelectRun={(runId) => patchObservabilityState({ selectedRunId: runId })}
+                  onSelectRun={handleSelectRun}
                   onSelectStepId={setSelectedExecutionStepId}
                   runDetail={runDetail}
                   runPage={runPage}
@@ -1860,7 +1914,7 @@ function WorkflowCardMenu({
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
+  useEffect(function closeWorkflowCardMenuOnOutsideInteractionEffect() {
     if (!isOpen) {
       return;
     }
@@ -2149,6 +2203,73 @@ function errorMessage(error: unknown) {
     return error.message;
   }
   return "Unexpected error";
+}
+
+function buildInspectorDraftState(
+  document: WorkflowDocument | null,
+  nextSelectedNodeId: string | null
+) {
+  if (!document) {
+    return {
+      inspectorError: null,
+      stepParamsDraft: "{}",
+      triggerDetailsDraft: "{}"
+    };
+  }
+
+  const selectedStep =
+    nextSelectedNodeId && nextSelectedNodeId !== TRIGGER_NODE_ID
+      ? document.workflow.steps.find((step) => step.id === nextSelectedNodeId) ?? null
+      : null;
+
+  return {
+    inspectorError: null,
+    stepParamsDraft: formatYaml(selectedStep?.params ?? {}),
+    triggerDetailsDraft: formatYaml(extractTriggerDetails(document.workflow.trigger))
+  };
+}
+
+function preferredExecutionStepId(
+  runDetail: RunDetailResponse | null,
+  currentSelectedStepId: string | null
+) {
+  if (!runDetail) {
+    return null;
+  }
+
+  const latestStepRuns = Array.from(
+    runDetail.step_runs.reduce((stepRuns, stepRun) => {
+      const current = stepRuns.get(stepRun.step_id);
+      if (
+        !current ||
+        stepRun.attempt > current.attempt ||
+        (stepRun.attempt === current.attempt && stepRun.started_at > current.started_at)
+      ) {
+        stepRuns.set(stepRun.step_id, stepRun);
+      }
+      return stepRuns;
+    }, new Map<string, RunDetailResponse["step_runs"][number]>())
+  )
+    .map(([, stepRun]) => stepRun)
+    .sort((left, right) => left.started_at - right.started_at);
+
+  if (!latestStepRuns.length) {
+    return null;
+  }
+
+  if (
+    currentSelectedStepId &&
+    latestStepRuns.some((stepRun) => stepRun.step_id === currentSelectedStepId)
+  ) {
+    return currentSelectedStepId;
+  }
+
+  const preferredStep =
+    latestStepRuns.find((stepRun) =>
+      ["failed", "running", "paused"].includes(stepRun.status)
+    ) ?? latestStepRuns[latestStepRuns.length - 1];
+
+  return preferredStep?.step_id ?? null;
 }
 
 function persistDocumentLayout(document: WorkflowDocument) {

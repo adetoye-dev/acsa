@@ -119,7 +119,17 @@ export function NodeBrowser({
     return filteredEntries.map((entry) => entry.type_name);
   }, [filteredEntries, groupedEntries, recentEntries, search, suggestedEntries]);
 
-  useEffect(() => {
+  const activeHighlightedTypeName = useMemo(() => {
+    if (!visibleTypeNames.length) {
+      return null;
+    }
+
+    return highlightedTypeName && visibleTypeNames.includes(highlightedTypeName)
+      ? highlightedTypeName
+      : visibleTypeNames[0];
+  }, [highlightedTypeName, visibleTypeNames]);
+
+  useEffect(function hydrateRecentStepTypesEffect() {
     try {
       const raw = window.localStorage.getItem(RECENT_STEP_TYPES_KEY);
       if (!raw) {
@@ -137,29 +147,18 @@ export function NodeBrowser({
     }
   }, []);
 
-  useEffect(() => {
+  useEffect(function focusNodeBrowserSearchEffect() {
     searchInputRef.current?.focus();
   }, []);
 
-  useEffect(() => {
-    if (!visibleTypeNames.length) {
-      setHighlightedTypeName(null);
+  useEffect(function keepHighlightedOptionInViewEffect() {
+    if (!activeHighlightedTypeName) {
       return;
     }
 
-    setHighlightedTypeName((current) =>
-      current && visibleTypeNames.includes(current) ? current : visibleTypeNames[0]
-    );
-  }, [visibleTypeNames]);
-
-  useEffect(() => {
-    if (!highlightedTypeName) {
-      return;
-    }
-
-    const element = document.getElementById(optionId(highlightedTypeName));
+    const element = document.getElementById(optionId(activeHighlightedTypeName));
     element?.scrollIntoView({ block: "nearest" });
-  }, [highlightedTypeName]);
+  }, [activeHighlightedTypeName]);
 
   function rememberRecentType(typeName: string) {
     const nextRecentTypes = [
@@ -195,8 +194,8 @@ export function NodeBrowser({
 
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      const currentIndex = highlightedTypeName
-        ? visibleTypeNames.indexOf(highlightedTypeName)
+      const currentIndex = activeHighlightedTypeName
+        ? visibleTypeNames.indexOf(activeHighlightedTypeName)
         : -1;
       const nextIndex =
         event.key === "ArrowDown"
@@ -206,9 +205,9 @@ export function NodeBrowser({
       return;
     }
 
-    if (event.key === "Enter" && highlightedTypeName) {
+    if (event.key === "Enter" && activeHighlightedTypeName) {
       event.preventDefault();
-      handleSelect(highlightedTypeName);
+      handleSelect(activeHighlightedTypeName);
     }
   }
 
@@ -268,7 +267,7 @@ export function NodeBrowser({
               {recentEntries.map((entry) => (
                 <NodeOption
                   entry={entry}
-                  highlighted={highlightedTypeName === entry.type_name}
+                  highlighted={activeHighlightedTypeName === entry.type_name}
                   key={entry.type_name}
                   onHover={() => setHighlightedTypeName(entry.type_name)}
                   onSelect={() => handleSelect(entry.type_name)}
@@ -289,7 +288,7 @@ export function NodeBrowser({
               {suggestedEntries.map((entry) => (
                 <NodeOption
                   entry={entry}
-                  highlighted={highlightedTypeName === entry.type_name}
+                  highlighted={activeHighlightedTypeName === entry.type_name}
                   key={entry.type_name}
                   onHover={() => setHighlightedTypeName(entry.type_name)}
                   onSelect={() => handleSelect(entry.type_name)}
@@ -312,7 +311,7 @@ export function NodeBrowser({
                 {entries.map((entry) => (
                   <NodeOption
                     entry={entry}
-                    highlighted={highlightedTypeName === entry.type_name}
+                    highlighted={activeHighlightedTypeName === entry.type_name}
                     key={entry.type_name}
                     onHover={() => setHighlightedTypeName(entry.type_name)}
                     onSelect={() => handleSelect(entry.type_name)}

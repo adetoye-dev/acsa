@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-import { useEffect, useMemo, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 
 import type { Edge } from "@xyflow/react";
 
@@ -76,23 +76,6 @@ export function ExecutionDebugger({
   );
 
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
-
-  useEffect(() => {
-    if (!latestStepRuns.length) {
-      onSelectStepId(null);
-      return;
-    }
-
-    if (selectedStepId && latestStepRuns.some((stepRun) => stepRun.step_id === selectedStepId)) {
-      return;
-    }
-
-    const preferredStep =
-      latestStepRuns.find((stepRun) =>
-        ["failed", "running", "paused"].includes(stepRun.status)
-      ) ?? latestStepRuns[latestStepRuns.length - 1];
-    onSelectStepId(preferredStep?.step_id ?? null);
-  }, [latestStepRuns, onSelectStepId, selectedStepId]);
 
   const graphNodes = useMemo(
     () =>

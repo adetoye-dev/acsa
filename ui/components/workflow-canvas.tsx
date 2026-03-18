@@ -97,8 +97,8 @@ export function WorkflowCanvas({
   const [localEdges, setLocalEdges] = useState<Edge[]>(() =>
     attachEdgeActions(edges, readOnly ? null : onInsertBetween)
   );
-  const localNodesRef = useRef<CanvasNode[]>(nodes);
-  const localEdgesRef = useRef<Edge[]>(edges);
+  const localNodesRef = useRef<CanvasNode[]>(localNodes);
+  const localEdgesRef = useRef<Edge[]>(localEdges);
   const nodeTypes = useMemo<NodeTypes>(
     () => ({ workflowNode: WorkflowNode as NodeTypes[string] }),
     []
@@ -108,29 +108,29 @@ export function WorkflowCanvas({
     []
   );
 
-  useEffect(() => {
-    localNodesRef.current = localNodes;
-  }, [localNodes]);
-
-  useEffect(() => {
-    localEdgesRef.current = localEdges;
-  }, [localEdges]);
-
-  useEffect(() => {
-    setLocalNodes((current) =>
-      attachNodeActions(
+  useEffect(function syncCanvasNodesFromPropsEffect() {
+    setLocalNodes((current) => {
+      const nextNodes = attachNodeActions(
         nodes,
         onDeleteStep,
         readOnly ? null : onRequestAddAfterNode,
         current
-      )
-    );
+      );
+      localNodesRef.current = nextNodes;
+      return nextNodes;
+    });
   }, [nodes, onDeleteStep, onRequestAddAfterNode, readOnly]);
 
-  useEffect(() => {
-    setLocalEdges((current) =>
-      attachEdgeActions(edges, readOnly ? null : onInsertBetween, current)
-    );
+  useEffect(function syncCanvasEdgesFromPropsEffect() {
+    setLocalEdges((current) => {
+      const nextEdges = attachEdgeActions(
+        edges,
+        readOnly ? null : onInsertBetween,
+        current
+      );
+      localEdgesRef.current = nextEdges;
+      return nextEdges;
+    });
   }, [edges, onInsertBetween, readOnly]);
 
   function handleNodesChange(changes: NodeChange<CanvasNode>[]) {
@@ -148,7 +148,11 @@ export function WorkflowCanvas({
       return;
     }
 
-    setLocalNodes((current) => applyNodeChanges(changes, current));
+    setLocalNodes((current) => {
+      const nextNodes = applyNodeChanges(changes, current);
+      localNodesRef.current = nextNodes;
+      return nextNodes;
+    });
   }
 
   function handleNodeDragStop(_: unknown, node: CanvasNode) {
@@ -164,6 +168,7 @@ export function WorkflowCanvas({
       return;
     }
     const nextEdges = applyEdgeChanges(changes, localEdgesRef.current);
+    localEdgesRef.current = nextEdges;
     setLocalEdges(nextEdges);
     if (changes.some((change) => change.type === "remove")) {
       onEdgesCommit(nextEdges);
@@ -177,6 +182,7 @@ export function WorkflowCanvas({
       }
 
       const nextEdges = localEdgesRef.current.filter((edge) => !edgeIds.includes(edge.id));
+      localEdgesRef.current = nextEdges;
       setLocalEdges(nextEdges);
       onEdgesCommit(nextEdges);
     },
@@ -219,11 +225,12 @@ export function WorkflowCanvas({
       },
       localEdgesRef.current
     );
+    localEdgesRef.current = nextEdges;
     setLocalEdges(nextEdges);
     onEdgesCommit(nextEdges);
   }
 
-  useEffect(() => {
+  useEffect(function registerCanvasDeleteKeyEffect() {
     if (readOnly) {
       return;
     }
@@ -343,7 +350,7 @@ function InitialFrame({
   const nodesInitialized = useNodesInitialized();
   const reactFlow = useReactFlow();
 
-  useEffect(() => {
+  useEffect(function frameCanvasOnFirstRenderEffect() {
     if (!nodesInitialized || hasFramedOnMount.current || nodeCount === 0) {
       return;
     }
@@ -356,7 +363,7 @@ function InitialFrame({
     return () => window.cancelAnimationFrame(frameId);
   }, [nodeCount, nodesInitialized, reactFlow]);
 
-  useEffect(() => {
+  useEffect(function frameCanvasOnRequestEffect() {
     if (!nodesInitialized || frameRequestKey === 0) {
       return;
     }
