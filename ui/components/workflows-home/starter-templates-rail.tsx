@@ -39,12 +39,7 @@ export function StarterTemplatesRail({
       }`}
     >
       <div className="border-b border-black/10 px-5 py-4">
-        <h2 className="text-[15px] font-medium tracking-tight text-ink">
-          Starter templates/examples
-        </h2>
-        <p className="mt-1 text-sm leading-6 text-slate">
-          Curated examples open as local drafts first, so users can inspect before saving.
-        </p>
+        <h2 className="text-[15px] font-medium tracking-tight text-ink">Starter templates</h2>
         {emptyState === "empty" ? (
           <div className="mt-3 rounded-[16px] border border-[#d7d0ff] bg-white/75 px-4 py-3 text-sm leading-6 text-[#5c4aa5]">
             No workflows exist yet. This rail is the primary way to get started.
@@ -100,7 +95,7 @@ function StarterCard({ item }: { item: StarterReadinessItem }) {
           Missing {item.missingStepTypes.join(", ")}
         </div>
       ) : (
-        <div className="mt-2 text-sm leading-6 text-[#2e7b54]">Ready to open as a draft.</div>
+        <div className="mt-2 text-sm leading-6 text-[#2e7b54]">Opens as a local draft.</div>
       )}
     </Link>
   );

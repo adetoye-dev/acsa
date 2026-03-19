@@ -34,14 +34,9 @@ export function AllWorkflowsPanel({
   workflows
 }: AllWorkflowsPanelProps) {
   return (
-    <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-[20px] border border-black/10 bg-[rgba(255,255,255,0.62)] shadow-[0_1px_0_rgba(16,20,20,0.02)]">
-      <div className="flex items-center justify-between gap-4 border-b border-black/10 px-5 py-4">
-        <div>
-          <h2 className="text-[15px] font-medium tracking-tight text-ink">All workflows</h2>
-          <p className="mt-1 text-sm leading-6 text-slate">
-            Compact inventory, with validation results kept close to the list.
-          </p>
-        </div>
+    <section className="grid min-h-0 grid-rows-[56px_minmax(0,1fr)] rounded-[20px] border border-black/10 bg-[rgba(255,255,255,0.62)] shadow-[0_1px_0_rgba(16,20,20,0.02)]">
+      <div className="flex items-center justify-between gap-4 border-b border-black/10 px-5">
+        <h2 className="text-[15px] font-medium tracking-tight text-ink">All workflows</h2>
         <span className="ui-badge">{workflows.length}</span>
       </div>
 
@@ -61,20 +56,13 @@ export function AllWorkflowsPanel({
           </div>
         ) : (
           <PanelEmptyState>
-            {emptyState === "empty"
-              ? "No saved workflows yet. Use the starter rail to create the first draft."
-              : "No workflows matched the current inventory."}
+            No saved workflows yet. Use the starter rail to create the first draft.
           </PanelEmptyState>
         )}
 
         <div className="mt-4 rounded-[18px] border border-black/10 bg-white/80 px-4 py-4">
           <div className="flex items-center justify-between gap-4">
-            <div>
-              <h3 className="text-sm font-medium tracking-tight text-ink">Invalid YAML files</h3>
-              <p className="mt-1 text-sm leading-6 text-slate">
-                These remain visible here so inventory issues stay near the workflows list.
-              </p>
-            </div>
+            <h3 className="text-sm font-medium tracking-tight text-ink">Invalid YAML files</h3>
             <span className="ui-badge">{invalidFiles.length}</span>
           </div>
 

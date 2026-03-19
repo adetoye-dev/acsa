@@ -31,16 +31,11 @@ export function RecentWorkflowsPanel({
   items
 }: RecentWorkflowsPanelProps) {
   return (
-    <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-[20px] border border-black/10 bg-[rgba(255,255,255,0.7)] shadow-[0_1px_0_rgba(16,20,20,0.02)]">
-      <div className="flex items-center justify-between gap-4 border-b border-black/10 px-5 py-4">
-        <div>
-          <h2 className="text-[15px] font-medium tracking-tight text-ink">
-            Continue where you left off
-          </h2>
-          <p className="mt-1 text-sm leading-6 text-slate">
-            Return to the workflows that were opened most recently.
-          </p>
-        </div>
+    <section className="grid min-h-0 grid-rows-[56px_minmax(0,1fr)] rounded-[20px] border border-black/10 bg-[rgba(255,255,255,0.7)] shadow-[0_1px_0_rgba(16,20,20,0.02)]">
+      <div className="flex items-center justify-between gap-4 border-b border-black/10 px-5">
+        <h2 className="text-[15px] font-medium tracking-tight text-ink">
+          Continue where you left off
+        </h2>
         <span className="ui-badge">{items.length}</span>
       </div>
 

@@ -19,9 +19,7 @@ import Link from "next/link";
 import {
   workflowLastRunLabel,
   workflowLifecycleLabel,
-  workflowLifecycleTone,
-  workflowReadinessLabel,
-  workflowReadinessTone
+  workflowReadinessLabel
 } from "../../lib/product-status";
 import type { WorkflowSummary } from "../../lib/workflow-editor";
 
@@ -39,6 +37,9 @@ export function WorkflowListRow({
   workflow
 }: WorkflowListRowProps) {
   const isRecent = density === "recent";
+  const metadata = isRecent
+    ? buildRecentMetadata(workflow, recentOpenedAt ?? null)
+    : buildCompactMetadata(workflow);
 
   return (
     <Link
@@ -47,59 +48,57 @@ export function WorkflowListRow({
       }`}
       href={href}
     >
-      <div className="flex min-w-0 flex-col gap-2">
-        <div className="flex min-w-0 items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div
-              className={`truncate font-medium tracking-tight text-ink ${
-                isRecent ? "text-[15px]" : "text-[14px]"
-              }`}
-            >
-              {workflow.name}
-            </div>
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-slate/55">
-              <span className="truncate">{workflow.file_name}</span>
-              {recentOpenedAt ? (
-                <>
-                  <span className="text-slate/35">•</span>
-                  <span>Opened {formatRelativeOpenedAt(recentOpenedAt)}</span>
-                </>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="flex shrink-0 flex-wrap items-center gap-1.5">
-            <span
-              className={`rounded-[8px] px-2 py-1 text-[10.5px] font-semibold uppercase tracking-[0.14em] ${workflowLifecycleTone(workflow.workflow_state)}`}
-            >
-              {workflowLifecycleLabel(workflow.workflow_state)}
-            </span>
-            <span
-              className={`rounded-[8px] px-2 py-1 text-[10.5px] font-semibold uppercase tracking-[0.14em] ${workflowReadinessTone(workflow.workflow_state)}`}
-            >
-              {workflowReadinessLabel(workflow.workflow_state)}
-            </span>
-          </div>
+      <div className="min-w-0">
+        <div
+          className={`truncate font-medium tracking-tight text-ink ${
+            isRecent ? "text-[15px]" : "text-[14px]"
+          }`}
+        >
+          {workflow.name}
         </div>
-
-        <div className="flex flex-wrap items-center gap-2 text-[12px] leading-5 text-slate">
-          <span>{workflow.step_count} steps</span>
-          <span className="text-slate/35">•</span>
-          <span>{workflow.trigger_type} trigger</span>
-          {workflow.has_connector_steps ? (
-            <>
-              <span className="text-slate/35">•</span>
-              <span>connector-backed</span>
-            </>
-          ) : null}
-        </div>
-
-        <div className="text-[11.5px] leading-5 text-slate/70">
-          {workflowLastRunLabel(workflow.workflow_state)}
+        <div
+          className={`mt-1 text-slate/72 ${
+            isRecent
+              ? "text-[12.5px] leading-6"
+              : "text-[12px] leading-[1.45rem]"
+          }`}
+        >
+          {metadata.join(" · ")}
         </div>
       </div>
     </Link>
   );
+}
+
+function buildRecentMetadata(
+  workflow: WorkflowSummary,
+  recentOpenedAt: number | null
+) {
+  const parts = [
+    recentOpenedAt ? `Opened ${formatRelativeOpenedAt(recentOpenedAt)}` : null,
+    workflowLifecycleLabel(workflow.workflow_state),
+    workflowReadinessLabel(workflow.workflow_state)
+  ];
+  const lastRun = workflowLastRunLabel(workflow.workflow_state);
+  if (lastRun !== "Never run") {
+    parts.push(lastRun);
+  }
+  return parts.filter((part): part is string => Boolean(part));
+}
+
+function buildCompactMetadata(workflow: WorkflowSummary) {
+  const parts = [
+    workflow.file_name,
+    workflowLifecycleLabel(workflow.workflow_state),
+    workflowReadinessLabel(workflow.workflow_state),
+    `${workflow.step_count} step${workflow.step_count === 1 ? "" : "s"}`,
+    `${workflow.trigger_type} trigger`
+  ];
+  const lastRun = workflowLastRunLabel(workflow.workflow_state);
+  if (lastRun !== "Never run") {
+    parts.push(lastRun);
+  }
+  return parts;
 }
 
 function formatRelativeOpenedAt(openedAt: number): string {

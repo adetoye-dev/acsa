@@ -109,26 +109,21 @@ export function WorkflowsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="border-b border-black/10 bg-[rgba(255,255,255,0.78)] px-5 py-4">
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="section-title mt-2">Workflows</h1>
-            <div className="mt-1 text-sm leading-6 text-slate">
-              Launchpad for recent work and curated starters.
-            </div>
-          </div>
+      <header className="flex h-[60px] items-center justify-between gap-4 border-b border-black/10 bg-[rgba(255,255,255,0.78)] px-5">
+        <div className="min-w-0">
+          <h1 className="section-title mt-2">Workflows</h1>
+        </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="ui-badge">{continueWhereLeftOff.length} recent</span>
-            <span className="ui-badge">{inventory.workflows.length} workflows</span>
-            <span className="ui-badge">{readyStarterCount} starters ready</span>
-            <button className="ui-button" onClick={() => void refreshLaunchpadData()} type="button">
-              Refresh
-            </button>
-            <Link className="ui-button ui-button-primary" href="/workflows/new">
-              New workflow
-            </Link>
-          </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="ui-badge">{continueWhereLeftOff.length} recent</span>
+          <span className="ui-badge">{inventory.workflows.length} workflows</span>
+          <span className="ui-badge">{readyStarterCount} starters ready</span>
+          <button className="ui-button" onClick={() => void refreshLaunchpadData()} type="button">
+            Refresh
+          </button>
+          <Link className="ui-button ui-button-primary" href="/workflows/new">
+            New workflow
+          </Link>
         </div>
       </header>
 
