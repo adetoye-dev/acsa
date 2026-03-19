@@ -30,10 +30,13 @@ import {
   type LogPageResponse,
   type RunDetailResponse,
   type RunPageResponse,
+  runProvenanceLabel,
+  runProvenanceTone,
   type StepRunView
 } from "../lib/observability";
 import {
   type CanvasNode,
+  parseWorkflowYaml,
   type StepTypeEntry,
   TRIGGER_NODE_ID,
   type WorkflowDefinition,
@@ -281,10 +284,16 @@ export function ExecutionsPage() {
                         </div>
                         <RunStatusBadge status={run.status} />
                       </div>
-                      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate">
+                  <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate">
                         <span>{formatTimestamp(run.started_at)}</span>
                         <span className="text-slate/35">•</span>
                         <span>{formatDuration(run.duration_seconds)}</span>
+                        <span className="text-slate/35">•</span>
+                        <span
+                          className={`rounded-[8px] px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${runProvenanceTone(run)}`}
+                        >
+                          {runProvenanceLabel(run)}
+                        </span>
                       </div>
                       {run.error_message ? (
                         <div className="mt-1 line-clamp-2 text-xs leading-5 text-[#c65a72]">
@@ -325,6 +334,25 @@ export function ExecutionsPage() {
                 <span className="ui-badge">{formatDuration(selectedRun.duration_seconds)}</span>
                 <span className="ui-badge">{latestStepRuns.length} steps</span>
                 <span className="ui-badge">{runDetail?.human_tasks.length ?? 0} tasks</span>
+                <span
+                  className={`rounded-[8px] px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${runProvenanceTone(selectedRun)}`}
+                >
+                  {runProvenanceLabel(selectedRun)}
+                </span>
+                {selectedRun.workflow_revision ? (
+                  <span className="ui-badge font-mono">{selectedRun.workflow_revision}</span>
+                ) : null}
+              </div>
+            ) : null}
+
+            {selectedRun ? (
+              <div className="mt-3 text-sm leading-6 text-slate">
+                {selectedRun.run_provenance.message}
+                {selectedRun.run_provenance.fallback_message ? (
+                  <span className="block text-[#a76825]">
+                    {selectedRun.run_provenance.fallback_message}
+                  </span>
+                ) : null}
               </div>
             ) : null}
 
@@ -489,15 +517,38 @@ function buildExecutionCanvas(
   }
 
   try {
-    if (runDetail.editor_snapshot?.trim()) {
+    if (runDetail.workflow_snapshot?.trim()) {
       const workflowId = slugifyIdentifier(runDetail.run.workflow_name);
       const fallbackSummary = buildSnapshotSummary(workflowId, runDetail.run.workflow_name);
-      const response: WorkflowDocumentResponse = {
-        id: workflowId,
-        summary: fallbackSummary,
-        yaml: runDetail.editor_snapshot
-      };
-      const document = workflowDocumentFromResponse(response);
+      const storedPositions = extractEditorSnapshotPositions(runDetail.editor_snapshot);
+      let document: ReturnType<typeof workflowDocumentFromResponse>;
+
+      try {
+        const response: WorkflowDocumentResponse = {
+          id: workflowId,
+          summary: fallbackSummary,
+          yaml: runDetail.workflow_snapshot
+        };
+        document = workflowDocumentFromResponse(response, undefined, storedPositions);
+      } catch {
+        const workflow = JSON.parse(runDetail.workflow_snapshot) as WorkflowDefinition;
+        const nextCanvas = workflowToCanvas(
+          workflow,
+          {
+            ...(workflow.ui?.positions ?? {}),
+            ...(storedPositions ?? {})
+          },
+          stepCatalog
+        );
+        return {
+          canvas: {
+            edges: nextCanvas.edges,
+            nodes: decorateNodesForExecution(nextCanvas.nodes, workflow.name, runDetail)
+          },
+          error: null
+        };
+      }
+
       const nextCanvas = workflowToCanvas(document.workflow, document.positions, stepCatalog);
       return {
         canvas: {
@@ -505,22 +556,6 @@ function buildExecutionCanvas(
           nodes: decorateNodesForExecution(
             nextCanvas.nodes,
             document.workflow.name,
-            runDetail
-          )
-        },
-        error: null
-      };
-    }
-
-    if (runDetail.workflow_snapshot?.trim()) {
-      const workflow = JSON.parse(runDetail.workflow_snapshot) as WorkflowDefinition;
-      const nextCanvas = workflowToCanvas(workflow, workflow.ui?.positions ?? {}, stepCatalog);
-      return {
-        canvas: {
-          edges: nextCanvas.edges,
-          nodes: decorateNodesForExecution(
-            nextCanvas.nodes,
-            workflow.name,
             runDetail
           )
         },
@@ -567,6 +602,20 @@ function buildSnapshotSummary(
       }
     }
   };
+}
+
+function extractEditorSnapshotPositions(
+  editorSnapshot?: string | null
+): Record<string, { x: number; y: number }> | undefined {
+  if (!editorSnapshot?.trim()) {
+    return undefined;
+  }
+
+  try {
+    return parseWorkflowYaml(editorSnapshot).ui?.positions;
+  } catch {
+    return undefined;
+  }
 }
 
 function RunStatusBadge({ status }: { status: string }) {

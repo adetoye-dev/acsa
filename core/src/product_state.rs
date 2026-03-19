@@ -158,6 +158,8 @@ pub enum RunProvenanceMode {
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct RunProvenance {
+    pub fallback_message: Option<String>,
+    pub message: String,
     pub mode: RunProvenanceMode,
 }
 
@@ -290,12 +292,20 @@ pub fn invalid_connector_state(connector: &InvalidConnector) -> ConnectorState {
 }
 
 pub fn run_provenance(run: &RunRecord) -> RunProvenance {
-    RunProvenance {
-        mode: if run.editor_snapshot.is_some() {
-            RunProvenanceMode::Exact
-        } else {
-            RunProvenanceMode::Fallback
-        },
+    if run.editor_snapshot.is_some() {
+        RunProvenance {
+            fallback_message: None,
+            message: "Rendered with historical editor snapshot.".to_string(),
+            mode: RunProvenanceMode::Exact,
+        }
+    } else {
+        RunProvenance {
+            fallback_message: Some(
+                "Historical editor layout is unavailable for this run.".to_string(),
+            ),
+            message: "Rendered from executed YAML snapshot.".to_string(),
+            mode: RunProvenanceMode::Fallback,
+        }
     }
 }
 

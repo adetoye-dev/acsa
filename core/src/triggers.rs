@@ -2523,8 +2523,8 @@ mod tests {
         parse_workflow_document_state, read_workflow_document, rename_workflow_document,
         request_has_engine_token, run_view, save_workflow_document, serialize_workflow_yaml,
         slugify_workflow_name, validate_secret_value, workflow_file_path, workflow_inventory,
-        CreateWorkflowRequest, RenameWorkflowRequest, TriggerError, WebhookSignatureAuth,
-        WebhookWorkflow,
+        CreateWorkflowRequest, RenameWorkflowRequest, RunDetailResponse, RunPageResponse,
+        TriggerError, WebhookSignatureAuth, WebhookWorkflow,
     };
     use crate::{
         engine::compile_workflow,
@@ -3839,6 +3839,108 @@ steps:
         let fallback_payload = serde_json::to_value(fallback).expect("run view should serialize");
         assert_eq!(fallback_payload["run_provenance"]["mode"], json!("fallback"));
         assert_eq!(fallback_payload["workflow_revision"], json!("sha256:fallback"));
+    }
+
+    #[test]
+    fn run_detail_exposes_provenance_metadata() {
+        let run = RunRecord {
+            id: "run-fallback".to_string(),
+            workflow_name: "customer-intake".to_string(),
+            status: "success".to_string(),
+            started_at: 20,
+            finished_at: Some(24),
+            error_message: None,
+            workflow_revision: Some("sha256:fallback".to_string()),
+            editor_snapshot: None,
+            workflow_snapshot: Some(
+                r#"
+version: v1
+name: customer intake
+trigger:
+  type: manual
+steps: []
+"#
+                .to_string(),
+            ),
+            initial_payload: None,
+            state_json: None,
+        };
+
+        let payload = serde_json::to_value(RunDetailResponse {
+            editor_snapshot: run.editor_snapshot.clone(),
+            human_tasks: Vec::new(),
+            run: run_view(run.clone()),
+            step_runs: Vec::new(),
+            workflow_snapshot: run.workflow_snapshot.clone(),
+        })
+        .expect("run detail should serialize");
+
+        assert_eq!(payload["run"]["workflow_revision"], json!("sha256:fallback"));
+        assert_eq!(payload["run"]["run_provenance"]["mode"], json!("fallback"));
+        assert_eq!(
+            payload["run"]["run_provenance"]["message"],
+            json!("Rendered from executed YAML snapshot.")
+        );
+        assert_eq!(
+            payload["run"]["run_provenance"]["fallback_message"],
+            json!("Historical editor layout is unavailable for this run.")
+        );
+    }
+
+    #[test]
+    fn run_list_exposes_provenance_metadata() {
+        let exact = run_view(RunRecord {
+            id: "run-exact".to_string(),
+            workflow_name: "customer-intake".to_string(),
+            status: "success".to_string(),
+            started_at: 10,
+            finished_at: Some(14),
+            error_message: None,
+            workflow_revision: Some("sha256:exact".to_string()),
+            editor_snapshot: Some("ui:\n  positions: {}\n".to_string()),
+            workflow_snapshot: Some(
+                "version: v1\nname: customer intake\ntrigger:\n  type: manual\nsteps: []\n"
+                    .to_string(),
+            ),
+            initial_payload: None,
+            state_json: None,
+        });
+        let fallback = run_view(RunRecord {
+            id: "run-fallback".to_string(),
+            workflow_name: "customer-intake".to_string(),
+            status: "failed".to_string(),
+            started_at: 20,
+            finished_at: Some(24),
+            error_message: Some("boom".to_string()),
+            workflow_revision: Some("sha256:fallback".to_string()),
+            editor_snapshot: None,
+            workflow_snapshot: Some(
+                "version: v1\nname: customer intake\ntrigger:\n  type: manual\nsteps: []\n"
+                    .to_string(),
+            ),
+            initial_payload: None,
+            state_json: None,
+        });
+
+        let payload = serde_json::to_value(RunPageResponse {
+            page: 1,
+            page_size: 2,
+            runs: vec![exact, fallback],
+            total: 2,
+        })
+        .expect("run page should serialize");
+
+        assert_eq!(payload["runs"][0]["run_provenance"]["mode"], json!("exact"));
+        assert_eq!(
+            payload["runs"][0]["run_provenance"]["fallback_message"],
+            serde_json::Value::Null
+        );
+        assert_eq!(payload["runs"][1]["workflow_revision"], json!("sha256:fallback"));
+        assert_eq!(payload["runs"][1]["run_provenance"]["mode"], json!("fallback"));
+        assert_eq!(
+            payload["runs"][1]["run_provenance"]["fallback_message"],
+            json!("Historical editor layout is unavailable for this run.")
+        );
     }
 
     #[test]
