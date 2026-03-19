@@ -32,7 +32,6 @@ export type StarterReadinessState =
   | "loading"
   | "blocked_by_connector"
   | "blocked_by_setup"
-  | "blocked_by_runtime"
   | "ready";
 
 export type StarterReadinessItem = {
@@ -66,8 +65,7 @@ const BUILT_IN_STEP_TYPES = new Set([
 type StarterStepAvailabilityState =
   | "ready"
   | "blocked_by_connector"
-  | "blocked_by_setup"
-  | "blocked_by_runtime";
+  | "blocked_by_setup";
 
 export function buildContinueWhereLeftOff(
   workflows: WorkflowSummary[],
@@ -186,7 +184,7 @@ function resolveStarterReadinessState(
     return "blocked_by_setup";
   }
 
-  return "blocked_by_runtime";
+  return "blocked_by_setup";
 }
 
 function resolveStarterStepAvailability(
@@ -217,7 +215,7 @@ function resolveStarterStepAvailability(
     return "blocked_by_setup";
   }
 
-  return "blocked_by_runtime";
+  return "blocked_by_setup";
 }
 
 function isBuiltInStepType(stepType: string): boolean {
