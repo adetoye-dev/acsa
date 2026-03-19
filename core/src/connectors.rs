@@ -91,6 +91,7 @@ pub struct DiscoveredConnector {
 pub struct InvalidConnector {
     pub connector_dir: PathBuf,
     pub error: String,
+    pub attempted_type_id: Option<String>,
     pub manifest_path: Option<PathBuf>,
 }
 
@@ -186,6 +187,7 @@ pub fn inspect_connectors(connectors_dir: &Path) -> Result<ConnectorInspection, 
                 invalid.push(InvalidConnector {
                     connector_dir: connectors_dir.to_path_buf(),
                     error: format!("failed to read connector directory entry: {error}"),
+                    attempted_type_id: None,
                     manifest_path: None,
                 });
             }
@@ -201,6 +203,7 @@ pub fn inspect_connectors(connectors_dir: &Path) -> Result<ConnectorInspection, 
                 invalid.push(InvalidConnector {
                     connector_dir: entry_path,
                     error: error.to_string(),
+                    attempted_type_id: None,
                     manifest_path: None,
                 });
                 continue;
@@ -214,12 +217,26 @@ pub fn inspect_connectors(connectors_dir: &Path) -> Result<ConnectorInspection, 
             continue;
         }
 
-        let manifest = match load_manifest(&manifest_path) {
+        let raw_manifest = match fs::read_to_string(&manifest_path) {
+            Ok(raw_manifest) => raw_manifest,
+            Err(error) => {
+                invalid.push(InvalidConnector {
+                    connector_dir: canonical_dir,
+                    error: error.to_string(),
+                    attempted_type_id: None,
+                    manifest_path: Some(manifest_path),
+                });
+                continue;
+            }
+        };
+
+        let manifest = match load_manifest_from_str(&raw_manifest) {
             Ok(manifest) => manifest,
             Err(error) => {
                 invalid.push(InvalidConnector {
                     connector_dir: canonical_dir,
                     error: error.to_string(),
+                    attempted_type_id: attempted_type_id_from_raw_manifest(&raw_manifest),
                     manifest_path: Some(manifest_path),
                 });
                 continue;
@@ -230,6 +247,7 @@ pub fn inspect_connectors(connectors_dir: &Path) -> Result<ConnectorInspection, 
             invalid.push(InvalidConnector {
                 connector_dir: canonical_dir,
                 error: error.to_string(),
+                attempted_type_id: Some(manifest.type_id.clone()),
                 manifest_path: Some(manifest_path),
             });
             continue;
@@ -247,8 +265,67 @@ pub fn inspect_connectors(connectors_dir: &Path) -> Result<ConnectorInspection, 
 
 pub fn load_manifest(path: &Path) -> Result<ConnectorManifest, ConnectorError> {
     let raw = fs::read_to_string(path)?;
-    let manifest = serde_json::from_str::<ConnectorManifest>(&raw)?;
+    load_manifest_from_str(&raw)
+}
+
+fn load_manifest_from_str(raw: &str) -> Result<ConnectorManifest, ConnectorError> {
+    let manifest = serde_json::from_str::<ConnectorManifest>(raw)?;
     Ok(manifest)
+}
+
+fn attempted_type_id_from_raw_manifest(raw: &str) -> Option<String> {
+    extract_json_string_field(raw, "type")
+}
+
+fn extract_json_string_field(raw: &str, key: &str) -> Option<String> {
+    let key_pattern = format!(r#""{key}""#);
+    let mut search_start = 0;
+
+    while let Some(relative_key_start) = raw[search_start..].find(&key_pattern) {
+        let key_start = search_start + relative_key_start;
+        let after_key = &raw[key_start + key_pattern.len()..];
+        let colon_offset = after_key.find(':')?;
+        let after_colon = &after_key[colon_offset + 1..];
+        let value_offset = after_colon
+            .char_indices()
+            .find(|(_, character)| !character.is_whitespace())
+            .map(|(index, _)| index)?;
+        let value = &after_colon[value_offset..];
+
+        if !value.starts_with('"') {
+            search_start = key_start + key_pattern.len();
+            continue;
+        }
+
+        let end_quote = find_json_string_end(value)?;
+        let literal = &value[..=end_quote];
+        if let Ok(parsed) = serde_json::from_str::<String>(literal) {
+            return Some(parsed);
+        }
+
+        search_start = key_start + key_pattern.len();
+    }
+
+    None
+}
+
+fn find_json_string_end(value: &str) -> Option<usize> {
+    let mut escaped = false;
+
+    for (index, character) in value.char_indices().skip(1) {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        match character {
+            '\\' => escaped = true,
+            '"' => return Some(index),
+            _ => {}
+        }
+    }
+
+    None
 }
 
 pub async fn run_manifest_path(
@@ -1082,6 +1159,71 @@ mod tests {
         assert_eq!(inspection.connectors.len(), 1);
         assert_eq!(inspection.connectors[0].manifest.type_id, "valid_connector");
         assert_eq!(inspection.invalid.len(), 1);
+
+        fs::remove_dir_all(temp_dir).expect("temp connector directory should be removed");
+    }
+
+    #[test]
+    fn inspection_records_attempted_type_id_for_invalid_manifests() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("acsa-inspect-type-id-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).expect("temp connector directory should be created");
+
+        let invalid_dir = temp_dir.join("broken");
+        fs::create_dir_all(&invalid_dir).expect("invalid connector dir should be created");
+        fs::write(
+            invalid_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&ConnectorManifest {
+                allowed_env: Vec::new(),
+                allowed_hosts: Vec::new(),
+                allowed_paths: BTreeMap::new(),
+                entry: "python3 main.py".to_string(),
+                enable_wasi: false,
+                inputs: vec!["message".to_string()],
+                limits: ConnectorLimits { memory: None, timeout: None },
+                name: "broken".to_string(),
+                outputs: vec!["echoed".to_string()],
+                runtime: ConnectorRuntime::Process,
+                type_id: "broken_connector".to_string(),
+                version: Some("0.1.0".to_string()),
+            })
+            .expect("invalid manifest should serialize"),
+        )
+        .expect("invalid manifest should be written");
+
+        let inspection =
+            inspect_connectors(&temp_dir).expect("connector inspection should succeed");
+        assert_eq!(inspection.invalid.len(), 1);
+        assert_eq!(inspection.invalid[0].attempted_type_id.as_deref(), Some("broken_connector"));
+
+        fs::remove_dir_all(temp_dir).expect("temp connector directory should be removed");
+    }
+
+    #[test]
+    fn inspection_recovers_attempted_type_id_from_malformed_manifest_json() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("acsa-inspect-parse-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&temp_dir).expect("temp connector directory should be created");
+
+        let invalid_dir = temp_dir.join("broken");
+        fs::create_dir_all(&invalid_dir).expect("invalid connector dir should be created");
+        fs::write(
+            invalid_dir.join("manifest.json"),
+            r#"{
+  "entry": "main.py",
+  "inputs": ["message"],
+  "name": "broken",
+  "outputs": ["echoed"],
+  "runtime": "process",
+  "type": "broken_connector",
+}"#,
+        )
+        .expect("malformed manifest should be written");
+
+        let inspection =
+            inspect_connectors(&temp_dir).expect("connector inspection should succeed");
+        assert_eq!(inspection.invalid.len(), 1);
+        assert_eq!(inspection.invalid[0].attempted_type_id.as_deref(), Some("broken_connector"));
 
         fs::remove_dir_all(temp_dir).expect("temp connector directory should be removed");
     }

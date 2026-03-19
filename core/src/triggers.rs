@@ -56,16 +56,17 @@ use crate::{
         WorkflowEngine, WorkflowPlan,
     },
     models::{Trigger, Workflow},
-    product_state::{
-        connector_state, invalid_connector_state, run_provenance, workflow_connector_requirements,
-        workflow_state_from_facts, latest_workflow_telemetry, ConnectorState as ProductConnectorState,
-        ConnectorTrustState as ProductConnectorTrustState, RunProvenance as ProductRunProvenance,
-        WorkflowConnectorRequirementsState, WorkflowFacts, WorkflowLifecycleState,
-        WorkflowState as ProductWorkflowState, WorkflowTelemetryFacts, WorkflowValidationState,
-    },
     observability::{
         current_timestamp, metrics_text, payload_visibility_enabled, record_log,
         redact_json_string, redact_text, LogLevel, RetentionPolicy,
+    },
+    product_state::{
+        connector_state, invalid_connector_state, latest_workflow_telemetry, run_provenance,
+        workflow_connector_requirements, workflow_state_from_facts,
+        ConnectorState as ProductConnectorState, ConnectorTrustState as ProductConnectorTrustState,
+        RunProvenance as ProductRunProvenance, WorkflowConnectorRequirementsState, WorkflowFacts,
+        WorkflowLifecycleState, WorkflowState as ProductWorkflowState, WorkflowTelemetryFacts,
+        WorkflowValidationState,
     },
     storage::{
         LogQuery, LogRecord, PaginatedResponse, RunQuery, RunRecord, RunStore, StepRunRecord,
@@ -725,7 +726,8 @@ async fn test_connector(
 }
 
 async fn list_workflows(State(state): State<AppState>) -> impl IntoResponse {
-    match workflow_inventory(state.engine.store(), &state.connectors_dir, &state.workflows_dir).await
+    match workflow_inventory(state.engine.store(), &state.connectors_dir, &state.workflows_dir)
+        .await
     {
         Ok(inventory) => (StatusCode::OK, Json(json!(inventory))),
         Err(error) => {
@@ -841,7 +843,14 @@ async fn create_workflow(
     State(state): State<AppState>,
     Json(request): Json<CreateWorkflowRequest>,
 ) -> axum::response::Response {
-    match create_workflow_document(state.engine.store(), &state.connectors_dir, &state.workflows_dir, request).await {
+    match create_workflow_document(
+        state.engine.store(),
+        &state.connectors_dir,
+        &state.workflows_dir,
+        request,
+    )
+    .await
+    {
         Ok(document) => (StatusCode::CREATED, Json(json!(document))).into_response(),
         Err(error) => workflow_error_response(error),
     }
@@ -1170,11 +1179,19 @@ async fn workflow_summary_context(
     workflows_dir: &Path,
 ) -> Result<WorkflowSummaryContext, TriggerError> {
     let connector_inspection = inspect_connectors(connectors_dir)?;
-    let connector_states = connector_inspection
+    let mut connector_states = connector_inspection
         .connectors
         .iter()
         .map(|connector| (connector.manifest.type_id.clone(), connector_state(connector)))
         .collect::<HashMap<_, _>>();
+    for connector in &connector_inspection.invalid {
+        let Some(type_id) = connector.attempted_type_id.as_ref() else {
+            continue;
+        };
+        connector_states
+            .entry(type_id.clone())
+            .or_insert_with(|| invalid_connector_state(connector));
+    }
 
     let mut workflow_name_counts = BTreeMap::<String, usize>::new();
     for entry in fs::read_dir(workflows_dir)?.collect::<Result<Vec<_>, _>>()? {
@@ -1693,7 +1710,11 @@ async fn read_workflow_document(
 
     Ok(WorkflowDocumentResponse {
         id: workflow_id.to_string(),
-        summary: workflow_summary_from_context(workflow_id.to_string(), &document_state.workflow, &context),
+        summary: workflow_summary_from_context(
+            workflow_id.to_string(),
+            &document_state.workflow,
+            &context,
+        ),
         yaml: serialize_workflow_yaml(
             &document_state.workflow,
             &document_state.ui_positions,
@@ -2132,10 +2153,7 @@ async fn write_workflow_file(
             message: format!("workflow path {} has an invalid file name", workflow_path.display()),
         })?
         .to_string();
-    Ok(WorkflowWriteResult {
-        id: workflow_id,
-        yaml,
-    })
+    Ok(WorkflowWriteResult { id: workflow_id, yaml })
 }
 
 fn human_task_view(task: crate::storage::HumanTaskRecord) -> HumanTaskView {
@@ -2420,11 +2438,11 @@ mod tests {
 
     use super::{
         authenticate_webhook, build_workflow_summary, compute_signature, connector_view,
-        cron_schedule, create_workflow_document, invalid_connector_view, parse_workflow_document_state,
-        read_workflow_document, rename_workflow_document, request_has_engine_token, run_view,
-        serialize_workflow_yaml, slugify_workflow_name, validate_secret_value, workflow_file_path,
-        workflow_inventory, CreateWorkflowRequest, RenameWorkflowRequest, TriggerError,
-        WebhookSignatureAuth, WebhookWorkflow,
+        create_workflow_document, cron_schedule, invalid_connector_view,
+        parse_workflow_document_state, read_workflow_document, rename_workflow_document,
+        request_has_engine_token, run_view, serialize_workflow_yaml, slugify_workflow_name,
+        validate_secret_value, workflow_file_path, workflow_inventory, CreateWorkflowRequest,
+        RenameWorkflowRequest, TriggerError, WebhookSignatureAuth, WebhookWorkflow,
     };
     use crate::{
         engine::compile_workflow,
@@ -2649,28 +2667,17 @@ ui:
         assert_eq!(payload["name"], json!("customer intake"));
         assert_eq!(payload["file_name"], json!("customer-intake.yaml"));
         assert_eq!(payload["workflow_state"]["lifecycle"], json!("saved"));
+        assert_eq!(payload["workflow_state"]["readiness"]["validation_state"], json!("valid"));
         assert_eq!(
-            payload["workflow_state"]["readiness"]["validation_state"],
-            json!("valid")
-        );
-        assert_eq!(
-            payload["workflow_state"]["readiness"]["connector_requirements"][
-                "required_step_types"
-            ],
+            payload["workflow_state"]["readiness"]["connector_requirements"]["required_step_types"],
             json!(["report-summary"])
         );
         assert_eq!(
             payload["workflow_state"]["readiness"]["readiness_state"],
             json!("blocked_by_connector")
         );
-        assert_eq!(
-            payload["workflow_state"]["telemetry"]["last_run_status"],
-            json!("success")
-        );
-        assert_eq!(
-            payload["workflow_state"]["telemetry"]["last_run_at"],
-            json!(1_710_850_000)
-        );
+        assert_eq!(payload["workflow_state"]["telemetry"]["last_run_status"], json!("success"));
+        assert_eq!(payload["workflow_state"]["telemetry"]["last_run_at"], json!(1_710_850_000));
     }
 
     #[test]
@@ -2734,10 +2741,7 @@ steps:
                 )
                 .await
                 .expect("run should start");
-            store
-                .complete_run_success(&run.id)
-                .await
-                .expect("run should complete");
+            store.complete_run_success(&run.id).await.expect("run should complete");
 
             workflow_inventory(&store, &connectors_dir, &workflows_dir)
                 .await
@@ -2798,22 +2802,15 @@ steps:
                 )
                 .await
                 .expect("run should start");
-            store
-                .complete_run_success(&run.id)
-                .await
-                .expect("run should complete");
+            store.complete_run_success(&run.id).await.expect("run should complete");
 
             let inventory = workflow_inventory(&store, &connectors_dir, &workflows_dir)
                 .await
                 .expect("inventory should build");
-            let document = read_workflow_document(
-                &store,
-                &connectors_dir,
-                &workflows_dir,
-                "customer-intake",
-            )
-            .await
-            .expect("workflow document should read");
+            let document =
+                read_workflow_document(&store, &connectors_dir, &workflows_dir, "customer-intake")
+                    .await
+                    .expect("workflow document should read");
             (inventory, document)
         });
 
@@ -2885,6 +2882,75 @@ steps:
         assert_eq!(
             payload["summary"]["workflow_state"]["readiness"]["readiness_state"],
             json!("blocked_by_connector")
+        );
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn workflow_inventory_classifies_invalid_installed_connector_as_setup_blocked() {
+        let temp_dir = write_temp_directory("workflow-inventory-invalid-connector");
+        let workflows_dir = temp_dir.join("workflows");
+        let connectors_dir = temp_dir.join("connectors");
+        std::fs::create_dir_all(&workflows_dir).expect("workflows dir should be created");
+        std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
+
+        std::fs::write(
+            workflows_dir.join("customer-intake.yaml"),
+            r#"
+version: v1
+name: customer intake
+trigger:
+  type: manual
+steps:
+  - id: start
+    type: constant
+    params:
+      value: true
+    next: []
+  - id: summarize
+    type: broken-summary
+    params: {}
+    next: []
+"#,
+        )
+        .expect("workflow should be written");
+
+        let connector_dir = connectors_dir.join("broken-summary");
+        std::fs::create_dir_all(&connector_dir).expect("connector dir should be created");
+        std::fs::write(
+            connector_dir.join("manifest.json"),
+            r#"{
+  "entry": "main.py",
+  "inputs": ["payload"],
+  "name": "Broken Summary",
+  "outputs": ["summary"],
+  "runtime": "process",
+  "type": "broken-summary"
+}"#,
+        )
+        .expect("invalid manifest should be written");
+        std::fs::write(connector_dir.join("main.py"), "print('{}')").expect("script should exist");
+
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let inventory = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            workflow_inventory(&store, &connectors_dir, &workflows_dir)
+                .await
+                .expect("inventory should build")
+        });
+
+        let summary = inventory
+            .workflows
+            .into_iter()
+            .find(|workflow| workflow.id == "customer-intake")
+            .expect("workflow summary should exist");
+        let payload = serde_json::to_value(summary).expect("summary should serialize");
+
+        assert_eq!(
+            payload["workflow_state"]["readiness"]["readiness_state"],
+            json!("blocked_by_setup")
         );
 
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
@@ -2977,10 +3043,7 @@ steps:
                 )
                 .await
                 .expect("run should start");
-            store
-                .complete_run_success(&run.id)
-                .await
-                .expect("run should complete");
+            store.complete_run_success(&run.id).await.expect("run should complete");
 
             workflow_inventory(&store, &connectors_dir, &workflows_dir)
                 .await
@@ -2995,8 +3058,14 @@ steps:
         assert_eq!(summaries.len(), 2);
         for summary in summaries {
             let payload = serde_json::to_value(summary).expect("summary should serialize");
-            assert_eq!(payload["workflow_state"]["telemetry"]["last_run_status"], serde_json::Value::Null);
-            assert_eq!(payload["workflow_state"]["telemetry"]["last_run_at"], serde_json::Value::Null);
+            assert_eq!(
+                payload["workflow_state"]["telemetry"]["last_run_status"],
+                serde_json::Value::Null
+            );
+            assert_eq!(
+                payload["workflow_state"]["telemetry"]["last_run_at"],
+                serde_json::Value::Null
+            );
         }
 
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
@@ -3031,9 +3100,7 @@ steps:
             },
         ]);
 
-        let latest = telemetry
-            .get("customer intake")
-            .expect("latest telemetry should exist");
+        let latest = telemetry.get("customer intake").expect("latest telemetry should exist");
         assert_eq!(latest.last_run_status, "success");
         assert_eq!(latest.last_run_at, 21);
     }
@@ -3067,9 +3134,7 @@ steps:
             },
         ]);
 
-        let latest = telemetry
-            .get("customer intake")
-            .expect("latest telemetry should exist");
+        let latest = telemetry.get("customer intake").expect("latest telemetry should exist");
         assert_eq!(latest.last_run_status, "success");
         assert_eq!(latest.last_run_at, 44);
     }
@@ -3251,14 +3316,8 @@ steps:
         let view = connector_view(&connector);
         let payload = serde_json::to_value(view).expect("connector view should serialize");
 
-        assert_eq!(
-            payload["connector_state"]["install_validity"]["valid"],
-            json!(true)
-        );
-        assert_eq!(
-            payload["connector_state"]["install_validity"]["state"],
-            json!("valid")
-        );
+        assert_eq!(payload["connector_state"]["install_validity"]["valid"], json!(true));
+        assert_eq!(payload["connector_state"]["install_validity"]["state"], json!("valid"));
         assert_eq!(
             payload["connector_state"]["install_validity"]["manifest_path"],
             json!(std::fs::canonicalize(&manifest_path)
@@ -3266,32 +3325,23 @@ steps:
                 .display()
                 .to_string())
         );
-        assert_eq!(
-            payload["connector_state"]["runtime"]["mode"],
-            json!("process")
-        );
+        assert_eq!(payload["connector_state"]["runtime"]["mode"], json!("process"));
         assert_eq!(payload["connector_state"]["runtime"]["ready"], json!(true));
-        assert_eq!(
-            payload["connector_state"]["setup"]["required_setup"],
-            json!([])
-        );
-        assert_eq!(
-            payload["connector_state"]["trust"],
-            json!("trusted")
-        );
+        assert_eq!(payload["connector_state"]["setup"]["required_setup"], json!([]));
+        assert_eq!(payload["connector_state"]["trust"], json!("trusted"));
 
         let wasm_trusted = connector_state_from_facts(ConnectorStateFacts {
-                install_validity: ConnectorInstallValidityState {
-                    connector_dir: "connectors/report-summary".to_string(),
-                    manifest_path: Some("connectors/report-summary/manifest.json".to_string()),
-                    reason: None,
-                    valid: true,
-                    state: ConnectorValidityState::Valid,
-                },
-                runtime_mode: Some(ConnectorRuntimeMode::Wasm),
-                runtime_ready: true,
-                required_setup: Vec::new(),
-            });
+            install_validity: ConnectorInstallValidityState {
+                connector_dir: "connectors/report-summary".to_string(),
+                manifest_path: Some("connectors/report-summary/manifest.json".to_string()),
+                reason: None,
+                valid: true,
+                state: ConnectorValidityState::Valid,
+            },
+            runtime_mode: Some(ConnectorRuntimeMode::Wasm),
+            runtime_ready: true,
+            required_setup: Vec::new(),
+        });
         let wasm_trusted_payload =
             serde_json::to_value(wasm_trusted).expect("connector state should serialize");
         assert_eq!(wasm_trusted_payload["trust"], json!("trusted"));
@@ -3300,6 +3350,7 @@ steps:
             connector_dir: std::fs::canonicalize(&connector_dir)
                 .expect("connector dir should canonicalize"),
             error: "manifest failed validation".to_string(),
+            attempted_type_id: None,
             manifest_path: Some(manifest_path.clone()),
         });
         let invalid_payload =
@@ -3308,22 +3359,13 @@ steps:
             invalid_payload["connector_state"]["install_validity"]["state"],
             json!("invalid")
         );
-        assert_eq!(
-            invalid_payload["connector_state"]["install_validity"]["valid"],
-            json!(false)
-        );
+        assert_eq!(invalid_payload["connector_state"]["install_validity"]["valid"], json!(false));
         assert_eq!(
             invalid_payload["connector_state"]["install_validity"]["reason"],
             json!("manifest failed validation")
         );
-        assert_eq!(
-            invalid_payload["connector_state"]["setup"]["required_setup"],
-            json!([])
-        );
-        assert_eq!(
-            invalid_payload["connector_state"]["trust"],
-            json!("setup_required")
-        );
+        assert_eq!(invalid_payload["connector_state"]["setup"]["required_setup"], json!([]));
+        assert_eq!(invalid_payload["connector_state"]["trust"], json!("setup_required"));
 
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
     }
@@ -3343,10 +3385,7 @@ steps:
             state_json: None,
         });
         let exact_payload = serde_json::to_value(exact).expect("run view should serialize");
-        assert_eq!(
-            exact_payload["run_provenance"]["mode"],
-            json!("exact")
-        );
+        assert_eq!(exact_payload["run_provenance"]["mode"], json!("exact"));
 
         let fallback = run_view(RunRecord {
             id: "run-fallback".to_string(),
@@ -3361,10 +3400,7 @@ steps:
             state_json: None,
         });
         let fallback_payload = serde_json::to_value(fallback).expect("run view should serialize");
-        assert_eq!(
-            fallback_payload["run_provenance"]["mode"],
-            json!("fallback")
-        );
+        assert_eq!(fallback_payload["run_provenance"]["mode"], json!("fallback"));
     }
 
     #[test]
@@ -3553,10 +3589,7 @@ steps:
                 )
                 .await
                 .expect("run should start");
-            store
-                .complete_run_success(&run.id)
-                .await
-                .expect("run should complete");
+            store.complete_run_success(&run.id).await.expect("run should complete");
 
             rename_workflow_document(
                 &store,
