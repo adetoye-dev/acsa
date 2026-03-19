@@ -2957,6 +2957,92 @@ steps:
     }
 
     #[test]
+    fn workflow_inventory_prefers_valid_connector_over_invalid_same_type() {
+        let temp_dir = write_temp_directory("workflow-inventory-valid-and-invalid-connector");
+        let workflows_dir = temp_dir.join("workflows");
+        let connectors_dir = temp_dir.join("connectors");
+        std::fs::create_dir_all(&workflows_dir).expect("workflows dir should be created");
+        std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
+
+        std::fs::write(
+            workflows_dir.join("customer-intake.yaml"),
+            r#"
+version: v1
+name: customer intake
+trigger:
+  type: manual
+steps:
+  - id: start
+    type: constant
+    params:
+      value: true
+    next: []
+  - id: summarize
+    type: report-summary
+    params: {}
+    next: []
+"#,
+        )
+        .expect("workflow should be written");
+
+        let valid_connector_dir = connectors_dir.join("report-summary-valid");
+        std::fs::create_dir_all(&valid_connector_dir).expect("valid connector dir should exist");
+        std::fs::write(
+            valid_connector_dir.join("manifest.json"),
+            r#"{
+  "entry": "python3 main.py",
+  "inputs": ["payload"],
+  "limits": { "timeout": 1000 },
+  "name": "Report Summary",
+  "outputs": ["summary"],
+  "runtime": "process",
+  "type": "report-summary"
+}"#,
+        )
+        .expect("valid manifest should be written");
+        std::fs::write(valid_connector_dir.join("main.py"), "print('{}')")
+            .expect("valid script should exist");
+
+        let invalid_connector_dir = connectors_dir.join("report-summary-invalid");
+        std::fs::create_dir_all(&invalid_connector_dir)
+            .expect("invalid connector dir should exist");
+        std::fs::write(
+            invalid_connector_dir.join("manifest.json"),
+            r#"{
+  "entry": "python3 main.py",
+  "inputs": ["payload"],
+  "name": "Broken Report Summary",
+  "outputs": ["summary"],
+  "runtime": "process",
+  "type": "report-summary"
+}"#,
+        )
+        .expect("invalid manifest should be written");
+        std::fs::write(invalid_connector_dir.join("main.py"), "print('{}')")
+            .expect("invalid script should exist");
+
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let inventory = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            workflow_inventory(&store, &connectors_dir, &workflows_dir)
+                .await
+                .expect("inventory should build")
+        });
+
+        let summary = inventory
+            .workflows
+            .into_iter()
+            .find(|workflow| workflow.id == "customer-intake")
+            .expect("workflow summary should exist");
+        let payload = serde_json::to_value(summary).expect("summary should serialize");
+
+        assert_eq!(payload["workflow_state"]["readiness"]["readiness_state"], json!("ready"));
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
     fn create_workflow_succeeds_when_post_write_summary_enrichment_fails() {
         let temp_dir = write_temp_directory("workflow-create-summary-fallback");
         let workflows_dir = temp_dir.join("workflows");
