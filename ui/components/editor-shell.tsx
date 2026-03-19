@@ -294,7 +294,7 @@ export function EditorShell({
       return;
     }
 
-    if (activeWorkflow.localDraft && activeWorkflow.id !== starterId) {
+    if (activeWorkflow.localDraft && !starterId) {
       return;
     }
 
