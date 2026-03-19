@@ -20,193 +20,147 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { fetchEngineJson } from "../lib/engine-client";
+import type { ConnectorInventoryResponse } from "../lib/connectors";
+import { readRecentWorkflows } from "../lib/recent-workflows";
 import {
-  workflowLifecycleLabel,
-  workflowLifecycleTone,
-  workflowLastRunLabel,
-  workflowReadinessLabel,
-  workflowReadinessTone
-} from "../lib/product-status";
+  buildCompactInventory,
+  buildContinueWhereLeftOff,
+  resolveLaunchpadEmptyState,
+  resolveStarterReadiness,
+  type ContinueWhereLeftOffItem,
+  type StarterReadinessItem
+} from "../lib/workflows-home";
+import { WORKFLOW_STARTERS } from "../lib/workflow-starters";
 import type { InvalidWorkflowFile, WorkflowSummary } from "../lib/workflow-editor";
+import {
+  AllWorkflowsPanel,
+  type AllWorkflowsPanelEmptyState
+} from "./workflows-home/all-workflows-panel";
+import {
+  RecentWorkflowsPanel
+} from "./workflows-home/recent-workflows-panel";
+import { StarterTemplatesRail } from "./workflows-home/starter-templates-rail";
 
 type WorkflowInventoryResponse = {
   invalid_files: InvalidWorkflowFile[];
   workflows: WorkflowSummary[];
 };
 
+type LaunchpadState = AllWorkflowsPanelEmptyState;
+
 export function WorkflowsPage() {
   const [inventory, setInventory] = useState<WorkflowInventoryResponse>({
     invalid_files: [],
     workflows: []
   });
+  const [connectorInventory, setConnectorInventory] =
+    useState<ConnectorInventoryResponse | null>(null);
+  const [recentEntries, setRecentEntries] = useState<
+    ReturnType<typeof readRecentWorkflows>
+  >([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
 
-  const filteredWorkflows = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) {
-      return inventory.workflows;
-    }
-
-    return inventory.workflows.filter((workflow) =>
-      [workflow.name, workflow.file_name, workflow.trigger_type]
-        .join(" ")
-        .toLowerCase()
-        .includes(query)
-    );
-  }, [inventory.workflows, search]);
-
-  useEffect(function loadWorkflowInventoryOnMountEffect() {
-    void refreshInventory();
+  useEffect(function loadLaunchpadDataOnMountEffect() {
+    void refreshLaunchpadData();
   }, []);
 
-  async function refreshInventory() {
+  const continueWhereLeftOff = useMemo<ContinueWhereLeftOffItem[]>(
+    () => buildContinueWhereLeftOff(inventory.workflows, recentEntries),
+    [inventory.workflows, recentEntries]
+  );
+
+  const compactWorkflows = useMemo(
+    () => buildCompactInventory(inventory.workflows, continueWhereLeftOff.map((item) => item.workflow.id)),
+    [continueWhereLeftOff, inventory.workflows]
+  );
+
+  const starterReadiness = useMemo<StarterReadinessItem[]>(
+    () => resolveStarterReadiness(WORKFLOW_STARTERS, connectorInventory),
+    [connectorInventory]
+  );
+
+  const launchpadState = useMemo<LaunchpadState>(
+    () => resolveLaunchpadEmptyState(inventory.workflows, recentEntries),
+    [inventory.workflows, recentEntries]
+  );
+
+  const readyStarterCount = starterReadiness.filter((starter) => starter.ready).length;
+
+  async function refreshLaunchpadData() {
     setIsLoading(true);
     try {
-      const response = await fetchEngineJson<WorkflowInventoryResponse>("/api/workflows");
-      setInventory(response);
+      setRecentEntries(readRecentWorkflows(window.localStorage));
+      const [workflowResponse, connectorResponse] = await Promise.all([
+        fetchEngineJson<WorkflowInventoryResponse>("/api/workflows"),
+        fetchEngineJson<ConnectorInventoryResponse>("/api/connectors")
+      ]);
+      setInventory(workflowResponse);
+      setConnectorInventory(connectorResponse);
       setError(null);
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Failed to load workflows");
+      setError(
+        nextError instanceof Error ? nextError.message : "Failed to load workflows"
+      );
     } finally {
       setIsLoading(false);
     }
   }
 
   return (
-    <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">
-      <header className="flex h-[60px] items-center justify-between gap-4 border-b border-black/10 bg-[rgba(255,255,255,0.72)] px-6">
-        <h1 className="section-title mt-2">Workflows</h1>
-        <div className="flex items-center gap-2">
-          <button className="ui-button" onClick={() => void refreshInventory()} type="button">
-            Refresh
-          </button>
-          <Link className="ui-button ui-button-primary" href="/workflows/new">
-            New workflow
-          </Link>
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="border-b border-black/10 bg-[rgba(255,255,255,0.78)] px-5 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="section-title mt-2">Workflows</h1>
+            <div className="mt-1 text-sm leading-6 text-slate">
+              Launchpad for recent work and curated starters.
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="ui-badge">{continueWhereLeftOff.length} recent</span>
+            <span className="ui-badge">{inventory.workflows.length} workflows</span>
+            <span className="ui-badge">{readyStarterCount} starters ready</span>
+            <button className="ui-button" onClick={() => void refreshLaunchpadData()} type="button">
+              Refresh
+            </button>
+            <Link className="ui-button ui-button-primary" href="/workflows/new">
+              New workflow
+            </Link>
+          </div>
         </div>
       </header>
 
-      <div className="grid min-h-0 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] border-r border-black/10 bg-[rgba(255,255,255,0.42)]">
-          <div className="flex flex-wrap items-center gap-3 border-b border-black/10 px-6 py-4">
-            <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62">
-              <span className="ui-badge">{inventory.workflows.length} workflows</span>
-              <span className="ui-badge">{inventory.invalid_files.length} invalid</span>
-              <span className="ui-badge">
-                {inventory.workflows.filter((workflow) => workflow.has_connector_steps).length} connector
-              </span>
-            </div>
+      <div className="min-h-0 flex-1 overflow-hidden px-4 py-4">
+        {error ? (
+          <div className="mb-4 rounded-[14px] border border-rose-400/18 bg-rose-50 px-4 py-3 text-sm leading-6 text-[#c65a72]">
+            {error}
+          </div>
+        ) : null}
 
-            <div className="ml-auto w-full max-w-sm">
-              <input
-                className="ui-input"
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search workflows"
-                type="text"
-                value={search}
-              />
-            </div>
+        <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_372px]">
+          <div className="grid min-h-0 gap-4 grid-rows-[minmax(0,1fr)_minmax(0,1fr)]">
+            <RecentWorkflowsPanel
+              emptyState={launchpadState}
+              isLoading={isLoading}
+              items={continueWhereLeftOff}
+            />
+            <AllWorkflowsPanel
+              emptyState={launchpadState}
+              invalidFiles={inventory.invalid_files}
+              isLoading={isLoading}
+              workflows={compactWorkflows}
+            />
           </div>
 
-          <div className="sleek-scroll min-h-0 overflow-y-auto px-4 py-4">
-            {error ? (
-              <div className="rounded-[12px] border border-rose-400/20 bg-rose-50 px-4 py-3 text-sm leading-6 text-[#c65a72]">
-                {error}
-              </div>
-            ) : isLoading ? (
-              <DirectoryEmptyState>Loading workflow inventory…</DirectoryEmptyState>
-            ) : filteredWorkflows.length ? (
-              <div className="space-y-2.5">
-                {filteredWorkflows.map((workflow) => (
-                  <WorkflowRow key={workflow.id} workflow={workflow} />
-                ))}
-              </div>
-            ) : (
-              <DirectoryEmptyState>
-                {inventory.workflows.length
-                  ? "No workflows matched the current search."
-                  : "No workflows have been created yet. Start a new one from this page."}
-              </DirectoryEmptyState>
-            )}
-          </div>
-        </section>
-
-        <aside className="grid min-h-0 grid-rows-[60px_minmax(0,1fr)] bg-[rgba(255,255,255,0.6)]">
-          <div className="flex h-[60px] items-center border-b border-black/10 px-5">
-            <div className="text-sm font-medium tracking-tight text-ink">Validation</div>
-          </div>
-
-          <div className="sleek-scroll min-h-0 overflow-y-auto px-5 py-5">
-            {inventory.invalid_files.length ? (
-              <div className="space-y-3">
-                {inventory.invalid_files.map((file) => (
-                  <div
-                    key={file.id}
-                    className="rounded-[12px] border border-rose-400/18 bg-white px-4 py-3"
-                  >
-                    <div className="text-sm font-semibold text-ink">{file.file_name}</div>
-                    <div className="mt-2 text-sm leading-6 text-[#c65a72]">{file.error}</div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="rounded-[12px] border border-black/10 bg-white px-4 py-4">
-                <div className="text-sm font-semibold text-ink">No invalid workflow files</div>
-              </div>
-            )}
-          </div>
-        </aside>
-      </div>
-    </div>
-  );
-}
-
-function WorkflowRow({ workflow }: { workflow: WorkflowSummary }) {
-  return (
-    <Link
-      className="flex items-start justify-between gap-4 rounded-[12px] border border-black/10 bg-white px-4 py-3 transition hover:border-black/15 hover:bg-white/92"
-      href={`/workflows/${workflow.id}`}
-    >
-      <div className="min-w-0">
-        <div className="truncate text-sm font-medium text-ink">{workflow.name}</div>
-        <div className="mt-1 text-xs text-slate">{workflow.file_name}</div>
-        <div className="mt-2 flex flex-wrap items-center gap-2">
-          <span
-            className={`rounded-[8px] px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${workflowLifecycleTone(workflow.workflow_state)}`}
-          >
-            {workflowLifecycleLabel(workflow.workflow_state)}
-          </span>
-          <span
-            className={`rounded-[8px] px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${workflowReadinessTone(workflow.workflow_state)}`}
-          >
-            {workflowReadinessLabel(workflow.workflow_state)}
-          </span>
-          <span className="text-[11px] text-slate/70">
-            {workflowLastRunLabel(workflow.workflow_state)}
-          </span>
-        </div>
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-slate/62">
-          <span>{workflow.step_count} steps</span>
-          <span className="text-slate/35">•</span>
-          <span>{workflow.trigger_type}</span>
-          {workflow.has_connector_steps ? (
-            <>
-              <span className="text-slate/35">•</span>
-              <span>connector</span>
-            </>
-          ) : null}
+          <StarterTemplatesRail
+            emptyState={launchpadState}
+            items={starterReadiness}
+            primary={launchpadState === "empty"}
+          />
         </div>
       </div>
-    </Link>
-  );
-}
-
-function DirectoryEmptyState({ children }: { children: string }) {
-  return (
-    <div className="flex min-h-[240px] items-center justify-center rounded-[12px] border border-dashed border-black/10 bg-white/70 px-6 text-center text-sm leading-6 text-slate">
-      {children}
     </div>
   );
 }
