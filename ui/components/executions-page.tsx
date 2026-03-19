@@ -19,6 +19,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type { Edge } from "@xyflow/react";
+import YAML from "yaml";
 
 import { decorateNodesForExecution } from "./execution-debugger";
 import { ExecutionInspector } from "./execution-inspector";
@@ -36,7 +37,6 @@ import {
 } from "../lib/observability";
 import {
   type CanvasNode,
-  parseWorkflowYaml,
   type StepTypeEntry,
   TRIGGER_NODE_ID,
   type WorkflowDefinition,
@@ -612,7 +612,41 @@ function extractEditorSnapshotPositions(
   }
 
   try {
-    return parseWorkflowYaml(editorSnapshot).ui?.positions;
+    const document = YAML.parse(editorSnapshot) as
+      | { ui?: { positions?: Record<string, unknown> } }
+      | null;
+    const positionsValue = document?.ui?.positions;
+
+    if (
+      !positionsValue ||
+      typeof positionsValue !== "object" ||
+      Array.isArray(positionsValue)
+    ) {
+      return undefined;
+    }
+
+    const positions = Object.fromEntries(
+      Object.entries(positionsValue).flatMap(([nodeId, positionValue]) => {
+        if (
+          !positionValue ||
+          typeof positionValue !== "object" ||
+          Array.isArray(positionValue)
+        ) {
+          return [];
+        }
+
+        const x = (positionValue as { x?: unknown }).x;
+        const y = (positionValue as { y?: unknown }).y;
+
+        if (typeof x !== "number" || typeof y !== "number") {
+          return [];
+        }
+
+        return [[nodeId, { x, y }] as const];
+      })
+    );
+
+    return positions;
   } catch {
     return undefined;
   }
