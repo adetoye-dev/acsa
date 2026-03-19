@@ -86,28 +86,24 @@ export function ProductShell({
         }`}
       >
       <aside
-        className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] border-r border-black/10 bg-[rgba(255,255,255,0.82)]"
+        className="grid min-h-0 grid-rows-[60px_minmax(0,1fr)_auto] border-r border-black/10 bg-[rgba(255,255,255,0.82)]"
       >
-        <div className={`border-b border-black/10 ${collapsed ? "px-3 py-3" : "px-4 py-4"}`}>
+        <div className={`flex h-[60px] items-center border-b border-black/10 ${collapsed ? "px-3" : "px-4"}`}>
           <Link
-            className={`flex items-center ${collapsed ? "justify-center" : "gap-3"}`}
+            className={`flex flex-1 items-center ${collapsed ? "justify-center" : "gap-2"}`}
             href="/workflows"
             title="Workflows"
           >
-            <div
-              className={`flex items-center justify-center rounded-[10px] bg-[#171b20] text-white ${
-                collapsed
-                  ? "h-10 w-10 text-[13px] font-semibold tracking-[-0.02em]"
-                  : "px-3 py-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.18em]"
-              }`}
-            >
-              {collapsed ? "A" : "Acsa"}
-            </div>
+            <img
+              alt="Acsa"
+              className={`${collapsed ? "h-12 w-12" : "h-11 w-11"} shrink-0`}
+              src="/acsa-mark.svg"
+            />
             {!collapsed ? (
               <div>
-                <div className="text-sm font-medium tracking-tight text-ink">Studio</div>
-                <div className="text-[11px] uppercase tracking-[0.16em] text-slate/55">
-                  Local-first automation
+                <div className="text-[13px] font-medium tracking-tight text-ink">ACSA</div>
+                <div className="text-[10px] uppercase leading-none tracking-[0.16em] text-slate/55">
+                  automation studio
                 </div>
               </div>
             ) : null}
@@ -139,13 +135,7 @@ export function ProductShell({
           </div>
         </nav>
 
-        <div className={`border-t border-black/10 ${collapsed ? "px-3 py-3" : "px-4 py-4"}`}>
-          {!collapsed ? (
-            <div className="text-[11px] uppercase tracking-[0.16em] text-slate/52">
-              Keep the editor for editing. Use these pages for inventory, history, and operations.
-            </div>
-          ) : null}
-        </div>
+        <div className="border-t border-black/10" />
       </aside>
 
       <main className="min-h-0 overflow-hidden">{children}</main>
@@ -153,8 +143,8 @@ export function ProductShell({
 
       <button
         aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        className={`absolute top-12 z-30 flex h-6 w-6 -translate-x-1/2 items-center justify-center rounded-md border border-black/10 bg-white text-slate shadow-[0_1px_2px_rgba(16,20,20,0.06)] transition hover:border-black/15 hover:bg-[#fbfbfc] hover:text-ink ${
-          collapsed ? "left-[84px] top-[3.2rem]" : "left-[236px] top-[4.5rem]"
+        className={`absolute top-12 z-30 hidden xl:flex h-6 w-6 -translate-x-1/2 items-center justify-center rounded-md border border-black/10 bg-white text-slate shadow-[0_1px_2px_rgba(16,20,20,0.06)] transition hover:border-black/15 hover:bg-[#fbfbfc] hover:text-ink ${
+          collapsed ? "left-[84px] top-12" : "left-[236px] top-12"
         }`}
         onClick={() => setCollapsed((current) => !current)}
         type="button"

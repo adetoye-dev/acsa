@@ -69,25 +69,15 @@ export function WorkflowsPage() {
 
   return (
     <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">
-      <header className="border-b border-black/10 bg-[rgba(255,255,255,0.72)] px-6 py-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="section-kicker">Workflows</p>
-            <h1 className="section-title mt-2">Workflow inventory</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate">
-              Open workflows in the studio, scan invalid YAML quickly, and keep workflow management
-              out of the editor canvas.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button className="ui-button" onClick={() => void refreshInventory()} type="button">
-              Refresh
-            </button>
-            <Link className="ui-button ui-button-primary" href="/workflows/new">
-              New workflow
-            </Link>
-          </div>
+      <header className="flex h-[60px] items-center justify-between gap-4 border-b border-black/10 bg-[rgba(255,255,255,0.72)] px-6">
+        <h1 className="section-title mt-2">Workflows</h1>
+        <div className="flex items-center gap-2">
+          <button className="ui-button" onClick={() => void refreshInventory()} type="button">
+            Refresh
+          </button>
+          <Link className="ui-button ui-button-primary" href="/workflows/new">
+            New workflow
+          </Link>
         </div>
       </header>
 
@@ -136,14 +126,9 @@ export function WorkflowsPage() {
           </div>
         </section>
 
-        <aside className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] bg-[rgba(255,255,255,0.6)]">
-          <div className="border-b border-black/10 px-5 py-4">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/60">
-              Health
-            </div>
-            <div className="mt-1 text-sm font-semibold text-ink">
-              Inventory and validation
-            </div>
+        <aside className="grid min-h-0 grid-rows-[60px_minmax(0,1fr)] bg-[rgba(255,255,255,0.6)]">
+          <div className="flex h-[60px] items-center border-b border-black/10 px-5">
+            <div className="text-sm font-medium tracking-tight text-ink">Validation</div>
           </div>
 
           <div className="sleek-scroll min-h-0 overflow-y-auto px-5 py-5">
@@ -162,9 +147,6 @@ export function WorkflowsPage() {
             ) : (
               <div className="rounded-[12px] border border-black/10 bg-white px-4 py-4">
                 <div className="text-sm font-semibold text-ink">No invalid workflow files</div>
-                <p className="mt-2 text-sm leading-6 text-slate">
-                  The inventory is clean. Open a workflow to keep editing in the studio.
-                </p>
               </div>
             )}
           </div>
@@ -195,8 +177,6 @@ function WorkflowRow({ workflow }: { workflow: WorkflowSummary }) {
           ) : null}
         </div>
       </div>
-
-      <span className="shrink-0 text-sm font-medium text-[#6f63ff]">Open</span>
     </Link>
   );
 }

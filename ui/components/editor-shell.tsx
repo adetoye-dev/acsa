@@ -1359,7 +1359,7 @@ export function EditorShell({
     <main className={`${embeddedInProductShell ? "h-full" : "h-[100dvh]"} overflow-hidden bg-[#f7f7f8] text-ink`}>
       <div
         className={`grid h-full ${
-          globalError ? "grid-rows-[52px_auto_minmax(0,1fr)]" : "grid-rows-[52px_minmax(0,1fr)]"
+          globalError ? "grid-rows-[60px_auto_minmax(0,1fr)]" : "grid-rows-[60px_minmax(0,1fr)]"
         }`}
       >
         <TopBar
@@ -1946,12 +1946,8 @@ function WorkflowYamlCard({
         fullHeight ? "grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]" : ""
       }`}
     >
-      <div className="flex items-center justify-between gap-2 border-b border-black/10 px-3 py-2">
-        <ShellBadge label="canonical" tone="info-dark" />
-        <ShellBadge label="monospace" tone="neutral-dark" />
-      </div>
       {fullHeight ? (
-        <div className="sleek-scroll min-h-0 overflow-auto border-t border-black/10 bg-[#f6f7fa]">
+        <div className="sleek-scroll min-h-0 overflow-auto bg-[#f6f7fa]">
           <pre className="min-h-full whitespace-pre-wrap break-words px-4 py-4 font-mono text-[12px] leading-6 text-[#273140]">
             {workflowYaml || "# No workflow selected"}
           </pre>

@@ -21,7 +21,12 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Acsa",
-  description: "Local-first workflow automation for developers."
+  description: "Local-first workflow automation for developers.",
+  icons: {
+    icon: "/acsa-favicon.svg",
+    shortcut: "/acsa-favicon.svg",
+    apple: "/acsa-favicon.svg"
+  }
 };
 
 type RootLayoutProps = Readonly<{

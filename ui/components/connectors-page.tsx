@@ -21,16 +21,11 @@ import { ConnectorManager } from "./connector-manager";
 export function ConnectorsPage() {
   return (
     <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">
-      <header className="border-b border-black/10 bg-[rgba(255,255,255,0.72)] px-6 py-5">
-        <p className="section-kicker">Connectors</p>
+      <header className="flex h-[60px] items-center border-b border-black/10 bg-[rgba(255,255,255,0.72)] px-6">
         <h1 className="section-title mt-2">Connector inventory</h1>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-slate">
-          Manage local process and WASM connectors, scaffold new runtimes, and test manifests
-          outside the workflow editor.
-        </p>
       </header>
 
-      <div className="min-h-0 overflow-hidden px-6 py-6">
+      <div className="sleek-scroll min-h-0 overflow-y-auto px-6 py-6">
         <ConnectorManager onCatalogInvalidated={() => {}} />
       </div>
     </div>

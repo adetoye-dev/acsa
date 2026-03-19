@@ -211,21 +211,11 @@ export function ExecutionsPage() {
 
   return (
     <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">
-      <header className="border-b border-black/10 bg-[rgba(255,255,255,0.72)] px-6 py-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="section-kicker">Executions</p>
-            <h1 className="section-title mt-2">Run history</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate">
-              Review workflow runs outside the editor, inspect step payloads, and debug failures
-              without pulling the canvas into history mode.
-            </p>
-          </div>
-
-          <button className="ui-button" onClick={() => void refreshRunInventory(selectedRunId)} type="button">
-            {isRefreshingRuns ? "Refreshing..." : "Refresh"}
-          </button>
-        </div>
+      <header className="flex h-[60px] items-center justify-between gap-4 border-b border-black/10 bg-[rgba(255,255,255,0.72)] px-6">
+        <h1 className="section-title mt-2">Run history</h1>
+        <button className="ui-button" onClick={() => void refreshRunInventory(selectedRunId)} type="button">
+          {isRefreshingRuns ? "Refreshing..." : "Refresh"}
+        </button>
       </header>
 
       <div className="grid min-h-0 xl:grid-cols-[308px_minmax(0,1fr)_360px]">

@@ -53,13 +53,18 @@ export function TopBar({
 }: TopBarProps) {
   return (
     <section className="overflow-hidden border-b border-black/10 bg-[rgba(255,255,255,0.84)]">
-      <div className="flex h-[52px] items-center justify-between gap-4 px-4">
+      <div className="flex h-[60px] items-center justify-between gap-4 px-4">
         {showBrand ? (
           <div className="flex min-w-0 items-center gap-3">
-            <div className="rounded-[7px] bg-[#171b20] px-3 py-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-white">
-              Acsa
-            </div>
+            <img
+              alt="Acsa"
+              className="h-10 w-10 shrink-0"
+              src="/acsa-mark.svg"
+            />
             <div className="min-w-0">
+              <div className="text-sm font-medium tracking-tight text-ink">
+                Acsa
+              </div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate/55">
                 Workflow studio
               </div>
@@ -68,17 +73,17 @@ export function TopBar({
         ) : null}
 
         <div
-          className={`hidden min-w-0 flex-1 items-center lg:flex ${
+          className={`hidden min-w-0 flex-1 gap-4 items-center lg:flex ${
             showBrand ? "justify-center" : "justify-start"
           }`}
         >
-          <div className="flex min-w-0 items-center gap-4">
             <div className="inline-flex min-w-0 max-w-[300px] items-center gap-2 rounded-[9px] bg-black/[0.04] px-3 py-1.5">
               <FileIcon />
               <div className="min-w-0 truncate text-sm font-medium text-ink">
                 {activeWorkflowFile}
               </div>
             </div>
+          <div className="flex min-w-0 items-center flex-1 justify-center">
             <div
               aria-label="Workspace view"
               className="flex items-center gap-0.5 rounded-[9px] bg-black/[0.06] p-0.5"
@@ -109,7 +114,7 @@ export function TopBar({
           />
           {hasUnsavedChanges || isSaving ? (
             <TopBarActionButton
-              disabled={saveDisabled}
+              disabled={saveDisabled || isSaving}
               icon={<SaveIcon />}
               label={isSaving ? "Saving..." : "Save"}
               onClick={onSave}
@@ -122,7 +127,7 @@ export function TopBar({
             </div>
           )}
           <TopBarActionButton
-            disabled={runDisabled}
+            disabled={runDisabled || isRunning}
             icon={<RunIcon />}
             label={isRunning ? "Running..." : "Run"}
             onClick={onRun}
