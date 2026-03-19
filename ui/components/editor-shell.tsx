@@ -78,7 +78,12 @@ import {
   summarizeWorkflow,
   withStepUpdated
 } from "../lib/workflow-editor";
-import { WORKFLOW_STARTERS } from "../lib/workflow-starters";
+import {
+  readRecentWorkflows,
+  recordRecentWorkflowOpen,
+  writeRecentWorkflows
+} from "../lib/recent-workflows";
+import { WORKFLOW_STARTERS, type WorkflowStarter } from "../lib/workflow-starters";
 import {
   useWorkflowActions,
   useWorkflowStore,
@@ -181,6 +186,7 @@ export function EditorShell({
   const [liveRunId, setLiveRunId] = useState<string | null>(null);
   const [liveRunDetail, setLiveRunDetail] = useState<RunDetailResponse | null>(null);
   const hasCreatedDraftOnBoot = useRef(false);
+  const lastRecordedRecentWorkflowKey = useRef<string | null>(null);
   const canvas = useMemo(
     () =>
       activeWorkflow
@@ -282,6 +288,48 @@ export function EditorShell({
       setLiveRunDetail(null);
     }
   }, [activeWorkflow, liveRunDetail]);
+
+  useEffect(function recordRecentWorkflowOpenEffect() {
+    if (!activeWorkflow) {
+      return;
+    }
+
+    if (activeWorkflow.localDraft && activeWorkflow.id !== starterId) {
+      return;
+    }
+
+    const nextKey = [
+      activeWorkflow.id,
+      activeWorkflow.summary.file_name,
+      activeWorkflow.summary.name,
+      activeWorkflow.localDraft ? "draft" : "saved"
+    ].join("|");
+    if (lastRecordedRecentWorkflowKey.current === nextKey) {
+      return;
+    }
+
+    try {
+      const currentRecents = readRecentWorkflows(window.localStorage);
+      writeRecentWorkflows(
+        window.localStorage,
+        recordRecentWorkflowOpen(currentRecents, {
+          fileName: activeWorkflow.summary.file_name,
+          name: activeWorkflow.summary.name,
+          openedAt: Date.now(),
+          workflowId: activeWorkflow.id
+        })
+      );
+      lastRecordedRecentWorkflowKey.current = nextKey;
+    } catch {
+      // Ignore storage failures; recents are best-effort only.
+    }
+  }, [
+    activeWorkflow?.id,
+    activeWorkflow?.localDraft,
+    activeWorkflow?.summary.file_name,
+    activeWorkflow?.summary.name,
+    starterId
+  ]);
 
   useEffect(function pollLiveRunDetailEffect() {
     if (!liveRunId || !isRunning) {
@@ -456,7 +504,7 @@ export function EditorShell({
   }: {
     documents: Record<string, WorkflowDocument>;
     persistedWorkflows: WorkflowSummary[];
-    starter: (typeof WORKFLOW_STARTERS)[number] | null;
+    starter: WorkflowStarter | null;
     starterYaml: string | null;
   }) {
     if (!starter || !starterYaml) {
