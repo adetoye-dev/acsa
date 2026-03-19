@@ -1379,17 +1379,18 @@ fn map_human_task_row(row: sqlx::sqlite::SqliteRow) -> Result<HumanTaskRecord, S
 mod tests {
     use super::*;
 
-    async fn insert_run(
-        store: &RunStore,
-        id: &str,
-        workflow_name: &str,
-        started_at: i64,
+    struct InsertRunArgs<'a> {
+        editor_snapshot: Option<&'a str>,
         finished_at: Option<i64>,
-        workflow_revision: Option<&str>,
-        editor_snapshot: Option<&str>,
-        workflow_snapshot: Option<&str>,
-        state_json: Option<&str>,
-    ) {
+        id: &'a str,
+        started_at: i64,
+        state_json: Option<&'a str>,
+        workflow_name: &'a str,
+        workflow_revision: Option<&'a str>,
+        workflow_snapshot: Option<&'a str>,
+    }
+
+    async fn insert_run(store: &RunStore, args: InsertRunArgs<'_>) {
         sqlx::query(
             r#"
             INSERT INTO runs (
@@ -1408,17 +1409,17 @@ mod tests {
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
-        .bind(id)
-        .bind(workflow_name)
+        .bind(args.id)
+        .bind(args.workflow_name)
         .bind("success")
-        .bind(started_at)
-        .bind(finished_at)
+        .bind(args.started_at)
+        .bind(args.finished_at)
         .bind(Option::<String>::None)
-        .bind(workflow_revision)
-        .bind(editor_snapshot)
-        .bind(workflow_snapshot)
+        .bind(args.workflow_revision)
+        .bind(args.editor_snapshot)
+        .bind(args.workflow_snapshot)
         .bind(Option::<String>::None)
-        .bind(state_json)
+        .bind(args.state_json)
         .execute(store.pool())
         .await
         .expect("run should insert");
@@ -1435,40 +1436,46 @@ mod tests {
             let workflow_name = format!("background-{}", index % 8);
             insert_run(
                 &store,
-                &format!("background-run-{index}"),
-                &workflow_name,
-                1_000 + index as i64,
-                Some(1_100 + index as i64),
-                Some("sha256:background"),
-                Some("historical editor snapshot"),
-                Some("saved workflow snapshot"),
-                None,
+                InsertRunArgs {
+                    editor_snapshot: Some("historical editor snapshot"),
+                    finished_at: Some(1_100 + index as i64),
+                    id: &format!("background-run-{index}"),
+                    started_at: 1_000 + index as i64,
+                    state_json: None,
+                    workflow_name: &workflow_name,
+                    workflow_revision: Some("sha256:background"),
+                    workflow_snapshot: Some("saved workflow snapshot"),
+                },
             )
             .await;
         }
 
         insert_run(
             &store,
-            "target-plain",
-            "target workflow",
-            42,
-            Some(50),
-            Some("sha256:plain"),
-            None,
-            Some("saved workflow snapshot"),
-            None,
+            InsertRunArgs {
+                editor_snapshot: None,
+                finished_at: Some(50),
+                id: "target-plain",
+                started_at: 42,
+                state_json: None,
+                workflow_name: "target workflow",
+                workflow_revision: Some("sha256:plain"),
+                workflow_snapshot: Some("saved workflow snapshot"),
+            },
         )
         .await;
         insert_run(
             &store,
-            "target-rich",
-            "target workflow",
-            42,
-            Some(50),
-            Some("sha256:rich"),
-            Some("historical editor snapshot"),
-            Some("saved workflow snapshot"),
-            Some(r#"{ "render": "degraded" }"#),
+            InsertRunArgs {
+                editor_snapshot: Some("historical editor snapshot"),
+                finished_at: Some(50),
+                id: "target-rich",
+                started_at: 42,
+                state_json: Some(r#"{ "render": "degraded" }"#),
+                workflow_name: "target workflow",
+                workflow_revision: Some("sha256:rich"),
+                workflow_snapshot: Some("saved workflow snapshot"),
+            },
         )
         .await;
 
@@ -1492,26 +1499,30 @@ mod tests {
 
         insert_run(
             &store,
-            "run-a",
-            "target workflow",
-            42,
-            Some(42),
-            Some("sha256:a"),
-            Some("historical editor snapshot"),
-            Some("saved workflow snapshot"),
-            Some(r#"{ "render": "degraded" }"#),
+            InsertRunArgs {
+                editor_snapshot: Some("historical editor snapshot"),
+                finished_at: Some(42),
+                id: "run-a",
+                started_at: 42,
+                state_json: Some(r#"{ "render": "degraded" }"#),
+                workflow_name: "target workflow",
+                workflow_revision: Some("sha256:a"),
+                workflow_snapshot: Some("saved workflow snapshot"),
+            },
         )
         .await;
         insert_run(
             &store,
-            "run-z",
-            "target workflow",
-            42,
-            None,
-            Some("sha256:z"),
-            Some("historical editor snapshot"),
-            Some("saved workflow snapshot"),
-            Some(r#"{ "render": "degraded" }"#),
+            InsertRunArgs {
+                editor_snapshot: Some("historical editor snapshot"),
+                finished_at: None,
+                id: "run-z",
+                started_at: 42,
+                state_json: Some(r#"{ "render": "degraded" }"#),
+                workflow_name: "target workflow",
+                workflow_revision: Some("sha256:z"),
+                workflow_snapshot: Some("saved workflow snapshot"),
+            },
         )
         .await;
 

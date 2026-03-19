@@ -318,12 +318,13 @@ fn connector_trust_from_facts(facts: &ConnectorStateFacts) -> ConnectorTrustStat
         return ConnectorTrustState::Trusted;
     }
 
-    if facts.required_setup.is_empty() {
-        ConnectorTrustState::RuntimeRestricted
-    } else if matches!(facts.runtime_mode, Some(ConnectorRuntimeMode::Wasm)) {
+    if matches!(facts.runtime_mode, Some(ConnectorRuntimeMode::Wasm)) {
         ConnectorTrustState::RuntimeRestricted
     } else {
-        ConnectorTrustState::SetupRequired
+        match facts.required_setup.is_empty() {
+            true => ConnectorTrustState::RuntimeRestricted,
+            false => ConnectorTrustState::SetupRequired,
+        }
     }
 }
 

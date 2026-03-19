@@ -1140,38 +1140,24 @@ fn build_workflow_summary(
 fn workflow_summary(
     workflow_id: String,
     workflow: &Workflow,
-    lifecycle: WorkflowLifecycleState,
-    validation_state: WorkflowValidationState,
-    latest_run: Option<&WorkflowTelemetryFacts>,
-    connector_requirements_unmet: bool,
-    connector_runtime_blocked: bool,
-    connector_setup_blocked: bool,
+    facts: WorkflowFacts,
 ) -> WorkflowSummary {
-    build_workflow_summary(
-        workflow_id,
-        workflow,
-        workflow_facts(
-            workflow,
-            lifecycle,
-            validation_state,
-            latest_run,
-            connector_requirements_unmet,
-            connector_runtime_blocked,
-            connector_setup_blocked,
-        ),
-    )
+    build_workflow_summary(workflow_id, workflow, facts)
 }
 
 fn fallback_workflow_summary(workflow_id: String, workflow: &Workflow) -> WorkflowSummary {
     workflow_summary(
         workflow_id,
         workflow,
-        WorkflowLifecycleState::Saved,
-        WorkflowValidationState::Valid,
-        None,
-        false,
-        false,
-        false,
+        workflow_facts(
+            workflow,
+            WorkflowLifecycleState::Saved,
+            WorkflowValidationState::Valid,
+            None,
+            false,
+            false,
+            false,
+        ),
     )
 }
 
@@ -1221,7 +1207,8 @@ async fn workflow_summary_context(
 
     let workflow_names: Vec<String> = workflow_name_counts
         .iter()
-        .filter_map(|(workflow_name, count)| (*count == 1).then(|| workflow_name.clone()))
+        .filter(|(_, count)| **count == 1)
+        .map(|(workflow_name, _)| workflow_name.clone())
         .collect();
     let latest_runs =
         latest_workflow_telemetry(store.latest_runs_for_workflows(&workflow_names).await?);
@@ -1247,12 +1234,15 @@ fn workflow_summary_from_context(
     workflow_summary(
         workflow_id,
         workflow,
-        WorkflowLifecycleState::Saved,
-        WorkflowValidationState::Valid,
-        latest_run,
-        connector_requirements_unmet,
-        connector_runtime_blocked,
-        connector_setup_blocked,
+        workflow_facts(
+            workflow,
+            WorkflowLifecycleState::Saved,
+            WorkflowValidationState::Valid,
+            latest_run,
+            connector_requirements_unmet,
+            connector_runtime_blocked,
+            connector_setup_blocked,
+        ),
     )
 }
 
