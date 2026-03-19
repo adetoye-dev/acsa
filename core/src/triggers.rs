@@ -44,7 +44,7 @@ use serde_yaml::Value as YamlValue;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use thiserror::Error;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{
     connectors::{
@@ -56,6 +56,13 @@ use crate::{
         WorkflowEngine, WorkflowPlan,
     },
     models::{Trigger, Workflow},
+    product_state::{
+        connector_state, invalid_connector_state, run_provenance, workflow_connector_requirements,
+        workflow_state_from_facts, latest_workflow_telemetry, ConnectorState as ProductConnectorState,
+        ConnectorTrustState as ProductConnectorTrustState, RunProvenance as ProductRunProvenance,
+        WorkflowConnectorRequirementsState, WorkflowFacts, WorkflowLifecycleState,
+        WorkflowState as ProductWorkflowState, WorkflowTelemetryFacts, WorkflowValidationState,
+    },
     observability::{
         current_timestamp, metrics_text, payload_visibility_enabled, record_log,
         redact_json_string, redact_text, LogLevel, RetentionPolicy,
@@ -134,6 +141,12 @@ struct RunWorkflowRequest {
 
 #[derive(Debug, Deserialize)]
 struct SaveWorkflowRequest {
+    yaml: String,
+}
+
+#[derive(Debug)]
+struct WorkflowWriteResult {
+    id: String,
     yaml: String,
 }
 
@@ -247,6 +260,7 @@ struct ConnectorView {
     allowed_env: Vec<String>,
     allowed_hosts: Vec<String>,
     connector_dir: String,
+    connector_state: ProductConnectorState,
     entry: String,
     inputs: Vec<String>,
     manifest_path: String,
@@ -265,6 +279,7 @@ struct ConnectorView {
 #[derive(Debug, Clone, Serialize)]
 struct InvalidConnectorView {
     connector_dir: String,
+    connector_state: ProductConnectorState,
     error: String,
     id: String,
     manifest_path: Option<String>,
@@ -277,6 +292,7 @@ struct WorkflowSummary {
     has_connector_steps: bool,
     id: String,
     name: String,
+    workflow_state: ProductWorkflowState,
     step_count: usize,
     trigger_type: String,
 }
@@ -328,6 +344,7 @@ struct RunView {
     error_message: Option<String>,
     finished_at: Option<i64>,
     id: String,
+    run_provenance: ProductRunProvenance,
     started_at: i64,
     status: String,
     workflow_name: String,
@@ -708,7 +725,8 @@ async fn test_connector(
 }
 
 async fn list_workflows(State(state): State<AppState>) -> impl IntoResponse {
-    match workflow_inventory(&state.workflows_dir) {
+    match workflow_inventory(state.engine.store(), &state.connectors_dir, &state.workflows_dir).await
+    {
         Ok(inventory) => (StatusCode::OK, Json(json!(inventory))),
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
@@ -806,7 +824,14 @@ async fn get_workflow(
     State(state): State<AppState>,
     AxumPath(workflow_id): AxumPath<String>,
 ) -> axum::response::Response {
-    match read_workflow_document(&state.workflows_dir, &workflow_id) {
+    match read_workflow_document(
+        state.engine.store(),
+        &state.connectors_dir,
+        &state.workflows_dir,
+        &workflow_id,
+    )
+    .await
+    {
         Ok(document) => (StatusCode::OK, Json(json!(document))).into_response(),
         Err(error) => workflow_error_response(error),
     }
@@ -816,7 +841,7 @@ async fn create_workflow(
     State(state): State<AppState>,
     Json(request): Json<CreateWorkflowRequest>,
 ) -> axum::response::Response {
-    match create_workflow_document(&state.workflows_dir, request) {
+    match create_workflow_document(state.engine.store(), &state.connectors_dir, &state.workflows_dir, request).await {
         Ok(document) => (StatusCode::CREATED, Json(json!(document))).into_response(),
         Err(error) => workflow_error_response(error),
     }
@@ -827,7 +852,15 @@ async fn save_workflow(
     AxumPath(workflow_id): AxumPath<String>,
     Json(request): Json<SaveWorkflowRequest>,
 ) -> axum::response::Response {
-    match save_workflow_document(&state.workflows_dir, &workflow_id, &request.yaml) {
+    match save_workflow_document(
+        state.engine.store(),
+        &state.connectors_dir,
+        &state.workflows_dir,
+        &workflow_id,
+        &request.yaml,
+    )
+    .await
+    {
         Ok(document) => (StatusCode::OK, Json(json!(document))).into_response(),
         Err(error) => workflow_error_response(error),
     }
@@ -848,7 +881,15 @@ async fn duplicate_workflow(
     AxumPath(workflow_id): AxumPath<String>,
     Json(request): Json<DuplicateWorkflowRequest>,
 ) -> axum::response::Response {
-    match duplicate_workflow_document(&state.workflows_dir, &workflow_id, &request.target_id) {
+    match duplicate_workflow_document(
+        state.engine.store(),
+        &state.connectors_dir,
+        &state.workflows_dir,
+        &workflow_id,
+        &request.target_id,
+    )
+    .await
+    {
         Ok(document) => (StatusCode::CREATED, Json(json!(document))).into_response(),
         Err(error) => workflow_error_response(error),
     }
@@ -859,7 +900,15 @@ async fn rename_workflow(
     AxumPath(workflow_id): AxumPath<String>,
     Json(request): Json<RenameWorkflowRequest>,
 ) -> axum::response::Response {
-    match rename_workflow_document(&state.workflows_dir, &workflow_id, request) {
+    match rename_workflow_document(
+        state.engine.store(),
+        &state.connectors_dir,
+        &state.workflows_dir,
+        &workflow_id,
+        request,
+    )
+    .await
+    {
         Ok(document) => (StatusCode::OK, Json(json!(document))).into_response(),
         Err(error) => workflow_error_response(error),
     }
@@ -1048,7 +1097,12 @@ async fn resolve_human_task(
     }
 }
 
-fn build_workflow_summary(workflow_id: String, workflow: &Workflow) -> WorkflowSummary {
+fn build_workflow_summary(
+    workflow_id: String,
+    workflow: &Workflow,
+    facts: WorkflowFacts,
+) -> WorkflowSummary {
+    let state = workflow_state_from_facts(facts);
     WorkflowSummary {
         description: format!(
             "{} trigger, {} step{}",
@@ -1057,18 +1111,169 @@ fn build_workflow_summary(workflow_id: String, workflow: &Workflow) -> WorkflowS
             if workflow.steps.len() == 1 { "" } else { "s" }
         ),
         file_name: format!("{workflow_id}.yaml"),
-        has_connector_steps: workflow
-            .steps
-            .iter()
-            .any(|step| !is_builtin_step_type(step.r#type.as_str())),
+        has_connector_steps: !state.readiness.connector_requirements.required_step_types.is_empty(),
         id: workflow_id,
         name: workflow.name.clone(),
+        workflow_state: state.clone(),
         step_count: workflow.steps.len(),
         trigger_type: workflow.trigger.r#type.clone(),
     }
 }
 
-fn create_workflow_document(
+fn workflow_summary(
+    workflow_id: String,
+    workflow: &Workflow,
+    lifecycle: WorkflowLifecycleState,
+    validation_state: WorkflowValidationState,
+    latest_run: Option<&WorkflowTelemetryFacts>,
+    connector_requirements_unmet: bool,
+    connector_runtime_blocked: bool,
+    connector_setup_blocked: bool,
+) -> WorkflowSummary {
+    build_workflow_summary(
+        workflow_id,
+        workflow,
+        workflow_facts(
+            workflow,
+            lifecycle,
+            validation_state,
+            latest_run,
+            connector_requirements_unmet,
+            connector_runtime_blocked,
+            connector_setup_blocked,
+        ),
+    )
+}
+
+fn fallback_workflow_summary(workflow_id: String, workflow: &Workflow) -> WorkflowSummary {
+    workflow_summary(
+        workflow_id,
+        workflow,
+        WorkflowLifecycleState::Saved,
+        WorkflowValidationState::Valid,
+        None,
+        false,
+        false,
+        false,
+    )
+}
+
+struct WorkflowSummaryContext {
+    connector_states: HashMap<String, ProductConnectorState>,
+    latest_runs: HashMap<String, WorkflowTelemetryFacts>,
+    workflow_name_counts: BTreeMap<String, usize>,
+}
+
+async fn workflow_summary_context(
+    store: &RunStore,
+    connectors_dir: &Path,
+    workflows_dir: &Path,
+) -> Result<WorkflowSummaryContext, TriggerError> {
+    let connector_inspection = inspect_connectors(connectors_dir)?;
+    let connector_states = connector_inspection
+        .connectors
+        .iter()
+        .map(|connector| (connector.manifest.type_id.clone(), connector_state(connector)))
+        .collect::<HashMap<_, _>>();
+
+    let mut workflow_name_counts = BTreeMap::<String, usize>::new();
+    for entry in fs::read_dir(workflows_dir)?.collect::<Result<Vec<_>, _>>()? {
+        let path = entry.path();
+        if !matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("yaml" | "yml")
+        ) {
+            continue;
+        }
+        let Ok(yaml) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(workflow) = parse_workflow_yaml(&yaml) else {
+            continue;
+        };
+        *workflow_name_counts.entry(workflow.name).or_insert(0) += 1;
+    }
+
+    let workflow_names: Vec<String> = workflow_name_counts
+        .iter()
+        .filter_map(|(workflow_name, count)| (*count == 1).then(|| workflow_name.clone()))
+        .collect();
+    let latest_runs =
+        latest_workflow_telemetry(store.latest_runs_for_workflows(&workflow_names).await?);
+
+    Ok(WorkflowSummaryContext { connector_states, latest_runs, workflow_name_counts })
+}
+
+fn workflow_summary_from_context(
+    workflow_id: String,
+    workflow: &Workflow,
+    context: &WorkflowSummaryContext,
+) -> WorkflowSummary {
+    let connector_requirements = workflow_connector_requirements(workflow);
+    let (connector_requirements_unmet, connector_runtime_blocked, connector_setup_blocked) =
+        workflow_connector_block_facts(&connector_requirements, &context.connector_states);
+    let latest_run = if context.workflow_name_counts.get(&workflow.name).copied().unwrap_or(0) == 1
+    {
+        context.latest_runs.get(workflow.name.as_str())
+    } else {
+        None
+    };
+
+    workflow_summary(
+        workflow_id,
+        workflow,
+        WorkflowLifecycleState::Saved,
+        WorkflowValidationState::Valid,
+        latest_run,
+        connector_requirements_unmet,
+        connector_runtime_blocked,
+        connector_setup_blocked,
+    )
+}
+
+async fn workflow_summary_after_write(
+    store: &RunStore,
+    connectors_dir: &Path,
+    workflows_dir: &Path,
+    workflow_id: String,
+    workflow: &Workflow,
+) -> WorkflowSummary {
+    match workflow_summary_context(store, connectors_dir, workflows_dir).await {
+        Ok(context) => workflow_summary_from_context(workflow_id, workflow, &context),
+        Err(error) => {
+            warn!(
+                error = %error,
+                workflow_id,
+                "workflow summary enrichment failed after write; returning fallback summary"
+            );
+            fallback_workflow_summary(workflow_id, workflow)
+        }
+    }
+}
+
+fn workflow_facts(
+    workflow: &Workflow,
+    lifecycle: WorkflowLifecycleState,
+    validation_state: WorkflowValidationState,
+    latest_run: Option<&WorkflowTelemetryFacts>,
+    connector_requirements_unmet: bool,
+    connector_runtime_blocked: bool,
+    connector_setup_blocked: bool,
+) -> WorkflowFacts {
+    WorkflowFacts {
+        connector_requirements: workflow_connector_requirements(workflow),
+        connector_requirements_unmet,
+        connector_runtime_blocked,
+        connector_setup_blocked,
+        latest_run: latest_run.cloned(),
+        lifecycle,
+        validation_state,
+    }
+}
+
+async fn create_workflow_document(
+    store: &RunStore,
+    connectors_dir: &Path,
     workflows_dir: &Path,
     request: CreateWorkflowRequest,
 ) -> Result<WorkflowDocumentResponse, TriggerError> {
@@ -1082,7 +1287,19 @@ fn create_workflow_document(
         return Err(TriggerError::WorkflowAlreadyExists { workflow_id });
     }
 
-    write_workflow_file(&workflow_path, &document_state)
+    let response = write_workflow_file(&workflow_path, &document_state).await?;
+    Ok(WorkflowDocumentResponse {
+        id: response.id,
+        summary: workflow_summary_after_write(
+            store,
+            connectors_dir,
+            workflows_dir,
+            workflow_id,
+            &document_state.workflow,
+        )
+        .await,
+        yaml: response.yaml,
+    })
 }
 
 fn delete_workflow_document(workflows_dir: &Path, workflow_id: &str) -> Result<(), TriggerError> {
@@ -1094,12 +1311,15 @@ fn delete_workflow_document(workflows_dir: &Path, workflow_id: &str) -> Result<(
     Ok(())
 }
 
-fn duplicate_workflow_document(
+async fn duplicate_workflow_document(
+    store: &RunStore,
+    connectors_dir: &Path,
     workflows_dir: &Path,
     workflow_id: &str,
     target_id: &str,
 ) -> Result<WorkflowDocumentResponse, TriggerError> {
-    let source_document = read_workflow_document(workflows_dir, workflow_id)?;
+    let source_document =
+        read_workflow_document(store, connectors_dir, workflows_dir, workflow_id).await?;
     let mut document_state = parse_workflow_document_state(&source_document.yaml)?;
     document_state.workflow.name = format!("{} copy", document_state.workflow.name);
 
@@ -1108,10 +1328,24 @@ fn duplicate_workflow_document(
         return Err(TriggerError::WorkflowAlreadyExists { workflow_id: target_id.to_string() });
     }
 
-    write_workflow_file(&target_path, &document_state)
+    let response = write_workflow_file(&target_path, &document_state).await?;
+    Ok(WorkflowDocumentResponse {
+        id: response.id,
+        summary: workflow_summary_after_write(
+            store,
+            connectors_dir,
+            workflows_dir,
+            target_id.to_string(),
+            &document_state.workflow,
+        )
+        .await,
+        yaml: response.yaml,
+    })
 }
 
-fn rename_workflow_document(
+async fn rename_workflow_document(
+    store: &RunStore,
+    connectors_dir: &Path,
     workflows_dir: &Path,
     workflow_id: &str,
     request: RenameWorkflowRequest,
@@ -1126,7 +1360,8 @@ fn rename_workflow_document(
     let mut document_state = match request.yaml.as_deref() {
         Some(yaml) => parse_workflow_document_state(yaml)?,
         None => {
-            let source_document = read_workflow_document(workflows_dir, workflow_id)?;
+            let source_document =
+                read_workflow_document(store, connectors_dir, workflows_dir, workflow_id).await?;
             parse_workflow_document_state(&source_document.yaml)?
         }
     };
@@ -1142,35 +1377,24 @@ fn rename_workflow_document(
         return Err(TriggerError::WorkflowAlreadyExists { workflow_id: request.target_id });
     }
 
-    let response = write_workflow_file(&target_path, &document_state)?;
+    let response = write_workflow_file(&target_path, &document_state).await?;
+    let response_id = response.id.clone();
     if source_path != target_path {
         fs::remove_file(source_path)?;
     }
 
-    Ok(response)
-}
-
-fn is_builtin_step_type(type_name: &str) -> bool {
-    matches!(
-        type_name,
-        "approval"
-            | "classification"
-            | "condition"
-            | "constant"
-            | "database_query"
-            | "embedding"
-            | "extraction"
-            | "file_read"
-            | "file_write"
-            | "http_request"
-            | "llm_completion"
-            | "loop"
-            | "manual_input"
-            | "noop"
-            | "parallel"
-            | "retrieval"
-            | "switch"
-    )
+    Ok(WorkflowDocumentResponse {
+        id: response_id.clone(),
+        summary: workflow_summary_after_write(
+            store,
+            connectors_dir,
+            workflows_dir,
+            response_id,
+            &document_state.workflow,
+        )
+        .await,
+        yaml: response.yaml,
+    })
 }
 
 fn connector_inventory(connectors_dir: &Path) -> Result<ConnectorInventoryResponse, TriggerError> {
@@ -1366,11 +1590,11 @@ fn node_catalog(
 }
 
 fn connector_view(connector: &crate::connectors::DiscoveredConnector) -> ConnectorView {
-    let runtime = connector_runtime_name(connector.manifest.runtime).to_string();
+    let state = connector_state(connector);
     let readme_path = connector.connector_dir.join("README.md");
     let sample_input_path = connector.connector_dir.join("sample-input.json");
-    let runtime_ready =
-        connector.manifest.runtime != ConnectorRuntime::Wasm || wasm_connectors_enabled();
+    let runtime = connector_runtime_name(connector.manifest.runtime).to_string();
+    let runtime_ready = state.runtime.ready;
     let mut notes = Vec::new();
     if connector.manifest.runtime == ConnectorRuntime::Wasm && !runtime_ready {
         notes.push("Enable ACSA_ENABLE_WASM_CONNECTORS=1 to run this connector.".to_string());
@@ -1387,15 +1611,20 @@ fn connector_view(connector: &crate::connectors::DiscoveredConnector) -> Connect
     ConnectorView {
         allowed_env: connector.manifest.allowed_env.clone(),
         allowed_hosts: connector.manifest.allowed_hosts.clone(),
-        connector_dir: connector.connector_dir.display().to_string(),
+        connector_dir: state.install_validity.connector_dir.clone(),
+        connector_state: state.clone(),
         entry: connector.manifest.entry.clone(),
         inputs: connector.manifest.inputs.clone(),
-        manifest_path: connector.manifest_path.display().to_string(),
+        manifest_path: state
+            .install_validity
+            .manifest_path
+            .clone()
+            .unwrap_or_else(|| connector.manifest_path.display().to_string()),
         name: connector.manifest.name.clone(),
         notes,
         outputs: connector.manifest.outputs.clone(),
         readme_path: readme_path.exists().then(|| readme_path.display().to_string()),
-        runtime: runtime.clone(),
+        runtime,
         runtime_ready,
         runtime_status: if runtime_ready {
             "ready".to_string()
@@ -1411,8 +1640,10 @@ fn connector_view(connector: &crate::connectors::DiscoveredConnector) -> Connect
 }
 
 fn invalid_connector_view(connector: &crate::connectors::InvalidConnector) -> InvalidConnectorView {
+    let state = invalid_connector_state(connector);
     InvalidConnectorView {
-        connector_dir: connector.connector_dir.display().to_string(),
+        connector_dir: state.install_validity.connector_dir.clone(),
+        connector_state: state,
         error: connector.error.clone(),
         id: connector
             .manifest_path
@@ -1446,7 +1677,9 @@ fn parse_workflow_document_state(yaml: &str) -> Result<WorkflowDocumentState, Tr
     })
 }
 
-fn read_workflow_document(
+async fn read_workflow_document(
+    store: &RunStore,
+    connectors_dir: &Path,
     workflows_dir: &Path,
     workflow_id: &str,
 ) -> Result<WorkflowDocumentResponse, TriggerError> {
@@ -1456,10 +1689,11 @@ fn read_workflow_document(
     }
     let yaml = fs::read_to_string(&workflow_path)?;
     let document_state = parse_workflow_document_state(&yaml)?;
+    let context = workflow_summary_context(store, connectors_dir, workflows_dir).await?;
 
     Ok(WorkflowDocumentResponse {
         id: workflow_id.to_string(),
-        summary: build_workflow_summary(workflow_id.to_string(), &document_state.workflow),
+        summary: workflow_summary_from_context(workflow_id.to_string(), &document_state.workflow, &context),
         yaml: serialize_workflow_yaml(
             &document_state.workflow,
             &document_state.ui_positions,
@@ -1468,14 +1702,28 @@ fn read_workflow_document(
     })
 }
 
-fn save_workflow_document(
+async fn save_workflow_document(
+    store: &RunStore,
+    connectors_dir: &Path,
     workflows_dir: &Path,
     workflow_id: &str,
     yaml: &str,
 ) -> Result<WorkflowDocumentResponse, TriggerError> {
     let workflow_path = workflow_file_path(workflows_dir, workflow_id)?;
     let document_state = parse_workflow_document_state(yaml)?;
-    write_workflow_file(&workflow_path, &document_state)
+    let response = write_workflow_file(&workflow_path, &document_state).await?;
+    Ok(WorkflowDocumentResponse {
+        id: response.id,
+        summary: workflow_summary_after_write(
+            store,
+            connectors_dir,
+            workflows_dir,
+            workflow_id.to_string(),
+            &document_state.workflow,
+        )
+        .await,
+        yaml: response.yaml,
+    })
 }
 
 fn serialize_workflow_yaml(
@@ -1776,12 +2024,16 @@ fn workflow_file_path(workflows_dir: &Path, workflow_id: &str) -> Result<PathBuf
     Ok(workflows_dir.join(format!("{workflow_id}.yaml")))
 }
 
-fn workflow_inventory(workflows_dir: &Path) -> Result<WorkflowInventoryResponse, TriggerError> {
+async fn workflow_inventory(
+    store: &RunStore,
+    connectors_dir: &Path,
+    workflows_dir: &Path,
+) -> Result<WorkflowInventoryResponse, TriggerError> {
     let mut entries = fs::read_dir(workflows_dir)?.collect::<Result<Vec<_>, _>>()?;
     entries.sort_by_key(|entry| entry.path());
 
     let mut invalid_files = Vec::new();
-    let mut workflows = Vec::new();
+    let mut parsed_workflows = Vec::new();
     for entry in entries {
         let path = entry.path();
         if !matches!(
@@ -1798,7 +2050,7 @@ fn workflow_inventory(workflows_dir: &Path) -> Result<WorkflowInventoryResponse,
             .and_then(|yaml| parse_workflow_yaml(&yaml))
         {
             Ok(workflow) => {
-                workflows.push(build_workflow_summary(workflow_id.to_string(), &workflow))
+                parsed_workflows.push((workflow_id.to_string(), workflow));
             }
             Err(error) => invalid_files.push(InvalidWorkflowFile {
                 error: error.to_string(),
@@ -1812,13 +2064,56 @@ fn workflow_inventory(workflows_dir: &Path) -> Result<WorkflowInventoryResponse,
         }
     }
 
+    let context = workflow_summary_context(store, connectors_dir, workflows_dir).await?;
+
+    let mut workflows = Vec::new();
+    for (workflow_id, workflow) in parsed_workflows {
+        workflows.push(workflow_summary_from_context(workflow_id, &workflow, &context));
+    }
+
     Ok(WorkflowInventoryResponse { invalid_files, workflows })
 }
 
-fn write_workflow_file(
+fn workflow_connector_block_facts(
+    connector_requirements: &WorkflowConnectorRequirementsState,
+    connector_states: &HashMap<String, ProductConnectorState>,
+) -> (bool, bool, bool) {
+    let mut requirements_unmet = false;
+    let mut runtime_blocked = false;
+    let mut setup_blocked = false;
+
+    for required_step_type in &connector_requirements.required_step_types {
+        let Some(connector_state) = connector_states.get(required_step_type) else {
+            requirements_unmet = true;
+            continue;
+        };
+
+        if !connector_state.install_validity.valid {
+            setup_blocked = true;
+            continue;
+        }
+
+        if !connector_state.runtime.ready {
+            match connector_state.trust {
+                ProductConnectorTrustState::RuntimeRestricted => runtime_blocked = true,
+                ProductConnectorTrustState::SetupRequired => setup_blocked = true,
+                ProductConnectorTrustState::Trusted => {}
+            }
+            continue;
+        }
+
+        if !connector_state.setup.required_setup.is_empty() {
+            setup_blocked = true;
+        }
+    }
+
+    (requirements_unmet, runtime_blocked, setup_blocked)
+}
+
+async fn write_workflow_file(
     workflow_path: &Path,
     document_state: &WorkflowDocumentState,
-) -> Result<WorkflowDocumentResponse, TriggerError> {
+) -> Result<WorkflowWriteResult, TriggerError> {
     let yaml = serialize_workflow_yaml(
         &document_state.workflow,
         &document_state.ui_positions,
@@ -1837,10 +2132,8 @@ fn write_workflow_file(
             message: format!("workflow path {} has an invalid file name", workflow_path.display()),
         })?
         .to_string();
-
-    Ok(WorkflowDocumentResponse {
-        id: workflow_id.clone(),
-        summary: build_workflow_summary(workflow_id, &document_state.workflow),
+    Ok(WorkflowWriteResult {
+        id: workflow_id,
         yaml,
     })
 }
@@ -1863,6 +2156,7 @@ fn human_task_view(task: crate::storage::HumanTaskRecord) -> HumanTaskView {
 }
 
 fn run_view(run: RunRecord) -> RunView {
+    let run_provenance = run_provenance(&run);
     RunView {
         duration_seconds: run
             .finished_at
@@ -1870,6 +2164,7 @@ fn run_view(run: RunRecord) -> RunView {
         error_message: run.error_message.map(|message| redact_text(&message)),
         finished_at: run.finished_at,
         id: run.id,
+        run_provenance,
         started_at: run.started_at,
         status: run.status,
         workflow_name: run.workflow_name,
@@ -2124,14 +2419,23 @@ mod tests {
     use serde_yaml::Value as YamlValue;
 
     use super::{
-        authenticate_webhook, compute_signature, cron_schedule, parse_workflow_document_state,
-        rename_workflow_document, request_has_engine_token, serialize_workflow_yaml,
-        slugify_workflow_name, validate_secret_value, workflow_file_path, RenameWorkflowRequest,
-        TriggerError, WebhookSignatureAuth, WebhookWorkflow,
+        authenticate_webhook, build_workflow_summary, compute_signature, connector_view,
+        cron_schedule, create_workflow_document, invalid_connector_view, parse_workflow_document_state,
+        read_workflow_document, rename_workflow_document, request_has_engine_token, run_view,
+        serialize_workflow_yaml, slugify_workflow_name, validate_secret_value, workflow_file_path,
+        workflow_inventory, CreateWorkflowRequest, RenameWorkflowRequest, TriggerError,
+        WebhookSignatureAuth, WebhookWorkflow,
     };
     use crate::{
         engine::compile_workflow,
         models::{Step, Trigger, Workflow},
+        product_state::{
+            connector_state_from_facts, latest_workflow_telemetry, ConnectorInstallValidityState,
+            ConnectorRuntimeMode, ConnectorStateFacts, ConnectorValidityState,
+            WorkflowConnectorRequirementsState, WorkflowFacts, WorkflowLifecycleState,
+            WorkflowTelemetryFacts, WorkflowValidationState,
+        },
+        storage::{RunRecord, RunStore},
     };
 
     #[test]
@@ -2294,6 +2598,776 @@ ui:
     }
 
     #[test]
+    fn workflow_state_separates_lifecycle_readiness_and_telemetry() {
+        let workflow = Workflow {
+            version: "v1".to_string(),
+            name: "customer intake".to_string(),
+            trigger: Trigger { r#type: "manual".to_string(), details: BTreeMap::new() },
+            steps: vec![
+                Step {
+                    id: "start".to_string(),
+                    r#type: "constant".to_string(),
+                    params: serde_yaml::to_value(json!({ "value": true }))
+                        .expect("json should convert to yaml"),
+                    next: vec!["call-connector".to_string()],
+                    retry: None,
+                    timeout_ms: None,
+                },
+                Step {
+                    id: "call-connector".to_string(),
+                    r#type: "report-summary".to_string(),
+                    params: serde_yaml::Value::Mapping(Default::default()),
+                    next: vec![],
+                    retry: None,
+                    timeout_ms: None,
+                },
+            ],
+            ui: Default::default(),
+        };
+
+        let summary = build_workflow_summary(
+            "customer-intake".to_string(),
+            &workflow,
+            WorkflowFacts {
+                lifecycle: WorkflowLifecycleState::Saved,
+                validation_state: WorkflowValidationState::Valid,
+                connector_requirements: WorkflowConnectorRequirementsState {
+                    required_step_types: vec!["report-summary".to_string()],
+                },
+                connector_requirements_unmet: true,
+                connector_runtime_blocked: false,
+                connector_setup_blocked: false,
+                latest_run: Some(WorkflowTelemetryFacts {
+                    last_run_at: 1_710_850_000,
+                    last_run_status: "success".to_string(),
+                }),
+            },
+        );
+        let payload = serde_json::to_value(summary).expect("summary should serialize");
+
+        assert_eq!(payload["id"], json!("customer-intake"));
+        assert_eq!(payload["name"], json!("customer intake"));
+        assert_eq!(payload["file_name"], json!("customer-intake.yaml"));
+        assert_eq!(payload["workflow_state"]["lifecycle"], json!("saved"));
+        assert_eq!(
+            payload["workflow_state"]["readiness"]["validation_state"],
+            json!("valid")
+        );
+        assert_eq!(
+            payload["workflow_state"]["readiness"]["connector_requirements"][
+                "required_step_types"
+            ],
+            json!(["report-summary"])
+        );
+        assert_eq!(
+            payload["workflow_state"]["readiness"]["readiness_state"],
+            json!("blocked_by_connector")
+        );
+        assert_eq!(
+            payload["workflow_state"]["telemetry"]["last_run_status"],
+            json!("success")
+        );
+        assert_eq!(
+            payload["workflow_state"]["telemetry"]["last_run_at"],
+            json!(1_710_850_000)
+        );
+    }
+
+    #[test]
+    fn workflow_inventory_uses_latest_run_telemetry() {
+        let temp_dir = write_temp_directory("workflow-inventory");
+        let workflows_dir = temp_dir.join("workflows");
+        let connectors_dir = temp_dir.join("connectors");
+        std::fs::create_dir_all(&workflows_dir).expect("workflows dir should be created");
+        std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
+
+        std::fs::write(
+            workflows_dir.join("customer-intake.yaml"),
+            r#"
+version: v1
+name: customer intake
+trigger:
+  type: manual
+steps:
+  - id: start
+    type: constant
+    params:
+      value: true
+    next: []
+  - id: summarize
+    type: report-summary
+    params: {}
+    next: []
+"#,
+        )
+        .expect("workflow should be written");
+
+        let connector_dir = connectors_dir.join("report-summary");
+        std::fs::create_dir_all(&connector_dir).expect("connector dir should be created");
+        std::fs::write(
+            connector_dir.join("manifest.json"),
+            r#"{
+  "entry": "main.py",
+  "inputs": ["payload"],
+  "name": "Report Summary",
+  "outputs": ["summary"],
+  "runtime": "process",
+  "type": "report-summary"
+}"#,
+        )
+        .expect("manifest should be written");
+        std::fs::write(connector_dir.join("README.md"), "# Report Summary\n")
+            .expect("readme should be written");
+        std::fs::write(connector_dir.join("sample-input.json"), "{}")
+            .expect("sample input should be written");
+
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let inventory = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            let run = store
+                .start_run(
+                    "customer intake",
+                    "exact workflow snapshot",
+                    Some("exact editor snapshot"),
+                    &serde_json::json!({"value": true}),
+                )
+                .await
+                .expect("run should start");
+            store
+                .complete_run_success(&run.id)
+                .await
+                .expect("run should complete");
+
+            workflow_inventory(&store, &connectors_dir, &workflows_dir)
+                .await
+                .expect("inventory should build")
+        });
+        let summary = inventory
+            .workflows
+            .into_iter()
+            .find(|workflow| workflow.id == "customer-intake")
+            .expect("workflow summary should exist");
+        let payload = serde_json::to_value(summary).expect("summary should serialize");
+
+        assert_eq!(payload["workflow_state"]["telemetry"]["last_run_status"], json!("success"));
+        assert_ne!(payload["workflow_state"]["telemetry"]["last_run_at"], serde_json::Value::Null);
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn workflow_document_response_matches_inventory_state() {
+        let temp_dir = write_temp_directory("workflow-document-state");
+        let workflows_dir = temp_dir.join("workflows");
+        let connectors_dir = temp_dir.join("connectors");
+        std::fs::create_dir_all(&workflows_dir).expect("workflows dir should be created");
+        std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
+
+        std::fs::write(
+            workflows_dir.join("customer-intake.yaml"),
+            r#"
+version: v1
+name: customer intake
+trigger:
+  type: manual
+steps:
+  - id: start
+    type: constant
+    params:
+      value: true
+    next: []
+  - id: summarize
+    type: report-summary
+    params: {}
+    next: []
+"#,
+        )
+        .expect("workflow should be written");
+
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let inventory = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            let run = store
+                .start_run(
+                    "customer intake",
+                    "exact workflow snapshot",
+                    Some("exact editor snapshot"),
+                    &serde_json::json!({"value": true}),
+                )
+                .await
+                .expect("run should start");
+            store
+                .complete_run_success(&run.id)
+                .await
+                .expect("run should complete");
+
+            let inventory = workflow_inventory(&store, &connectors_dir, &workflows_dir)
+                .await
+                .expect("inventory should build");
+            let document = read_workflow_document(
+                &store,
+                &connectors_dir,
+                &workflows_dir,
+                "customer-intake",
+            )
+            .await
+            .expect("workflow document should read");
+            (inventory, document)
+        });
+
+        let inventory_summary = inventory
+            .0
+            .workflows
+            .into_iter()
+            .find(|workflow| workflow.id == "customer-intake")
+            .expect("inventory summary should exist");
+        let document_payload =
+            serde_json::to_value(inventory.1).expect("document response should serialize");
+
+        assert_eq!(
+            document_payload["summary"]["workflow_state"]["readiness"]["readiness_state"],
+            serde_json::to_value(inventory_summary.workflow_state.readiness.readiness_state)
+                .expect("inventory readiness should serialize")
+        );
+        assert_eq!(
+            document_payload["summary"]["workflow_state"]["telemetry"]["last_run_status"],
+            serde_json::to_value(inventory_summary.workflow_state.telemetry.last_run_status)
+                .expect("inventory telemetry should serialize")
+        );
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn create_workflow_response_reflects_blocked_connector_state() {
+        let temp_dir = write_temp_directory("workflow-create-blocked-state");
+        let workflows_dir = temp_dir.join("workflows");
+        let connectors_dir = temp_dir.join("connectors");
+        std::fs::create_dir_all(&workflows_dir).expect("workflows dir should be created");
+        std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
+
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let response = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            create_workflow_document(
+                &store,
+                &connectors_dir,
+                &workflows_dir,
+                CreateWorkflowRequest {
+                    id: Some("customer-intake".to_string()),
+                    yaml: r#"
+version: v1
+name: customer intake
+trigger:
+  type: manual
+steps:
+  - id: start
+    type: constant
+    params:
+      value: true
+    next: []
+  - id: summarize
+    type: report-summary
+    params: {}
+    next: []
+"#
+                    .to_string(),
+                },
+            )
+            .await
+            .expect("workflow should be created")
+        });
+
+        let payload = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            payload["summary"]["workflow_state"]["readiness"]["readiness_state"],
+            json!("blocked_by_connector")
+        );
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn create_workflow_succeeds_when_post_write_summary_enrichment_fails() {
+        let temp_dir = write_temp_directory("workflow-create-summary-fallback");
+        let workflows_dir = temp_dir.join("workflows");
+        std::fs::create_dir_all(&workflows_dir).expect("workflows dir should be created");
+        let connectors_dir = temp_dir.join("missing-connectors");
+
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let response = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            create_workflow_document(
+                &store,
+                &connectors_dir,
+                &workflows_dir,
+                CreateWorkflowRequest {
+                    id: Some("customer-intake".to_string()),
+                    yaml: r#"
+version: v1
+name: customer intake
+trigger:
+  type: manual
+steps:
+  - id: start
+    type: constant
+    params:
+      value: true
+    next: []
+"#
+                    .to_string(),
+                },
+            )
+            .await
+            .expect("workflow should still be created")
+        });
+
+        assert_eq!(response.id, "customer-intake");
+        assert!(workflows_dir.join("customer-intake.yaml").exists());
+        let payload = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            payload["summary"]["workflow_state"]["readiness"]["readiness_state"],
+            json!("ready")
+        );
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn workflow_inventory_omits_telemetry_for_duplicate_workflow_names() {
+        let temp_dir = write_temp_directory("workflow-inventory-duplicate-names");
+        let workflows_dir = temp_dir.join("workflows");
+        let connectors_dir = temp_dir.join("connectors");
+        std::fs::create_dir_all(&workflows_dir).expect("workflows dir should be created");
+        std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
+
+        for workflow_id in ["first-workflow", "second-workflow"] {
+            std::fs::write(
+                workflows_dir.join(format!("{workflow_id}.yaml")),
+                r#"
+version: v1
+name: duplicate workflow
+trigger:
+  type: manual
+steps:
+  - id: start
+    type: constant
+    params:
+      value: true
+    next: []
+"#,
+            )
+            .expect("workflow should be written");
+        }
+
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let inventory = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            let run = store
+                .start_run(
+                    "duplicate workflow",
+                    "exact workflow snapshot",
+                    Some("exact editor snapshot"),
+                    &serde_json::json!({"value": true}),
+                )
+                .await
+                .expect("run should start");
+            store
+                .complete_run_success(&run.id)
+                .await
+                .expect("run should complete");
+
+            workflow_inventory(&store, &connectors_dir, &workflows_dir)
+                .await
+                .expect("inventory should build")
+        });
+
+        let summaries: Vec<_> = inventory
+            .workflows
+            .iter()
+            .filter(|workflow| workflow.name == "duplicate workflow")
+            .collect();
+        assert_eq!(summaries.len(), 2);
+        for summary in summaries {
+            let payload = serde_json::to_value(summary).expect("summary should serialize");
+            assert_eq!(payload["workflow_state"]["telemetry"]["last_run_status"], serde_json::Value::Null);
+            assert_eq!(payload["workflow_state"]["telemetry"]["last_run_at"], serde_json::Value::Null);
+        }
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn latest_workflow_telemetry_prefers_newest_run_by_started_at() {
+        let telemetry = latest_workflow_telemetry(vec![
+            RunRecord {
+                id: "older".to_string(),
+                workflow_name: "customer intake".to_string(),
+                status: "failed".to_string(),
+                started_at: 10,
+                finished_at: Some(11),
+                error_message: Some("boom".to_string()),
+                editor_snapshot: None,
+                workflow_snapshot: Some("saved workflow".to_string()),
+                initial_payload: None,
+                state_json: None,
+            },
+            RunRecord {
+                id: "newer".to_string(),
+                workflow_name: "customer intake".to_string(),
+                status: "success".to_string(),
+                started_at: 20,
+                finished_at: Some(21),
+                error_message: None,
+                editor_snapshot: None,
+                workflow_snapshot: Some("saved workflow".to_string()),
+                initial_payload: None,
+                state_json: None,
+            },
+        ]);
+
+        let latest = telemetry
+            .get("customer intake")
+            .expect("latest telemetry should exist");
+        assert_eq!(latest.last_run_status, "success");
+        assert_eq!(latest.last_run_at, 21);
+    }
+
+    #[test]
+    fn latest_workflow_telemetry_breaks_started_at_ties_with_richer_facts() {
+        let telemetry = latest_workflow_telemetry(vec![
+            RunRecord {
+                id: "run-a".to_string(),
+                workflow_name: "customer intake".to_string(),
+                status: "failed".to_string(),
+                started_at: 42,
+                finished_at: Some(43),
+                error_message: Some("older run".to_string()),
+                editor_snapshot: None,
+                workflow_snapshot: None,
+                initial_payload: None,
+                state_json: None,
+            },
+            RunRecord {
+                id: "run-b".to_string(),
+                workflow_name: "customer intake".to_string(),
+                status: "success".to_string(),
+                started_at: 42,
+                finished_at: Some(44),
+                error_message: None,
+                editor_snapshot: Some("editor snapshot".to_string()),
+                workflow_snapshot: Some("workflow snapshot".to_string()),
+                initial_payload: None,
+                state_json: Some("{\"state\":\"paused\"}".to_string()),
+            },
+        ]);
+
+        let latest = telemetry
+            .get("customer intake")
+            .expect("latest telemetry should exist");
+        assert_eq!(latest.last_run_status, "success");
+        assert_eq!(latest.last_run_at, 44);
+    }
+
+    #[test]
+    fn workflow_inventory_pages_past_the_old_ten_thousand_run_cap() {
+        let temp_dir = write_temp_directory("workflow-inventory-cap");
+        let workflows_dir = temp_dir.join("workflows");
+        let connectors_dir = temp_dir.join("connectors");
+        std::fs::create_dir_all(&workflows_dir).expect("workflows dir should be created");
+        std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
+
+        std::fs::write(
+            workflows_dir.join("bulk-workflow.yaml"),
+            r#"
+version: v1
+name: bulk workflow
+trigger:
+  type: manual
+steps:
+  - id: start
+    type: constant
+    params:
+      value: true
+    next: []
+"#,
+        )
+        .expect("bulk workflow should be written");
+        std::fs::write(
+            workflows_dir.join("target-workflow.yaml"),
+            r#"
+version: v1
+name: target workflow
+trigger:
+  type: manual
+steps:
+  - id: start
+    type: constant
+    params:
+      value: true
+    next: []
+"#,
+        )
+        .expect("target workflow should be written");
+
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let inventory = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+
+            for index in 0..10_000 {
+                sqlx::query(
+                    r#"
+                    INSERT INTO runs (
+                      id,
+                      workflow_name,
+                      status,
+                      started_at,
+                      finished_at,
+                      error_message,
+                      editor_snapshot,
+                      workflow_snapshot,
+                      initial_payload,
+                      state_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    "#,
+                )
+                .bind(format!("bulk-run-{index}"))
+                .bind("bulk workflow")
+                .bind("success")
+                .bind(10_000_i64 + index as i64)
+                .bind(Some(10_000_i64 + index as i64))
+                .bind(Option::<String>::None)
+                .bind(Some("historical editor snapshot"))
+                .bind(Some("saved workflow snapshot"))
+                .bind(Option::<String>::None)
+                .bind(Option::<String>::None)
+                .execute(store.pool())
+                .await
+                .expect("bulk run should insert");
+            }
+
+            sqlx::query(
+                r#"
+                INSERT INTO runs (
+                  id,
+                  workflow_name,
+                  status,
+                  started_at,
+                  finished_at,
+                  error_message,
+                  editor_snapshot,
+                  workflow_snapshot,
+                  initial_payload,
+                  state_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
+            )
+            .bind("target-run")
+            .bind("target workflow")
+            .bind("success")
+            .bind(1_i64)
+            .bind(Some(1_i64))
+            .bind(Option::<String>::None)
+            .bind(Some("historical editor snapshot"))
+            .bind(Some("saved workflow snapshot"))
+            .bind(Option::<String>::None)
+            .bind(Option::<String>::None)
+            .execute(store.pool())
+            .await
+            .expect("target run should insert");
+
+            workflow_inventory(&store, &connectors_dir, &workflows_dir)
+                .await
+                .expect("inventory should build")
+        });
+
+        let summary = inventory
+            .workflows
+            .into_iter()
+            .find(|workflow| workflow.id == "target-workflow")
+            .expect("target workflow summary should exist");
+        let payload = serde_json::to_value(summary).expect("summary should serialize");
+        assert_eq!(payload["workflow_state"]["telemetry"]["last_run_status"], json!("success"));
+        assert_ne!(payload["workflow_state"]["telemetry"]["last_run_at"], serde_json::Value::Null);
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn connector_state_reports_install_validity_runtime_and_setup() {
+        let temp_dir = write_temp_directory("connector-state");
+        let connector_dir = temp_dir.join("report-summary");
+        std::fs::create_dir_all(&connector_dir).expect("connector dir should be created");
+        let manifest_path = connector_dir.join("manifest.json");
+        let readme_path = connector_dir.join("README.md");
+        let sample_input_path = connector_dir.join("sample-input.json");
+        std::fs::write(
+            &manifest_path,
+            r#"{
+  "allowed_env": ["ACSA_MODE"],
+  "allowed_hosts": ["api.example.com"],
+  "entry": "main.py",
+  "inputs": ["payload"],
+  "name": "Report Summary",
+  "outputs": ["summary"],
+  "runtime": "process",
+  "type": "report-summary",
+  "version": "1.0.0"
+}"#,
+        )
+        .expect("manifest should be written");
+        std::fs::write(&readme_path, "# Report Summary\n").expect("readme should be written");
+        std::fs::write(&sample_input_path, "{}").expect("sample input should be written");
+
+        let connector = crate::connectors::DiscoveredConnector {
+            connector_dir: std::fs::canonicalize(&connector_dir)
+                .expect("connector dir should canonicalize"),
+            manifest: crate::connectors::ConnectorManifest {
+                allowed_env: vec!["ACSA_MODE".to_string()],
+                allowed_hosts: vec!["api.example.com".to_string()],
+                allowed_paths: Default::default(),
+                entry: "main.py".to_string(),
+                enable_wasi: false,
+                inputs: vec!["payload".to_string()],
+                limits: Default::default(),
+                name: "Report Summary".to_string(),
+                outputs: vec!["summary".to_string()],
+                runtime: crate::connectors::ConnectorRuntime::Process,
+                type_id: "report-summary".to_string(),
+                version: Some("1.0.0".to_string()),
+            },
+            manifest_path: std::fs::canonicalize(&manifest_path)
+                .expect("manifest should canonicalize"),
+        };
+
+        let view = connector_view(&connector);
+        let payload = serde_json::to_value(view).expect("connector view should serialize");
+
+        assert_eq!(
+            payload["connector_state"]["install_validity"]["valid"],
+            json!(true)
+        );
+        assert_eq!(
+            payload["connector_state"]["install_validity"]["state"],
+            json!("valid")
+        );
+        assert_eq!(
+            payload["connector_state"]["install_validity"]["manifest_path"],
+            json!(std::fs::canonicalize(&manifest_path)
+                .expect("manifest should canonicalize")
+                .display()
+                .to_string())
+        );
+        assert_eq!(
+            payload["connector_state"]["runtime"]["mode"],
+            json!("process")
+        );
+        assert_eq!(payload["connector_state"]["runtime"]["ready"], json!(true));
+        assert_eq!(
+            payload["connector_state"]["setup"]["required_setup"],
+            json!([])
+        );
+        assert_eq!(
+            payload["connector_state"]["trust"],
+            json!("trusted")
+        );
+
+        let wasm_trusted = connector_state_from_facts(ConnectorStateFacts {
+                install_validity: ConnectorInstallValidityState {
+                    connector_dir: "connectors/report-summary".to_string(),
+                    manifest_path: Some("connectors/report-summary/manifest.json".to_string()),
+                    reason: None,
+                    valid: true,
+                    state: ConnectorValidityState::Valid,
+                },
+                runtime_mode: Some(ConnectorRuntimeMode::Wasm),
+                runtime_ready: true,
+                required_setup: Vec::new(),
+            });
+        let wasm_trusted_payload =
+            serde_json::to_value(wasm_trusted).expect("connector state should serialize");
+        assert_eq!(wasm_trusted_payload["trust"], json!("trusted"));
+
+        let invalid_view = invalid_connector_view(&crate::connectors::InvalidConnector {
+            connector_dir: std::fs::canonicalize(&connector_dir)
+                .expect("connector dir should canonicalize"),
+            error: "manifest failed validation".to_string(),
+            manifest_path: Some(manifest_path.clone()),
+        });
+        let invalid_payload =
+            serde_json::to_value(invalid_view).expect("invalid connector view should serialize");
+        assert_eq!(
+            invalid_payload["connector_state"]["install_validity"]["state"],
+            json!("invalid")
+        );
+        assert_eq!(
+            invalid_payload["connector_state"]["install_validity"]["valid"],
+            json!(false)
+        );
+        assert_eq!(
+            invalid_payload["connector_state"]["install_validity"]["reason"],
+            json!("manifest failed validation")
+        );
+        assert_eq!(
+            invalid_payload["connector_state"]["setup"]["required_setup"],
+            json!([])
+        );
+        assert_eq!(
+            invalid_payload["connector_state"]["trust"],
+            json!("setup_required")
+        );
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn run_provenance_marks_exact_snapshot_vs_fallback() {
+        let exact = run_view(RunRecord {
+            id: "run-exact".to_string(),
+            workflow_name: "customer-intake".to_string(),
+            status: "running".to_string(),
+            started_at: 10,
+            finished_at: None,
+            error_message: None,
+            editor_snapshot: Some("exact editor snapshot".to_string()),
+            workflow_snapshot: None,
+            initial_payload: None,
+            state_json: None,
+        });
+        let exact_payload = serde_json::to_value(exact).expect("run view should serialize");
+        assert_eq!(
+            exact_payload["run_provenance"]["mode"],
+            json!("exact")
+        );
+
+        let fallback = run_view(RunRecord {
+            id: "run-fallback".to_string(),
+            workflow_name: "customer-intake".to_string(),
+            status: "running".to_string(),
+            started_at: 20,
+            finished_at: None,
+            error_message: None,
+            editor_snapshot: None,
+            workflow_snapshot: Some("saved workflow snapshot".to_string()),
+            initial_payload: None,
+            state_json: None,
+        });
+        let fallback_payload = serde_json::to_value(fallback).expect("run view should serialize");
+        assert_eq!(
+            fallback_payload["run_provenance"]["mode"],
+            json!("fallback")
+        );
+    }
+
+    #[test]
     fn preserves_detached_steps_in_workflow_ui_state() {
         let document_state = parse_workflow_document_state(
             r#"
@@ -2330,6 +3404,9 @@ ui:
     #[test]
     fn renames_workflow_file_and_name_together() {
         let temp_dir = write_temp_directory("rename");
+        let connectors_dir = temp_dir.join("connectors");
+        std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
         let workflow_path = temp_dir.join("draft.yaml");
         std::fs::write(
             &workflow_path,
@@ -2348,16 +3425,23 @@ steps:
         )
         .expect("workflow should be written");
 
-        let response = rename_workflow_document(
-            &temp_dir,
-            "draft",
-            RenameWorkflowRequest {
-                name: "Customer intake".to_string(),
-                target_id: "customer-intake".to_string(),
-                yaml: None,
-            },
-        )
-        .expect("rename should succeed");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let response = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            rename_workflow_document(
+                &store,
+                &connectors_dir,
+                &temp_dir,
+                "draft",
+                RenameWorkflowRequest {
+                    name: "Customer intake".to_string(),
+                    target_id: "customer-intake".to_string(),
+                    yaml: None,
+                },
+            )
+            .await
+            .expect("rename should succeed")
+        });
 
         assert_eq!(response.id, "customer-intake");
         assert_eq!(response.summary.file_name, "customer-intake.yaml");
@@ -2373,6 +3457,9 @@ steps:
     #[test]
     fn rename_uses_supplied_yaml_when_present() {
         let temp_dir = write_temp_directory("rename-yaml");
+        let connectors_dir = temp_dir.join("connectors");
+        std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
         let workflow_path = temp_dir.join("draft.yaml");
         std::fs::write(
             &workflow_path,
@@ -2391,14 +3478,19 @@ steps:
         )
         .expect("workflow should be written");
 
-        let response = rename_workflow_document(
-            &temp_dir,
-            "draft",
-            RenameWorkflowRequest {
-                name: "Updated draft".to_string(),
-                target_id: "updated-draft".to_string(),
-                yaml: Some(
-                    r#"
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let response = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            rename_workflow_document(
+                &store,
+                &connectors_dir,
+                &temp_dir,
+                "draft",
+                RenameWorkflowRequest {
+                    name: "Updated draft".to_string(),
+                    target_id: "updated-draft".to_string(),
+                    yaml: Some(
+                        r#"
 version: v1
 name: ignored
 trigger:
@@ -2410,14 +3502,86 @@ steps:
       value: 99
     next: []
 "#
-                    .to_string(),
-                ),
-            },
-        )
-        .expect("rename should succeed");
+                        .to_string(),
+                    ),
+                },
+            )
+            .await
+            .expect("rename should succeed")
+        });
 
         assert_eq!(response.summary.name, "Updated draft");
         assert!(response.yaml.contains("value: 99"));
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn rename_id_only_preserves_summary_telemetry() {
+        let temp_dir = write_temp_directory("rename-id-only");
+        let connectors_dir = temp_dir.join("connectors");
+        let workflows_dir = temp_dir.join("workflows");
+        std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
+        std::fs::create_dir_all(&workflows_dir).expect("workflows dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
+        std::fs::write(
+            workflows_dir.join("draft.yaml"),
+            r#"
+version: v1
+name: customer intake
+trigger:
+  type: manual
+steps:
+  - id: first
+    type: constant
+    params:
+      value: 1
+    next: []
+"#,
+        )
+        .expect("workflow should be written");
+
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let response = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            let run = store
+                .start_run(
+                    "customer intake",
+                    "exact workflow snapshot",
+                    Some("exact editor snapshot"),
+                    &serde_json::json!({"value": true}),
+                )
+                .await
+                .expect("run should start");
+            store
+                .complete_run_success(&run.id)
+                .await
+                .expect("run should complete");
+
+            rename_workflow_document(
+                &store,
+                &connectors_dir,
+                &workflows_dir,
+                "draft",
+                RenameWorkflowRequest {
+                    name: "customer intake".to_string(),
+                    target_id: "customer-intake".to_string(),
+                    yaml: None,
+                },
+            )
+            .await
+            .expect("rename should succeed")
+        });
+
+        let payload = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(
+            payload["summary"]["workflow_state"]["telemetry"]["last_run_status"],
+            json!("success")
+        );
+        assert_ne!(
+            payload["summary"]["workflow_state"]["telemetry"]["last_run_at"],
+            serde_json::Value::Null
+        );
 
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
     }

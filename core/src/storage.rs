@@ -447,6 +447,29 @@ impl RunStore {
         Ok(self.list_runs_page(&RunQuery { limit: 10_000, ..RunQuery::default() }).await?.items)
     }
 
+    pub async fn latest_runs_for_workflows(
+        &self,
+        workflow_names: &[String],
+    ) -> Result<Vec<RunRecord>, StorageError> {
+        if workflow_names.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut builder = QueryBuilder::<Sqlite>::new(
+            "SELECT id, workflow_name, status, started_at, finished_at, error_message, editor_snapshot, workflow_snapshot, initial_payload, state_json FROM (SELECT id, workflow_name, status, started_at, finished_at, error_message, editor_snapshot, workflow_snapshot, initial_payload, state_json, ROW_NUMBER() OVER (PARTITION BY workflow_name ORDER BY started_at DESC, COALESCE(finished_at, started_at) DESC, workflow_snapshot IS NOT NULL DESC, editor_snapshot IS NOT NULL DESC, state_json IS NOT NULL DESC, id DESC) AS row_number FROM runs WHERE workflow_name IN (",
+        );
+        {
+            let mut separated = builder.separated(", ");
+            for workflow_name in workflow_names {
+                separated.push_bind(workflow_name);
+            }
+        }
+        builder.push(")) WHERE row_number = 1 ORDER BY workflow_name ASC");
+
+        let rows = builder.build().fetch_all(&self.pool).await?;
+        rows.into_iter().map(map_run_row).collect()
+    }
+
     pub async fn list_runs_page(
         &self,
         query: &RunQuery,
@@ -1342,4 +1365,155 @@ fn map_human_task_row(row: sqlx::sqlite::SqliteRow) -> Result<HumanTaskRecord, S
         created_at: row.try_get("created_at")?,
         completed_at: row.try_get("completed_at")?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn insert_run(
+        store: &RunStore,
+        id: &str,
+        workflow_name: &str,
+        started_at: i64,
+        finished_at: Option<i64>,
+        editor_snapshot: Option<&str>,
+        workflow_snapshot: Option<&str>,
+        state_json: Option<&str>,
+    ) {
+        sqlx::query(
+            r#"
+            INSERT INTO runs (
+              id,
+              workflow_name,
+              status,
+              started_at,
+              finished_at,
+              error_message,
+              editor_snapshot,
+              workflow_snapshot,
+              initial_payload,
+              state_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(id)
+        .bind(workflow_name)
+        .bind("success")
+        .bind(started_at)
+        .bind(finished_at)
+        .bind(Option::<String>::None)
+        .bind(editor_snapshot)
+        .bind(workflow_snapshot)
+        .bind(Option::<String>::None)
+        .bind(state_json)
+        .execute(store.pool())
+        .await
+        .expect("run should insert");
+    }
+
+    #[tokio::test]
+    async fn latest_runs_for_workflows_is_targeted_and_deterministic() {
+        let temp_dir = std::env::temp_dir().join(format!("acsa-storage-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir)
+            .await
+            .expect("temp dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
+        let store = RunStore::connect(&db_path).await.expect("store should connect");
+
+        for index in 0..256 {
+            let workflow_name = format!("background-{}", index % 8);
+            insert_run(
+                &store,
+                &format!("background-run-{index}"),
+                &workflow_name,
+                1_000 + index as i64,
+                Some(1_100 + index as i64),
+                Some("historical editor snapshot"),
+                Some("saved workflow snapshot"),
+                None,
+            )
+            .await;
+        }
+
+        insert_run(
+            &store,
+            "target-plain",
+            "target workflow",
+            42,
+            Some(50),
+            None,
+            Some("saved workflow snapshot"),
+            None,
+        )
+        .await;
+        insert_run(
+            &store,
+            "target-rich",
+            "target workflow",
+            42,
+            Some(50),
+            Some("historical editor snapshot"),
+            Some("saved workflow snapshot"),
+            Some(r#"{ "render": "degraded" }"#),
+        )
+        .await;
+
+        let runs = store
+            .latest_runs_for_workflows(&["target workflow".to_string()])
+            .await
+            .expect("latest runs should load");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, "target-rich");
+        assert_eq!(runs[0].workflow_name, "target workflow");
+
+        tokio::fs::remove_dir_all(&temp_dir)
+            .await
+            .expect("temp dir should be removed");
+    }
+
+    #[tokio::test]
+    async fn latest_runs_for_workflows_treats_null_finished_at_like_started_at() {
+        let temp_dir = std::env::temp_dir().join(format!("acsa-storage-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir)
+            .await
+            .expect("temp dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
+        let store = RunStore::connect(&db_path).await.expect("store should connect");
+
+        insert_run(
+            &store,
+            "run-a",
+            "target workflow",
+            42,
+            Some(42),
+            Some("historical editor snapshot"),
+            Some("saved workflow snapshot"),
+            Some(r#"{ "render": "degraded" }"#),
+        )
+        .await;
+        insert_run(
+            &store,
+            "run-z",
+            "target workflow",
+            42,
+            None,
+            Some("historical editor snapshot"),
+            Some("saved workflow snapshot"),
+            Some(r#"{ "render": "degraded" }"#),
+        )
+        .await;
+
+        let runs = store
+            .latest_runs_for_workflows(&["target workflow".to_string()])
+            .await
+            .expect("latest runs should load");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, "run-z");
+
+        tokio::fs::remove_dir_all(&temp_dir)
+            .await
+            .expect("temp dir should be removed");
+    }
 }
