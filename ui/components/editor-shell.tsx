@@ -384,12 +384,13 @@ export function EditorShell({
 
       if (createDraftOnBoot && !hasCreatedDraftOnBoot.current) {
         hasCreatedDraftOnBoot.current = true;
-        const workflowId =
-          starter && starterYaml ? starter.id : nextDraftWorkflowId(persistedWorkflows);
         const document = persistDocumentLayout(
-          starter && starterYaml
-            ? createLocalWorkflowDocumentFromYaml(workflowId, starterYaml)
-            : createLocalWorkflowDocument(workflowId)
+          createDraftDocumentFromStarter({
+            documents: workflowStoreState().documents,
+            persistedWorkflows,
+            starter,
+            starterYaml
+          })
         );
         setDocuments((current) => ({
           ...current,
@@ -445,6 +446,29 @@ export function EditorShell({
       throw new Error(`Failed to load starter workflow from ${yamlPath}`);
     }
     return response.text();
+  }
+
+  function createDraftDocumentFromStarter({
+    documents,
+    persistedWorkflows,
+    starter,
+    starterYaml
+  }: {
+    documents: Record<string, WorkflowDocument>;
+    persistedWorkflows: WorkflowSummary[];
+    starter: (typeof WORKFLOW_STARTERS)[number] | null;
+    starterYaml: string | null;
+  }) {
+    if (!starter || !starterYaml) {
+      return createLocalWorkflowDocument(nextDraftWorkflowId(persistedWorkflows, documents));
+    }
+
+    const workflowId = nextStarterDraftWorkflowId(starter.id, persistedWorkflows, documents);
+    try {
+      return createLocalWorkflowDocumentFromYaml(workflowId, starterYaml);
+    } catch {
+      return createLocalWorkflowDocument(nextDraftWorkflowId(persistedWorkflows, documents));
+    }
   }
 
   async function loadWorkflowDocument(
@@ -2229,13 +2253,41 @@ function mergeWorkflowSummaries(
   );
 }
 
-function nextDraftWorkflowId(workflows: WorkflowSummary[]) {
-  const existingIds = new Set(workflows.map((workflow) => workflow.id));
+function nextDraftWorkflowId(
+  workflows: WorkflowSummary[],
+  documents: Record<string, WorkflowDocument> = {}
+) {
+  const existingIds = new Set([
+    ...workflows.map((workflow) => workflow.id),
+    ...Object.keys(documents)
+  ]);
   let index = 1;
   while (existingIds.has(`untitled-workflow-${index}`)) {
     index += 1;
   }
   return `untitled-workflow-${index}`;
+}
+
+function nextStarterDraftWorkflowId(
+  starterId: string,
+  workflows: WorkflowSummary[],
+  documents: Record<string, WorkflowDocument>
+) {
+  const existingIds = new Set([
+    ...workflows.map((workflow) => workflow.id),
+    ...Object.keys(documents)
+  ]);
+  const baseId = slugifyIdentifier(starterId);
+
+  if (!existingIds.has(baseId)) {
+    return baseId;
+  }
+
+  let index = 2;
+  while (existingIds.has(`${baseId}-${index}`)) {
+    index += 1;
+  }
+  return `${baseId}-${index}`;
 }
 
 function nextSelectableWorkflowId(
