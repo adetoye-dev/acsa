@@ -14,7 +14,10 @@
  * limitations under the License.
  */
 
-import type { ConnectorInventoryResponse } from "./connectors";
+import type {
+  ConnectorInventoryItem,
+  ConnectorInventoryResponse
+} from "./connectors";
 import { type RecentWorkflowEntry, pruneRecentWorkflows } from "./recent-workflows";
 import type { WorkflowStarter } from "./workflow-starters";
 import type { WorkflowSummary } from "./workflow-editor";
@@ -25,7 +28,12 @@ export type ContinueWhereLeftOffItem = {
   workflow: WorkflowSummary;
 };
 
-export type StarterReadinessState = "ready" | "blocked";
+export type StarterReadinessState =
+  | "loading"
+  | "blocked_by_connector"
+  | "blocked_by_setup"
+  | "blocked_by_runtime"
+  | "ready";
 
 export type StarterReadinessItem = {
   missingStepTypes: string[];
@@ -54,6 +62,12 @@ const BUILT_IN_STEP_TYPES = new Set([
   "retrieval",
   "switch"
 ]);
+
+type StarterStepAvailabilityState =
+  | "ready"
+  | "blocked_by_connector"
+  | "blocked_by_setup"
+  | "blocked_by_runtime";
 
 export function buildContinueWhereLeftOff(
   workflows: WorkflowSummary[],
@@ -102,17 +116,32 @@ export function resolveStarterReadiness(
   starters: WorkflowStarter[],
   connectorInventory: ConnectorInventoryResponse | null
 ): StarterReadinessItem[] {
-  const availableStepTypes = new Set<string>();
-  for (const connector of connectorInventory?.connectors ?? []) {
+  if (connectorInventory === null) {
+    return starters.map((starter) => ({
+      missingStepTypes: [],
+      ready: false,
+      requiredStepTypes: starter.requiredStepTypes,
+      starter,
+      state: "loading"
+    }));
+  }
+
+  const providersByStepType = new Map<string, ConnectorInventoryItem[]>();
+  for (const connector of connectorInventory.connectors) {
     for (const providedStepType of connector.provided_step_types) {
-      availableStepTypes.add(providedStepType);
+      const providers = providersByStepType.get(providedStepType) ?? [];
+      providers.push(connector);
+      providersByStepType.set(providedStepType, providers);
     }
   }
 
   return starters.map((starter) => {
     const requiredStepTypes = starter.requiredStepTypes;
+    const stepStates = requiredStepTypes.map((stepType) =>
+      resolveStarterStepAvailability(stepType, providersByStepType)
+    );
     const missingStepTypes = requiredStepTypes.filter(
-      (stepType) => !isStepTypeAvailable(stepType, availableStepTypes)
+      (_, index) => stepStates[index] !== "ready"
     );
 
     return {
@@ -120,7 +149,7 @@ export function resolveStarterReadiness(
       ready: missingStepTypes.length === 0,
       requiredStepTypes,
       starter,
-      state: missingStepTypes.length === 0 ? "ready" : "blocked"
+      state: resolveStarterReadinessState(stepStates)
     };
   });
 }
@@ -133,12 +162,72 @@ export function resolveLaunchpadEmptyState(
     return "empty";
   }
 
-  return pruneRecentWorkflows(recents).length === 0 ? "no_recent_workflows" : "ready";
+  return buildContinueWhereLeftOff(workflows, recents).length === 0
+    ? "no_recent_workflows"
+    : "ready";
 }
 
-function isStepTypeAvailable(
+function resolveStarterReadinessState(
+  stepStates: StarterStepAvailabilityState[]
+): StarterReadinessState {
+  if (stepStates.length === 0) {
+    return "ready";
+  }
+
+  if (stepStates.every((state) => state === "ready")) {
+    return "ready";
+  }
+
+  if (stepStates.some((state) => state === "blocked_by_connector")) {
+    return "blocked_by_connector";
+  }
+
+  if (stepStates.some((state) => state === "blocked_by_setup")) {
+    return "blocked_by_setup";
+  }
+
+  return "blocked_by_runtime";
+}
+
+function resolveStarterStepAvailability(
   stepType: string,
-  availableStepTypes: Set<string>
-): boolean {
-  return BUILT_IN_STEP_TYPES.has(stepType) || availableStepTypes.has(stepType);
+  providersByStepType: Map<string, ConnectorInventoryItem[]>
+): StarterStepAvailabilityState {
+  if (isBuiltInStepType(stepType)) {
+    return "ready";
+  }
+
+  const providers = providersByStepType.get(stepType);
+  if (!providers || providers.length === 0) {
+    return "blocked_by_connector";
+  }
+
+  if (providers.some((provider) => isConnectorReady(provider))) {
+    return "ready";
+  }
+
+  if (
+    providers.some(
+      (provider) =>
+        provider.connector_state.setup.required_setup.length > 0 ||
+        !provider.connector_state.install_validity.valid ||
+        provider.connector_state.trust === "setup_required"
+    )
+  ) {
+    return "blocked_by_setup";
+  }
+
+  return "blocked_by_runtime";
+}
+
+function isBuiltInStepType(stepType: string): boolean {
+  return BUILT_IN_STEP_TYPES.has(stepType);
+}
+
+function isConnectorReady(connector: ConnectorInventoryItem): boolean {
+  return (
+    connector.connector_state.install_validity.valid &&
+    connector.connector_state.runtime.ready &&
+    connector.connector_state.setup.required_setup.length === 0
+  );
 }
