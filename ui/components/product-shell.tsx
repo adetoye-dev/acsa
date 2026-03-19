@@ -86,7 +86,7 @@ export function ProductShell({
         }`}
       >
       <aside
-        className="grid min-h-0 grid-rows-[60px_minmax(0,1fr)_auto] border-r border-black/10 bg-[rgba(255,255,255,0.82)]"
+        className="hidden xl:grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] border-r border-black/10 bg-[rgba(255,255,255,0.82)]"
       >
         <div className={`flex h-[60px] items-center border-b border-black/10 ${collapsed ? "px-3" : "px-4"}`}>
           <Link
