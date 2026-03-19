@@ -21,6 +21,8 @@ import { useEffect, useMemo, useState } from "react";
 
 import { fetchEngineJson } from "../lib/engine-client";
 import {
+  workflowLifecycleLabel,
+  workflowLifecycleTone,
   workflowLastRunLabel,
   workflowReadinessLabel,
   workflowReadinessTone
@@ -171,6 +173,11 @@ function WorkflowRow({ workflow }: { workflow: WorkflowSummary }) {
         <div className="truncate text-sm font-medium text-ink">{workflow.name}</div>
         <div className="mt-1 text-xs text-slate">{workflow.file_name}</div>
         <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span
+            className={`rounded-[8px] px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${workflowLifecycleTone(workflow.workflow_state)}`}
+          >
+            {workflowLifecycleLabel(workflow.workflow_state)}
+          </span>
           <span
             className={`rounded-[8px] px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${workflowReadinessTone(workflow.workflow_state)}`}
           >

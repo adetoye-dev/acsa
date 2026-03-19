@@ -29,6 +29,8 @@ import { fetchEngineJson } from "../lib/engine-client";
 import {
   connectorRuntimeLabel,
   connectorRuntimeTone,
+  connectorSetupLabel,
+  connectorSetupTone,
   connectorTrustLabel,
   connectorValidityLabel
 } from "../lib/product-status";
@@ -303,6 +305,11 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
                             connector.connector_state.install_validity.state
                           )}
                         </span>
+                        <span
+                          className={`rounded-md px-2 py-1 text-[11px] font-medium ${connectorSetupTone(connector.connector_state)}`}
+                        >
+                          {connectorSetupLabel(connector.connector_state)}
+                        </span>
                       </div>
                       <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
                         {connector.type_name}
@@ -392,6 +399,11 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
                     </span>
                   </div>
                   <p className="mt-2 text-sm leading-6 text-slate">{connector.error}</p>
+                  <p
+                    className={`mt-2 inline-flex rounded-md px-2 py-1 text-[11px] font-medium ${connectorSetupTone(connector.connector_state)}`}
+                  >
+                    {connectorSetupLabel(connector.connector_state)}
+                  </p>
                   {connector.provided_step_types.length > 0 ? (
                     <p className="mt-2 text-sm leading-6 text-slate">
                       Steps:{" "}

@@ -108,6 +108,30 @@ export function connectorValidityLabel(state: ConnectorValidityState) {
   return state === "valid" ? "Valid" : "Invalid";
 }
 
+export function connectorSetupLabel(connectorState: ConnectorState) {
+  if (connectorState.setup.required_setup.length === 0) {
+    return "No setup required";
+  }
+
+  return `Setup: ${connectorState.setup.required_setup.join(", ")}`;
+}
+
+export function connectorSetupTone(connectorState: ConnectorState) {
+  return connectorState.setup.required_setup.length === 0
+    ? "bg-black/5 text-slate"
+    : "bg-[#f2ebff] text-[#6b34d7]";
+}
+
+export function workflowLifecycleLabel(workflowState: WorkflowState) {
+  return workflowState.lifecycle === "draft" ? "Draft" : "Saved";
+}
+
+export function workflowLifecycleTone(workflowState: WorkflowState) {
+  return workflowState.lifecycle === "draft"
+    ? "bg-black/5 text-slate"
+    : "bg-white text-slate";
+}
+
 export function workflowReadinessLabel(workflowState: WorkflowState) {
   switch (workflowState.readiness.readiness_state) {
     case "ready":
