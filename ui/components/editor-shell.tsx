@@ -50,6 +50,7 @@ import {
   addStepToWorkflow,
   autoLayoutWorkflow,
   createLocalWorkflowDocument,
+  createLocalWorkflowDocumentFromYaml,
   defaultStepParamsForType,
   defaultTriggerDetailsForType,
   extractTriggerDetails,
@@ -77,6 +78,7 @@ import {
   summarizeWorkflow,
   withStepUpdated
 } from "../lib/workflow-editor";
+import { WORKFLOW_STARTERS } from "../lib/workflow-starters";
 import {
   useWorkflowActions,
   useWorkflowStore,
@@ -107,13 +109,15 @@ type EditorShellProps = {
   embeddedInProductShell?: boolean;
   requestedWorkflowId?: string | null;
   syncRoute?: boolean;
+  starterId?: string | null;
 };
 
 export function EditorShell({
   createDraftOnBoot = false,
   embeddedInProductShell = false,
   requestedWorkflowId = null,
-  syncRoute = false
+  syncRoute = false,
+  starterId = null
 }: EditorShellProps) {
   const router = useRouter();
   const {
@@ -355,10 +359,17 @@ export function EditorShell({
       isBooting: true
     });
     try {
-      const [catalog, inventory, tasks] = await Promise.all([
+      const starter = starterId
+        ? WORKFLOW_STARTERS.find((candidate) => candidate.id === starterId) ?? null
+        : null;
+      const starterYamlPromise = starter
+        ? fetchStarterYaml(starter.yamlPath).catch(() => null)
+        : Promise.resolve(null);
+      const [catalog, inventory, tasks, starterYaml] = await Promise.all([
         fetchEngineJson<NodeCatalogResponse>("/api/node-catalog"),
         fetchEngineJson<WorkflowInventoryResponse>("/api/workflows"),
-        fetchEngineJson<HumanTaskResponse>("/human-tasks")
+        fetchEngineJson<HumanTaskResponse>("/human-tasks"),
+        starterYamlPromise
       ]);
 
       const persistedWorkflows = mergeWorkflowSummaries({}, inventory.workflows);
@@ -373,8 +384,13 @@ export function EditorShell({
 
       if (createDraftOnBoot && !hasCreatedDraftOnBoot.current) {
         hasCreatedDraftOnBoot.current = true;
-        const workflowId = nextDraftWorkflowId(persistedWorkflows);
-        const document = persistDocumentLayout(createLocalWorkflowDocument(workflowId));
+        const workflowId =
+          starter && starterYaml ? starter.id : nextDraftWorkflowId(persistedWorkflows);
+        const document = persistDocumentLayout(
+          starter && starterYaml
+            ? createLocalWorkflowDocumentFromYaml(workflowId, starterYaml)
+            : createLocalWorkflowDocument(workflowId)
+        );
         setDocuments((current) => ({
           ...current,
           [document.id]: document
@@ -382,7 +398,9 @@ export function EditorShell({
         setWorkflows((current) => upsertWorkflowSummary(current, document.summary));
         patchWorkflowState({
           activeWorkflowId: document.id,
-          lastAction: `Created ${document.summary.file_name} draft`,
+          lastAction: starter
+            ? `Loaded ${starter.name} starter draft`
+            : `Created ${document.summary.file_name} draft`,
           selectedNodeId: TRIGGER_NODE_ID
         });
         applyInspectorDraftState(document, TRIGGER_NODE_ID);
@@ -419,6 +437,14 @@ export function EditorShell({
     } finally {
       patchWorkflowState({ isBooting: false });
     }
+  }
+
+  async function fetchStarterYaml(yamlPath: string) {
+    const response = await fetch(yamlPath);
+    if (!response.ok) {
+      throw new Error(`Failed to load starter workflow from ${yamlPath}`);
+    }
+    return response.text();
   }
 
   async function loadWorkflowDocument(
