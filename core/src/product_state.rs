@@ -19,7 +19,9 @@ use std::collections::{BTreeSet, HashMap};
 use serde::Serialize;
 
 use crate::{
-    connectors::{wasm_connectors_enabled, ConnectorRuntime, DiscoveredConnector, InvalidConnector},
+    connectors::{
+        wasm_connectors_enabled, ConnectorRuntime, DiscoveredConnector, InvalidConnector,
+    },
     models::Workflow,
     storage::RunRecord,
 };
@@ -242,10 +244,7 @@ pub fn workflow_readiness_state(
 pub fn connector_state_from_facts(facts: ConnectorStateFacts) -> ConnectorState {
     ConnectorState {
         install_validity: facts.install_validity.clone(),
-        runtime: ConnectorRuntimeState {
-            mode: facts.runtime_mode,
-            ready: facts.runtime_ready,
-        },
+        runtime: ConnectorRuntimeState { mode: facts.runtime_mode, ready: facts.runtime_ready },
         setup: ConnectorSetupState { required_setup: facts.required_setup.clone() },
         trust: connector_trust_from_facts(&facts),
     }

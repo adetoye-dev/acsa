@@ -1416,9 +1416,7 @@ mod tests {
     #[tokio::test]
     async fn latest_runs_for_workflows_is_targeted_and_deterministic() {
         let temp_dir = std::env::temp_dir().join(format!("acsa-storage-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(&temp_dir)
-            .await
-            .expect("temp dir should be created");
+        tokio::fs::create_dir_all(&temp_dir).await.expect("temp dir should be created");
         let db_path = temp_dir.join("runs.sqlite");
         let store = RunStore::connect(&db_path).await.expect("store should connect");
 
@@ -1468,17 +1466,13 @@ mod tests {
         assert_eq!(runs[0].id, "target-rich");
         assert_eq!(runs[0].workflow_name, "target workflow");
 
-        tokio::fs::remove_dir_all(&temp_dir)
-            .await
-            .expect("temp dir should be removed");
+        tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
     }
 
     #[tokio::test]
     async fn latest_runs_for_workflows_treats_null_finished_at_like_started_at() {
         let temp_dir = std::env::temp_dir().join(format!("acsa-storage-{}", Uuid::new_v4()));
-        tokio::fs::create_dir_all(&temp_dir)
-            .await
-            .expect("temp dir should be created");
+        tokio::fs::create_dir_all(&temp_dir).await.expect("temp dir should be created");
         let db_path = temp_dir.join("runs.sqlite");
         let store = RunStore::connect(&db_path).await.expect("store should connect");
 
@@ -1512,8 +1506,6 @@ mod tests {
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].id, "run-z");
 
-        tokio::fs::remove_dir_all(&temp_dir)
-            .await
-            .expect("temp dir should be removed");
+        tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
     }
 }
