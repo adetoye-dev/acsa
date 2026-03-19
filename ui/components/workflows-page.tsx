@@ -20,6 +20,11 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { fetchEngineJson } from "../lib/engine-client";
+import {
+  workflowLastRunLabel,
+  workflowReadinessLabel,
+  workflowReadinessTone
+} from "../lib/product-status";
 import type { InvalidWorkflowFile, WorkflowSummary } from "../lib/workflow-editor";
 
 type WorkflowInventoryResponse = {
@@ -165,6 +170,16 @@ function WorkflowRow({ workflow }: { workflow: WorkflowSummary }) {
       <div className="min-w-0">
         <div className="truncate text-sm font-medium text-ink">{workflow.name}</div>
         <div className="mt-1 text-xs text-slate">{workflow.file_name}</div>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span
+            className={`rounded-[8px] px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${workflowReadinessTone(workflow.workflow_state)}`}
+          >
+            {workflowReadinessLabel(workflow.workflow_state)}
+          </span>
+          <span className="text-[11px] text-slate/70">
+            {workflowLastRunLabel(workflow.workflow_state)}
+          </span>
+        </div>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-slate/62">
           <span>{workflow.step_count} steps</span>
           <span className="text-slate/35">•</span>

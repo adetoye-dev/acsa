@@ -23,11 +23,15 @@ import {
   type ConnectorInventoryResponse,
   type ConnectorRuntime,
   type ConnectorScaffoldResponse,
-  type ConnectorTestResponse,
-  connectorRuntimeLabel,
-  connectorRuntimeTone
+  type ConnectorTestResponse
 } from "../lib/connectors";
 import { fetchEngineJson } from "../lib/engine-client";
+import {
+  connectorRuntimeLabel,
+  connectorRuntimeTone,
+  connectorTrustLabel,
+  connectorValidityLabel
+} from "../lib/product-status";
 import { slugifyIdentifier } from "../lib/workflow-editor";
 
 type ConnectorManagerProps = {
@@ -283,12 +287,22 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
                         <h3 className="font-display text-xl text-ink">{connector.name}</h3>
-                        <span className={`rounded-md px-2 py-1 font-mono text-[11px] uppercase tracking-[0.16em] ${connectorRuntimeTone(connector)}`}>
-                          {connectorRuntimeLabel(connector.runtime)}
+                        <span
+                          className={`rounded-md px-2 py-1 font-mono text-[11px] uppercase tracking-[0.16em] ${connectorRuntimeTone(connector.connector_state)}`}
+                        >
+                          {connectorRuntimeLabel(connector.connector_state.runtime.mode)}
                         </span>
                         {connector.version ? (
                           <span className="ui-badge font-mono">{connector.version}</span>
                         ) : null}
+                        <span className="ui-badge">
+                          {connectorTrustLabel(connector.connector_state.trust)}
+                        </span>
+                        <span className="ui-badge">
+                          {connectorValidityLabel(
+                            connector.connector_state.install_validity.state
+                          )}
+                        </span>
                       </div>
                       <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
                         {connector.type_name}
@@ -308,6 +322,18 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
                     <p>Entry: <code className="rounded bg-sand px-1.5 py-0.5 font-mono text-ink">{connector.entry}</code></p>
                     <p>Inputs: <span className="font-mono text-ink">{connector.inputs.join(", ") || "none"}</span></p>
                     <p>Outputs: <span className="font-mono text-ink">{connector.outputs.join(", ") || "none"}</span></p>
+                    <p>
+                      Steps:{" "}
+                      <span className="font-mono text-ink">
+                        {connector.provided_step_types.join(", ") || connector.type_name}
+                      </span>
+                    </p>
+                    <p>
+                      Used by:{" "}
+                      <span className="font-mono text-ink">
+                        {connector.used_by_workflows.join(", ") || "No workflows yet"}
+                      </span>
+                    </p>
                     <p>Manifest: <code className="rounded bg-sand px-1.5 py-0.5 font-mono text-[11px] text-ink">{connector.manifest_path}</code></p>
                   </div>
 
@@ -361,9 +387,27 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
                 >
                   <div className="flex items-center justify-between gap-3">
                     <div className="font-semibold text-ink">{connector.id}</div>
-                    <span className="ui-badge font-mono">invalid</span>
+                    <span className="ui-badge font-mono">
+                      {connectorValidityLabel(connector.connector_state.install_validity.state)}
+                    </span>
                   </div>
                   <p className="mt-2 text-sm leading-6 text-slate">{connector.error}</p>
+                  {connector.provided_step_types.length > 0 ? (
+                    <p className="mt-2 text-sm leading-6 text-slate">
+                      Steps:{" "}
+                      <span className="font-mono text-ink">
+                        {connector.provided_step_types.join(", ")}
+                      </span>
+                    </p>
+                  ) : null}
+                  {connector.used_by_workflows.length > 0 ? (
+                    <p className="mt-1 text-sm leading-6 text-slate">
+                      Used by:{" "}
+                      <span className="font-mono text-ink">
+                        {connector.used_by_workflows.join(", ")}
+                      </span>
+                    </p>
+                  ) : null}
                   {connector.manifest_path ? (
                     <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
                       {connector.manifest_path}

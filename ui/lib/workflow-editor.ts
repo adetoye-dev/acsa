@@ -22,6 +22,8 @@ import {
 } from "@xyflow/react";
 import YAML from "yaml";
 
+import type { WorkflowState } from "./product-status";
+
 export const ENGINE_PROXY_BASE = "/engine";
 export const EDGE_STROKE = "rgba(121, 141, 242, 0.68)";
 export const TRIGGER_EDGE_STROKE = "rgba(244, 166, 97, 0.58)";
@@ -67,6 +69,7 @@ export type WorkflowSummary = {
   name: string;
   step_count: number;
   trigger_type: string;
+  workflow_state: WorkflowState;
 };
 
 export type InvalidWorkflowFile = {
@@ -421,15 +424,33 @@ export function summarizeWorkflow(
   workflow: WorkflowDefinition,
   options?: { localDraft?: boolean }
 ): WorkflowSummary {
+  const requiredStepTypes = workflow.steps
+    .filter((step) => !isBuiltInStepType(step.type))
+    .map((step) => step.type);
+
   return {
     description: describeWorkflow(workflow),
     file_name: `${workflowId}.yaml`,
-    has_connector_steps: workflow.steps.some((step) => !isBuiltInStepType(step.type)),
+    has_connector_steps: requiredStepTypes.length > 0,
     id: workflowId,
     ...(options?.localDraft ? { local_draft: true } : {}),
     name: workflow.name,
     step_count: workflow.steps.length,
-    trigger_type: workflow.trigger.type
+    trigger_type: workflow.trigger.type,
+    workflow_state: {
+      lifecycle: options?.localDraft ? "draft" : "saved",
+      readiness: {
+        connector_requirements: {
+          required_step_types: requiredStepTypes
+        },
+        readiness_state: "ready",
+        validation_state: "valid"
+      },
+      telemetry: {
+        last_run_at: null,
+        last_run_status: null
+      }
+    }
   };
 }
 

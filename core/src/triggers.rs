@@ -269,11 +269,14 @@ struct ConnectorView {
     notes: Vec<String>,
     outputs: Vec<String>,
     readme_path: Option<String>,
+    required_by_templates: Vec<String>,
     runtime: String,
     runtime_ready: bool,
     runtime_status: String,
     sample_input_path: Option<String>,
+    provided_step_types: Vec<String>,
     type_name: String,
+    used_by_workflows: Vec<String>,
     version: Option<String>,
 }
 
@@ -284,6 +287,9 @@ struct InvalidConnectorView {
     error: String,
     id: String,
     manifest_path: Option<String>,
+    provided_step_types: Vec<String>,
+    required_by_templates: Vec<String>,
+    used_by_workflows: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -616,7 +622,7 @@ async fn list_node_catalog(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn list_connectors(State(state): State<AppState>) -> impl IntoResponse {
-    match connector_inventory(&state.connectors_dir) {
+    match connector_inventory(&state.connectors_dir, &state.workflows_dir) {
         Ok(inventory) => (StatusCode::OK, Json(json!(inventory))),
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
@@ -639,7 +645,8 @@ async fn create_connector(
         request.type_id.trim(),
         runtime,
     ) {
-        Ok(connector_dir) => match connector_inventory(&state.connectors_dir) {
+        Ok(connector_dir) => match connector_inventory(&state.connectors_dir, &state.workflows_dir)
+        {
             Ok(inventory) => match inventory
                 .connectors
                 .into_iter()
@@ -715,7 +722,7 @@ async fn test_connector(
         Ok(output) => (
             StatusCode::OK,
             Json(json!(ConnectorTestResponse {
-                connector: connector_view(&connector),
+                connector: connector_view(&connector, &HashMap::new()),
                 inputs,
                 output,
                 params,
@@ -1415,14 +1422,62 @@ async fn rename_workflow_document(
     })
 }
 
-fn connector_inventory(connectors_dir: &Path) -> Result<ConnectorInventoryResponse, TriggerError> {
+fn connector_inventory(
+    connectors_dir: &Path,
+    workflows_dir: &Path,
+) -> Result<ConnectorInventoryResponse, TriggerError> {
     let inspection = inspect_connectors(connectors_dir)?;
+    let workflow_dependencies = connector_usage_by_workflow(workflows_dir)?;
     Ok(ConnectorInventoryResponse {
-        connectors: inspection.connectors.iter().map(connector_view).collect(),
+        connectors: inspection
+            .connectors
+            .iter()
+            .map(|connector| connector_view(connector, &workflow_dependencies))
+            .collect(),
         connectors_dir: connectors_dir.display().to_string(),
-        invalid_connectors: inspection.invalid.iter().map(invalid_connector_view).collect(),
+        invalid_connectors: inspection
+            .invalid
+            .iter()
+            .map(|connector| invalid_connector_view(connector, &workflow_dependencies))
+            .collect(),
         wasm_enabled: wasm_connectors_enabled(),
     })
+}
+
+fn connector_usage_by_workflow(
+    workflows_dir: &Path,
+) -> Result<HashMap<String, Vec<String>>, TriggerError> {
+    let mut usage = HashMap::<String, HashSet<String>>::new();
+
+    for entry in fs::read_dir(workflows_dir)?.collect::<Result<Vec<_>, _>>()? {
+        let path = entry.path();
+        if !matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("yaml" | "yml")
+        ) {
+            continue;
+        }
+
+        let Ok(yaml) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(workflow) = parse_workflow_yaml(&yaml) else {
+            continue;
+        };
+        let requirements = workflow_connector_requirements(&workflow);
+        for type_name in requirements.required_step_types {
+            usage.entry(type_name).or_default().insert(workflow.name.clone());
+        }
+    }
+
+    Ok(usage
+        .into_iter()
+        .map(|(type_name, workflows)| {
+            let mut used_by_workflows = workflows.into_iter().collect::<Vec<_>>();
+            used_by_workflows.sort();
+            (type_name, used_by_workflows)
+        })
+        .collect())
 }
 
 fn node_catalog(
@@ -1607,12 +1662,16 @@ fn node_catalog(
     ))
 }
 
-fn connector_view(connector: &crate::connectors::DiscoveredConnector) -> ConnectorView {
+fn connector_view(
+    connector: &crate::connectors::DiscoveredConnector,
+    workflow_dependencies: &HashMap<String, Vec<String>>,
+) -> ConnectorView {
     let state = connector_state(connector);
     let readme_path = connector.connector_dir.join("README.md");
     let sample_input_path = connector.connector_dir.join("sample-input.json");
     let runtime = connector_runtime_name(connector.manifest.runtime).to_string();
     let runtime_ready = state.runtime.ready;
+    let provided_step_types = vec![connector.manifest.type_id.clone()];
     let mut notes = Vec::new();
     if connector.manifest.runtime == ConnectorRuntime::Wasm && !runtime_ready {
         notes.push("Enable ACSA_ENABLE_WASM_CONNECTORS=1 to run this connector.".to_string());
@@ -1642,6 +1701,7 @@ fn connector_view(connector: &crate::connectors::DiscoveredConnector) -> Connect
         notes,
         outputs: connector.manifest.outputs.clone(),
         readme_path: readme_path.exists().then(|| readme_path.display().to_string()),
+        required_by_templates: Vec::new(),
         runtime,
         runtime_ready,
         runtime_status: if runtime_ready {
@@ -1652,13 +1712,29 @@ fn connector_view(connector: &crate::connectors::DiscoveredConnector) -> Connect
         sample_input_path: sample_input_path
             .exists()
             .then(|| sample_input_path.display().to_string()),
+        provided_step_types: provided_step_types.clone(),
         type_name: connector.manifest.type_id.clone(),
+        used_by_workflows: workflow_dependencies
+            .get(&connector.manifest.type_id)
+            .cloned()
+            .unwrap_or_default(),
         version: connector.manifest.version.clone(),
     }
 }
 
-fn invalid_connector_view(connector: &crate::connectors::InvalidConnector) -> InvalidConnectorView {
+fn invalid_connector_view(
+    connector: &crate::connectors::InvalidConnector,
+    workflow_dependencies: &HashMap<String, Vec<String>>,
+) -> InvalidConnectorView {
     let state = invalid_connector_state(connector);
+    let provided_step_types = connector.attempted_type_id.clone().into_iter().collect::<Vec<_>>();
+    let mut used_by_workflows = provided_step_types
+        .iter()
+        .flat_map(|type_name| workflow_dependencies.get(type_name).cloned().into_iter())
+        .flatten()
+        .collect::<Vec<_>>();
+    used_by_workflows.sort();
+    used_by_workflows.dedup();
     InvalidConnectorView {
         connector_dir: state.install_validity.connector_dir.clone(),
         connector_state: state,
@@ -1672,6 +1748,9 @@ fn invalid_connector_view(connector: &crate::connectors::InvalidConnector) -> In
             .map(|value| value.to_string_lossy().to_string())
             .unwrap_or_else(|| "connector".to_string()),
         manifest_path: connector.manifest_path.as_ref().map(|path| path.display().to_string()),
+        provided_step_types: provided_step_types.clone(),
+        required_by_templates: Vec::new(),
+        used_by_workflows,
     }
 }
 
@@ -2431,7 +2510,7 @@ pub enum TriggerError {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, HashMap};
 
     use axum::http::{header::AUTHORIZATION, HeaderMap, HeaderValue};
     use chrono::Utc;
@@ -2439,12 +2518,13 @@ mod tests {
     use serde_yaml::Value as YamlValue;
 
     use super::{
-        authenticate_webhook, build_workflow_summary, compute_signature, connector_view,
-        create_workflow_document, cron_schedule, invalid_connector_view,
+        authenticate_webhook, build_workflow_summary, compute_signature, connector_inventory,
+        connector_view, create_workflow_document, cron_schedule, invalid_connector_view,
         parse_workflow_document_state, read_workflow_document, rename_workflow_document,
-        request_has_engine_token, run_view, serialize_workflow_yaml, slugify_workflow_name,
-        validate_secret_value, workflow_file_path, workflow_inventory, CreateWorkflowRequest,
-        RenameWorkflowRequest, TriggerError, WebhookSignatureAuth, WebhookWorkflow,
+        request_has_engine_token, run_view, save_workflow_document, serialize_workflow_yaml,
+        slugify_workflow_name, validate_secret_value, workflow_file_path, workflow_inventory,
+        CreateWorkflowRequest, RenameWorkflowRequest, TriggerError, WebhookSignatureAuth,
+        WebhookWorkflow,
     };
     use crate::{
         engine::compile_workflow,
@@ -3047,6 +3127,262 @@ steps:
     }
 
     #[test]
+    fn workflow_inventory_exposes_product_state() {
+        let temp_dir = write_temp_directory("workflow-inventory-product-state");
+        let workflows_dir = temp_dir.join("workflows");
+        let connectors_dir = temp_dir.join("connectors");
+        std::fs::create_dir_all(&workflows_dir).expect("workflows dir should be created");
+        std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
+
+        std::fs::write(
+            workflows_dir.join("customer-intake.yaml"),
+            r#"
+version: v1
+name: customer intake
+trigger:
+  type: manual
+steps:
+  - id: start
+    type: constant
+    params:
+      value: true
+    next: []
+  - id: summarize
+    type: report-summary
+    params: {}
+    next: []
+"#,
+        )
+        .expect("workflow should be written");
+
+        let connector_dir = connectors_dir.join("report-summary");
+        std::fs::create_dir_all(&connector_dir).expect("connector dir should be created");
+        std::fs::write(
+            connector_dir.join("manifest.json"),
+            r#"{
+  "entry": "main.py",
+  "inputs": ["payload"],
+  "limits": { "timeout": 1000 },
+  "name": "Report Summary",
+  "outputs": ["summary"],
+  "runtime": "process",
+  "type": "report-summary"
+}"#,
+        )
+        .expect("manifest should be written");
+        std::fs::write(connector_dir.join("main.py"), "print('{}')")
+            .expect("script should be written");
+
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let (inventory, saved_document, renamed_document) = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            let run = store
+                .start_run(
+                    "customer intake",
+                    "sha256:exact-workflow",
+                    "exact workflow snapshot",
+                    Some("exact editor snapshot"),
+                    &serde_json::json!({"value": true}),
+                )
+                .await
+                .expect("run should start");
+            store.complete_run_success(&run.id).await.expect("run should complete");
+
+            let inventory = workflow_inventory(&store, &connectors_dir, &workflows_dir)
+                .await
+                .expect("inventory should build");
+
+            let saved_document = save_workflow_document(
+                &store,
+                &connectors_dir,
+                &workflows_dir,
+                "customer-intake",
+                r#"
+version: v1
+name: customer intake
+trigger:
+  type: manual
+steps:
+  - id: start
+    type: constant
+    params:
+      value: true
+    next: []
+  - id: summarize
+    type: report-summary
+    params: {}
+    next: []
+"#,
+            )
+            .await
+            .expect("workflow should save");
+
+            let renamed_document = rename_workflow_document(
+                &store,
+                &connectors_dir,
+                &workflows_dir,
+                "customer-intake",
+                RenameWorkflowRequest {
+                    name: "customer intake".to_string(),
+                    target_id: "customer-intake-renamed".to_string(),
+                    yaml: None,
+                },
+            )
+            .await
+            .expect("workflow should rename");
+
+            (inventory, saved_document, renamed_document)
+        });
+
+        let inventory_summary = inventory
+            .workflows
+            .into_iter()
+            .find(|workflow| workflow.id == "customer-intake")
+            .expect("workflow summary should exist");
+        let inventory_payload =
+            serde_json::to_value(inventory_summary).expect("summary should serialize");
+        let saved_payload =
+            serde_json::to_value(saved_document).expect("saved document should serialize");
+        let renamed_payload =
+            serde_json::to_value(renamed_document).expect("renamed document should serialize");
+
+        assert_eq!(inventory_payload["workflow_state"]["lifecycle"], json!("saved"));
+        assert_eq!(
+            inventory_payload["workflow_state"]["readiness"]["connector_requirements"]
+                ["required_step_types"],
+            json!(["report-summary"])
+        );
+        assert_eq!(
+            inventory_payload["workflow_state"]["telemetry"]["last_run_status"],
+            json!("success")
+        );
+        assert_eq!(
+            saved_payload["summary"]["workflow_state"]["readiness"]["connector_requirements"]
+                ["required_step_types"],
+            json!(["report-summary"])
+        );
+        assert_eq!(
+            saved_payload["summary"]["workflow_state"]["telemetry"]["last_run_status"],
+            json!("success")
+        );
+        assert_eq!(
+            renamed_payload["summary"]["workflow_state"]["readiness"]["connector_requirements"]
+                ["required_step_types"],
+            json!(["report-summary"])
+        );
+        assert_eq!(
+            renamed_payload["summary"]["workflow_state"]["telemetry"]["last_run_status"],
+            json!("success")
+        );
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn connector_inventory_exposes_product_state() {
+        let temp_dir = write_temp_directory("connector-inventory-product-state");
+        let workflows_dir = temp_dir.join("workflows");
+        let connectors_dir = temp_dir.join("connectors");
+        std::fs::create_dir_all(&workflows_dir).expect("workflows dir should be created");
+        std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
+
+        std::fs::write(
+            workflows_dir.join("customer-intake.yaml"),
+            r#"
+version: v1
+name: customer intake
+trigger:
+  type: manual
+steps:
+  - id: start
+    type: constant
+    params:
+      value: true
+    next: []
+  - id: summarize
+    type: report-summary
+    params: {}
+    next: []
+  - id: broken
+    type: broken-summary
+    params: {}
+    next: []
+"#,
+        )
+        .expect("workflow should be written");
+
+        let valid_connector_dir = connectors_dir.join("report-summary");
+        std::fs::create_dir_all(&valid_connector_dir).expect("valid connector dir should exist");
+        std::fs::write(
+            valid_connector_dir.join("manifest.json"),
+            r#"{
+  "entry": "main.py",
+  "inputs": ["payload"],
+  "limits": { "timeout": 1000 },
+  "name": "Report Summary",
+  "outputs": ["summary"],
+  "runtime": "process",
+  "type": "report-summary"
+}"#,
+        )
+        .expect("valid manifest should be written");
+        std::fs::write(valid_connector_dir.join("main.py"), "print('{}')")
+            .expect("valid connector script should exist");
+
+        let invalid_connector_dir = connectors_dir.join("broken-summary");
+        std::fs::create_dir_all(&invalid_connector_dir)
+            .expect("invalid connector dir should exist");
+        std::fs::write(
+            invalid_connector_dir.join("manifest.json"),
+            r#"{
+  "entry": "main.py",
+  "inputs": ["payload"],
+  "name": "Broken Summary",
+  "outputs": ["summary"],
+  "runtime": "process",
+  "type": "broken-summary"
+}"#,
+        )
+        .expect("invalid manifest should be written");
+        std::fs::write(invalid_connector_dir.join("main.py"), "print('{}')")
+            .expect("invalid connector script should exist");
+
+        let inventory = connector_inventory(&connectors_dir, &workflows_dir)
+            .expect("connector inventory should build");
+        let valid_payload = serde_json::to_value(
+            inventory
+                .connectors
+                .iter()
+                .find(|connector| connector.type_name == "report-summary")
+                .expect("valid connector should exist"),
+        )
+        .expect("valid connector should serialize");
+        let invalid_payload = serde_json::to_value(
+            inventory
+                .invalid_connectors
+                .iter()
+                .find(|connector| connector.id == "broken-summary")
+                .expect("invalid connector should exist"),
+        )
+        .expect("invalid connector should serialize");
+
+        assert_eq!(valid_payload["provided_step_types"], json!(["report-summary"]));
+        assert_eq!(valid_payload["used_by_workflows"], json!(["customer intake"]));
+        assert_eq!(valid_payload["required_by_templates"], json!([]));
+        assert_eq!(valid_payload["connector_state"]["install_validity"]["state"], json!("valid"));
+        assert_eq!(invalid_payload["provided_step_types"], json!(["broken-summary"]));
+        assert_eq!(invalid_payload["used_by_workflows"], json!(["customer intake"]));
+        assert_eq!(invalid_payload["required_by_templates"], json!([]));
+        assert_eq!(
+            invalid_payload["connector_state"]["install_validity"]["state"],
+            json!("invalid")
+        );
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
     fn create_workflow_succeeds_when_post_write_summary_enrichment_fails() {
         let temp_dir = write_temp_directory("workflow-create-summary-fallback");
         let workflows_dir = temp_dir.join("workflows");
@@ -3408,7 +3744,7 @@ steps:
                 .expect("manifest should canonicalize"),
         };
 
-        let view = connector_view(&connector);
+        let view = connector_view(&connector, &HashMap::new());
         let payload = serde_json::to_value(view).expect("connector view should serialize");
 
         assert_eq!(payload["connector_state"]["install_validity"]["valid"], json!(true));
@@ -3441,13 +3777,16 @@ steps:
             serde_json::to_value(wasm_trusted).expect("connector state should serialize");
         assert_eq!(wasm_trusted_payload["trust"], json!("trusted"));
 
-        let invalid_view = invalid_connector_view(&crate::connectors::InvalidConnector {
-            connector_dir: std::fs::canonicalize(&connector_dir)
-                .expect("connector dir should canonicalize"),
-            error: "manifest failed validation".to_string(),
-            attempted_type_id: None,
-            manifest_path: Some(manifest_path.clone()),
-        });
+        let invalid_view = invalid_connector_view(
+            &crate::connectors::InvalidConnector {
+                connector_dir: std::fs::canonicalize(&connector_dir)
+                    .expect("connector dir should canonicalize"),
+                error: "manifest failed validation".to_string(),
+                attempted_type_id: None,
+                manifest_path: Some(manifest_path.clone()),
+            },
+            &HashMap::new(),
+        );
         let invalid_payload =
             serde_json::to_value(invalid_view).expect("invalid connector view should serialize");
         assert_eq!(

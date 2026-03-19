@@ -551,7 +551,21 @@ function buildSnapshotSummary(
     id: workflowId,
     name: workflowName,
     step_count: 0,
-    trigger_type: "manual"
+    trigger_type: "manual",
+    workflow_state: {
+      lifecycle: "saved",
+      readiness: {
+        connector_requirements: {
+          required_step_types: []
+        },
+        readiness_state: "ready",
+        validation_state: "valid"
+      },
+      telemetry: {
+        last_run_at: null,
+        last_run_status: null
+      }
+    }
   };
 }
 
