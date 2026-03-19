@@ -348,6 +348,7 @@ struct RunView {
     run_provenance: ProductRunProvenance,
     started_at: i64,
     status: String,
+    workflow_revision: Option<String>,
     workflow_name: String,
 }
 
@@ -2185,6 +2186,7 @@ fn run_view(run: RunRecord) -> RunView {
         run_provenance,
         started_at: run.started_at,
         status: run.status,
+        workflow_revision: run.workflow_revision,
         workflow_name: run.workflow_name,
     }
 }
@@ -2735,6 +2737,7 @@ steps:
             let run = store
                 .start_run(
                     "customer intake",
+                    "sha256:exact-workflow",
                     "exact workflow snapshot",
                     Some("exact editor snapshot"),
                     &serde_json::json!({"value": true}),
@@ -2796,6 +2799,7 @@ steps:
             let run = store
                 .start_run(
                     "customer intake",
+                    "sha256:exact-workflow",
                     "exact workflow snapshot",
                     Some("exact editor snapshot"),
                     &serde_json::json!({"value": true}),
@@ -3123,6 +3127,7 @@ steps:
             let run = store
                 .start_run(
                     "duplicate workflow",
+                    "sha256:exact-workflow",
                     "exact workflow snapshot",
                     Some("exact editor snapshot"),
                     &serde_json::json!({"value": true}),
@@ -3167,6 +3172,7 @@ steps:
                 started_at: 10,
                 finished_at: Some(11),
                 error_message: Some("boom".to_string()),
+                workflow_revision: Some("sha256:older".to_string()),
                 editor_snapshot: None,
                 workflow_snapshot: Some("saved workflow".to_string()),
                 initial_payload: None,
@@ -3179,6 +3185,7 @@ steps:
                 started_at: 20,
                 finished_at: Some(21),
                 error_message: None,
+                workflow_revision: Some("sha256:newer".to_string()),
                 editor_snapshot: None,
                 workflow_snapshot: Some("saved workflow".to_string()),
                 initial_payload: None,
@@ -3201,6 +3208,7 @@ steps:
                 started_at: 42,
                 finished_at: Some(43),
                 error_message: Some("older run".to_string()),
+                workflow_revision: Some("sha256:run-a".to_string()),
                 editor_snapshot: None,
                 workflow_snapshot: None,
                 initial_payload: None,
@@ -3213,6 +3221,7 @@ steps:
                 started_at: 42,
                 finished_at: Some(44),
                 error_message: None,
+                workflow_revision: Some("sha256:run-b".to_string()),
                 editor_snapshot: Some("editor snapshot".to_string()),
                 workflow_snapshot: Some("workflow snapshot".to_string()),
                 initial_payload: None,
@@ -3465,6 +3474,7 @@ steps:
             started_at: 10,
             finished_at: None,
             error_message: None,
+            workflow_revision: Some("sha256:exact".to_string()),
             editor_snapshot: Some("exact editor snapshot".to_string()),
             workflow_snapshot: None,
             initial_payload: None,
@@ -3472,6 +3482,7 @@ steps:
         });
         let exact_payload = serde_json::to_value(exact).expect("run view should serialize");
         assert_eq!(exact_payload["run_provenance"]["mode"], json!("exact"));
+        assert_eq!(exact_payload["workflow_revision"], json!("sha256:exact"));
 
         let fallback = run_view(RunRecord {
             id: "run-fallback".to_string(),
@@ -3480,6 +3491,7 @@ steps:
             started_at: 20,
             finished_at: None,
             error_message: None,
+            workflow_revision: Some("sha256:fallback".to_string()),
             editor_snapshot: None,
             workflow_snapshot: Some("saved workflow snapshot".to_string()),
             initial_payload: None,
@@ -3487,6 +3499,7 @@ steps:
         });
         let fallback_payload = serde_json::to_value(fallback).expect("run view should serialize");
         assert_eq!(fallback_payload["run_provenance"]["mode"], json!("fallback"));
+        assert_eq!(fallback_payload["workflow_revision"], json!("sha256:fallback"));
     }
 
     #[test]
@@ -3669,6 +3682,7 @@ steps:
             let run = store
                 .start_run(
                     "customer intake",
+                    "sha256:exact-workflow",
                     "exact workflow snapshot",
                     Some("exact editor snapshot"),
                     &serde_json::json!({"value": true}),

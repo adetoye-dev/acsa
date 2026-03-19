@@ -164,6 +164,17 @@ Returns:
 - run metadata
 - step attempts with input and output payloads
 - related human tasks
+- persisted run snapshots and revision metadata
+
+Snapshot semantics:
+
+- `run.workflow_revision` is the saved-YAML revision identity for the run, currently a `sha256:` hash.
+- `workflow_snapshot` stores the exact executed workflow artifact.
+  - New runs persist YAML here.
+  - Older runs may still contain legacy JSON snapshots.
+- `editor_snapshot` is display-only historical editor/UI state.
+  - It is present when Acsa has real historical editor state.
+  - It is absent for runs that only have execution-truth snapshots.
 
 ### `GET /api/runs/{run_id}/logs`
 

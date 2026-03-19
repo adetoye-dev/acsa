@@ -70,6 +70,7 @@ impl RunStore {
     pub async fn start_run(
         &self,
         workflow_name: &str,
+        workflow_revision: &str,
         workflow_snapshot: &str,
         editor_snapshot: Option<&str>,
         initial_payload: &Value,
@@ -84,6 +85,7 @@ impl RunStore {
             initial_payload: Some(serde_json::to_string(initial_payload)?),
             state_json: None,
             editor_snapshot: editor_snapshot.map(str::to_string),
+            workflow_revision: Some(workflow_revision.to_string()),
             workflow_snapshot: Some(workflow_snapshot.to_string()),
         };
 
@@ -96,12 +98,13 @@ impl RunStore {
               started_at,
               finished_at,
               error_message,
+              workflow_revision,
               editor_snapshot,
               workflow_snapshot,
               initial_payload,
               state_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(&record.id)
@@ -110,6 +113,7 @@ impl RunStore {
         .bind(record.started_at)
         .bind(record.finished_at)
         .bind(&record.error_message)
+        .bind(&record.workflow_revision)
         .bind(&record.editor_snapshot)
         .bind(&record.workflow_snapshot)
         .bind(&record.initial_payload)
@@ -123,7 +127,7 @@ impl RunStore {
     pub async fn get_run(&self, run_id: &str) -> Result<RunRecord, StorageError> {
         let row = sqlx::query(
             r#"
-            SELECT id, workflow_name, status, started_at, finished_at, error_message, editor_snapshot, workflow_snapshot, initial_payload, state_json
+            SELECT id, workflow_name, status, started_at, finished_at, error_message, workflow_revision, editor_snapshot, workflow_snapshot, initial_payload, state_json
             FROM runs
             WHERE id = ?
             "#,
@@ -456,7 +460,7 @@ impl RunStore {
         }
 
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "SELECT id, workflow_name, status, started_at, finished_at, error_message, editor_snapshot, workflow_snapshot, initial_payload, state_json FROM (SELECT id, workflow_name, status, started_at, finished_at, error_message, editor_snapshot, workflow_snapshot, initial_payload, state_json, ROW_NUMBER() OVER (PARTITION BY workflow_name ORDER BY started_at DESC, COALESCE(finished_at, started_at) DESC, workflow_snapshot IS NOT NULL DESC, editor_snapshot IS NOT NULL DESC, state_json IS NOT NULL DESC, id DESC) AS row_number FROM runs WHERE workflow_name IN (",
+            "SELECT id, workflow_name, status, started_at, finished_at, error_message, workflow_revision, editor_snapshot, workflow_snapshot, initial_payload, state_json FROM (SELECT id, workflow_name, status, started_at, finished_at, error_message, workflow_revision, editor_snapshot, workflow_snapshot, initial_payload, state_json, ROW_NUMBER() OVER (PARTITION BY workflow_name ORDER BY started_at DESC, COALESCE(finished_at, started_at) DESC, workflow_snapshot IS NOT NULL DESC, editor_snapshot IS NOT NULL DESC, state_json IS NOT NULL DESC, id DESC) AS row_number FROM runs WHERE workflow_name IN (",
         );
         {
             let mut separated = builder.separated(", ");
@@ -476,7 +480,7 @@ impl RunStore {
     ) -> Result<PaginatedResponse<RunRecord>, StorageError> {
         let total = count_runs(self, query).await?;
         let mut builder = QueryBuilder::<Sqlite>::new(
-            "SELECT id, workflow_name, status, started_at, finished_at, error_message, editor_snapshot, workflow_snapshot, initial_payload, state_json FROM runs WHERE 1 = 1",
+            "SELECT id, workflow_name, status, started_at, finished_at, error_message, workflow_revision, editor_snapshot, workflow_snapshot, initial_payload, state_json FROM runs WHERE 1 = 1",
         );
         apply_run_filters(&mut builder, query);
         builder.push(" ORDER BY started_at DESC LIMIT ");
@@ -912,6 +916,7 @@ impl RunStore {
               started_at INTEGER NOT NULL,
               finished_at INTEGER,
               error_message TEXT,
+              workflow_revision TEXT,
               editor_snapshot TEXT,
               workflow_snapshot TEXT,
               initial_payload TEXT,
@@ -921,6 +926,7 @@ impl RunStore {
         )
         .execute(&self.pool)
         .await?;
+        self.ensure_column("runs", "workflow_revision", "TEXT").await?;
         self.ensure_column("runs", "editor_snapshot", "TEXT").await?;
         self.ensure_column("runs", "workflow_snapshot", "TEXT").await?;
         self.ensure_column("runs", "initial_payload", "TEXT").await?;
@@ -1089,6 +1095,7 @@ pub struct RunRecord {
     pub started_at: i64,
     pub finished_at: Option<i64>,
     pub error_message: Option<String>,
+    pub workflow_revision: Option<String>,
     pub editor_snapshot: Option<String>,
     pub workflow_snapshot: Option<String>,
     pub initial_payload: Option<String>,
@@ -1310,6 +1317,7 @@ fn map_run_row(row: sqlx::sqlite::SqliteRow) -> Result<RunRecord, StorageError> 
         started_at: row.try_get("started_at")?,
         finished_at: row.try_get("finished_at")?,
         error_message: row.try_get("error_message")?,
+        workflow_revision: row.try_get("workflow_revision")?,
         editor_snapshot: row.try_get("editor_snapshot")?,
         workflow_snapshot: row.try_get("workflow_snapshot")?,
         initial_payload: row.try_get("initial_payload")?,
@@ -1377,6 +1385,7 @@ mod tests {
         workflow_name: &str,
         started_at: i64,
         finished_at: Option<i64>,
+        workflow_revision: Option<&str>,
         editor_snapshot: Option<&str>,
         workflow_snapshot: Option<&str>,
         state_json: Option<&str>,
@@ -1390,12 +1399,13 @@ mod tests {
               started_at,
               finished_at,
               error_message,
+              workflow_revision,
               editor_snapshot,
               workflow_snapshot,
               initial_payload,
               state_json
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             "#,
         )
         .bind(id)
@@ -1404,6 +1414,7 @@ mod tests {
         .bind(started_at)
         .bind(finished_at)
         .bind(Option::<String>::None)
+        .bind(workflow_revision)
         .bind(editor_snapshot)
         .bind(workflow_snapshot)
         .bind(Option::<String>::None)
@@ -1428,6 +1439,7 @@ mod tests {
                 &workflow_name,
                 1_000 + index as i64,
                 Some(1_100 + index as i64),
+                Some("sha256:background"),
                 Some("historical editor snapshot"),
                 Some("saved workflow snapshot"),
                 None,
@@ -1441,6 +1453,7 @@ mod tests {
             "target workflow",
             42,
             Some(50),
+            Some("sha256:plain"),
             None,
             Some("saved workflow snapshot"),
             None,
@@ -1452,6 +1465,7 @@ mod tests {
             "target workflow",
             42,
             Some(50),
+            Some("sha256:rich"),
             Some("historical editor snapshot"),
             Some("saved workflow snapshot"),
             Some(r#"{ "render": "degraded" }"#),
@@ -1482,6 +1496,7 @@ mod tests {
             "target workflow",
             42,
             Some(42),
+            Some("sha256:a"),
             Some("historical editor snapshot"),
             Some("saved workflow snapshot"),
             Some(r#"{ "render": "degraded" }"#),
@@ -1493,6 +1508,7 @@ mod tests {
             "target workflow",
             42,
             None,
+            Some("sha256:z"),
             Some("historical editor snapshot"),
             Some("saved workflow snapshot"),
             Some(r#"{ "render": "degraded" }"#),
@@ -1505,6 +1521,86 @@ mod tests {
             .expect("latest runs should load");
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].id, "run-z");
+
+        tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
+    }
+
+    #[tokio::test]
+    async fn start_run_persists_workflow_revision_identity() {
+        let temp_dir = std::env::temp_dir().join(format!("acsa-storage-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir).await.expect("temp dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
+        let store = RunStore::connect(&db_path).await.expect("store should connect");
+
+        let workflow_snapshot = r#"
+version: v1
+name: customer intake
+trigger:
+  type: manual
+steps:
+  - id: start
+    type: constant
+    params:
+      value: true
+    next: []
+"#;
+        let run = store
+            .start_run(
+                "customer intake",
+                "sha256:test-revision",
+                workflow_snapshot,
+                Some(workflow_snapshot),
+                &serde_json::json!({ "source": "test" }),
+            )
+            .await
+            .expect("run should start");
+        let loaded = store.get_run(&run.id).await.expect("run should load");
+
+        assert_eq!(loaded.workflow_name, "customer intake");
+        assert_eq!(loaded.workflow_revision.as_deref(), Some("sha256:test-revision"));
+        assert_eq!(loaded.workflow_snapshot.as_deref(), Some(workflow_snapshot));
+        assert_eq!(loaded.editor_snapshot.as_deref(), Some(workflow_snapshot));
+
+        sqlx::query(
+            r#"
+            INSERT INTO runs (
+              id,
+              workflow_name,
+              status,
+              started_at,
+              finished_at,
+              error_message,
+              workflow_revision,
+              editor_snapshot,
+              workflow_snapshot,
+              initial_payload,
+              state_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind("legacy-json-run")
+        .bind("legacy flow")
+        .bind("paused")
+        .bind(42_i64)
+        .bind(Option::<i64>::None)
+        .bind(Option::<String>::None)
+        .bind(Option::<String>::None)
+        .bind(Option::<String>::None)
+        .bind(r#"{"version":"v1","name":"legacy flow","trigger":{"type":"manual","details":{}},"steps":[{"id":"start","type":"constant","params":{"value":true},"next":["approve"]},{"id":"approve","type":"approval","params":{"prompt":"Approve this request?"},"next":["finish"],"retry":null,"timeout_ms":1000},{"id":"finish","type":"echo","params":{},"next":[],"retry":null,"timeout_ms":1000}],"ui":{"positions":{},"detached_steps":[]}}"#)
+        .bind(Some(r#"{"trigger":"manual"}"#))
+        .bind(Some(r#"{"activation_votes":{"start":0,"approve":1,"finish":0},"outputs":{"start":{"value":true}},"ready_steps":[],"remaining_dependencies":{"approve":0,"finish":1}}"#))
+        .execute(store.pool())
+        .await
+        .expect("legacy run should insert");
+
+        let legacy = store.get_run("legacy-json-run").await.expect("legacy run should load");
+        assert_eq!(legacy.workflow_revision, None);
+        assert!(legacy
+            .workflow_snapshot
+            .as_deref()
+            .expect("legacy workflow snapshot should exist")
+            .contains("\"name\":\"legacy flow\""));
 
         tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
     }
