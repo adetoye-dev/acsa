@@ -1600,139 +1600,137 @@ fn node_catalog(
 ) -> Result<(Vec<StepTypeEntry>, Vec<TriggerTypeEntry>), TriggerError> {
     let mut step_types = vec![
         StepTypeEntry {
-            category: "core".to_string(),
-            description: "Return a constant payload for downstream steps.".to_string(),
-            label: "Constant".to_string(),
+            category: "Data".to_string(),
+            description: "Produce a fixed value for downstream steps.".to_string(),
+            label: "Set value".to_string(),
             runtime: None,
             source: "built_in".to_string(),
             type_name: "constant".to_string(),
         },
         StepTypeEntry {
-            category: "core".to_string(),
-            description: "Pass through inputs without changing workflow state.".to_string(),
-            label: "Noop".to_string(),
+            category: "Flow".to_string(),
+            description: "Pass inputs through without changing them.".to_string(),
+            label: "Pass through".to_string(),
             runtime: None,
             source: "built_in".to_string(),
             type_name: "noop".to_string(),
         },
         StepTypeEntry {
-            category: "logic".to_string(),
-            description: "Route execution between true and false branches.".to_string(),
-            label: "Condition".to_string(),
+            category: "Flow".to_string(),
+            description: "Route execution based on a condition.".to_string(),
+            label: "Branch".to_string(),
             runtime: None,
             source: "built_in".to_string(),
             type_name: "condition".to_string(),
         },
         StepTypeEntry {
-            category: "logic".to_string(),
-            description: "Select one branch from multiple named options.".to_string(),
-            label: "Switch".to_string(),
+            category: "Flow".to_string(),
+            description: "Select one branch from named options.".to_string(),
+            label: "Choose path".to_string(),
             runtime: None,
             source: "built_in".to_string(),
             type_name: "switch".to_string(),
         },
         StepTypeEntry {
-            category: "logic".to_string(),
-            description: "Iterate over a collection using the configured inner step.".to_string(),
-            label: "Loop".to_string(),
+            category: "Flow".to_string(),
+            description: "Run the inner step for each item in a collection.".to_string(),
+            label: "Repeat for each item".to_string(),
             runtime: None,
             source: "built_in".to_string(),
             type_name: "loop".to_string(),
         },
         StepTypeEntry {
-            category: "logic".to_string(),
-            description: "Run multiple nested steps in parallel and join their outputs."
-                .to_string(),
-            label: "Parallel".to_string(),
+            category: "Flow".to_string(),
+            description: "Run nested steps at the same time and join their outputs.".to_string(),
+            label: "Run in parallel".to_string(),
             runtime: None,
             source: "built_in".to_string(),
             type_name: "parallel".to_string(),
         },
         StepTypeEntry {
-            category: "integration".to_string(),
-            description: "Send an HTTP request with bounded timeout and retries.".to_string(),
-            label: "HTTP Request".to_string(),
+            category: "Apps".to_string(),
+            description: "Send an HTTP request to an app or API.".to_string(),
+            label: "Send request".to_string(),
             runtime: None,
             source: "built_in".to_string(),
             type_name: "http_request".to_string(),
         },
         StepTypeEntry {
-            category: "integration".to_string(),
-            description: "Run a database query using the configured adapter.".to_string(),
-            label: "Database Query".to_string(),
+            category: "Data".to_string(),
+            description: "Run a query against the configured database.".to_string(),
+            label: "Query data".to_string(),
             runtime: None,
             source: "built_in".to_string(),
             type_name: "database_query".to_string(),
         },
         StepTypeEntry {
-            category: "integration".to_string(),
-            description: "Read a file from the restricted local data directory.".to_string(),
-            label: "File Read".to_string(),
+            category: "Data".to_string(),
+            description: "Read a file from the local data workspace.".to_string(),
+            label: "Read file".to_string(),
             runtime: None,
             source: "built_in".to_string(),
             type_name: "file_read".to_string(),
         },
         StepTypeEntry {
-            category: "integration".to_string(),
-            description: "Write a file into the restricted local data directory.".to_string(),
-            label: "File Write".to_string(),
+            category: "Data".to_string(),
+            description: "Write a file to the local data workspace.".to_string(),
+            label: "Write file".to_string(),
             runtime: None,
             source: "built_in".to_string(),
             type_name: "file_write".to_string(),
         },
         StepTypeEntry {
-            category: "ai".to_string(),
-            description: "Generate a completion from an LLM provider adapter.".to_string(),
-            label: "LLM Completion".to_string(),
+            category: "AI".to_string(),
+            description: "Generate a completion with the configured LLM provider.".to_string(),
+            label: "Generate text".to_string(),
             runtime: None,
             source: "built_in".to_string(),
             type_name: "llm_completion".to_string(),
         },
         StepTypeEntry {
-            category: "ai".to_string(),
-            description: "Classify a record into labels using the AI primitive.".to_string(),
-            label: "Classification".to_string(),
+            category: "AI".to_string(),
+            description: "Assign labels to a record using the AI model.".to_string(),
+            label: "Classify".to_string(),
             runtime: None,
             source: "built_in".to_string(),
             type_name: "classification".to_string(),
         },
         StepTypeEntry {
-            category: "ai".to_string(),
-            description: "Extract structured fields from unstructured text.".to_string(),
-            label: "Extraction".to_string(),
+            category: "AI".to_string(),
+            description: "Pull structured fields from unstructured text.".to_string(),
+            label: "Extract fields".to_string(),
             runtime: None,
             source: "built_in".to_string(),
             type_name: "extraction".to_string(),
         },
         StepTypeEntry {
-            category: "ai".to_string(),
-            description: "Store an embedding in the in-memory vector store.".to_string(),
-            label: "Embedding".to_string(),
+            category: "AI".to_string(),
+            description: "Store text as an embedding in the in-memory vector store.".to_string(),
+            label: "Store knowledge".to_string(),
             runtime: None,
             source: "built_in".to_string(),
             type_name: "embedding".to_string(),
         },
         StepTypeEntry {
-            category: "ai".to_string(),
-            description: "Search the in-memory vector store for similar content.".to_string(),
-            label: "Retrieval".to_string(),
+            category: "AI".to_string(),
+            description: "Search stored embeddings for similar content.".to_string(),
+            label: "Find related knowledge".to_string(),
             runtime: None,
             source: "built_in".to_string(),
             type_name: "retrieval".to_string(),
         },
         StepTypeEntry {
-            category: "human".to_string(),
-            description: "Pause execution until a reviewer approves or rejects the task."
-                .to_string(),
-            label: "Approval".to_string(),
+            category: "Human".to_string(),
+            description: "Pause until a reviewer approves or rejects the task.".to_string(),
+            label: "Request approval".to_string(),
             runtime: None,
             source: "built_in".to_string(),
             type_name: "approval".to_string(),
         },
         StepTypeEntry {
-            category: "human".to_string(),
-            description: "Pause execution until a human supplies a value.".to_string(),
-            label: "Manual Input".to_string(),
+            category: "Human".to_string(),
+            description: "Pause until a human provides a value.".to_string(),
+            label: "Ask for input".to_string(),
             runtime: None,
             source: "built_in".to_string(),
             type_name: "manual_input".to_string(),
@@ -1741,9 +1739,9 @@ fn node_catalog(
     let mut connectors = discover_connector_manifests(connectors_dir)?
         .into_iter()
         .map(|manifest| StepTypeEntry {
-            category: "connector".to_string(),
+            category: "Apps".to_string(),
             description: format!(
-                "{} connector loaded from manifest.",
+                "{} app connector loaded from manifest.",
                 connector_runtime_name(manifest.runtime).to_uppercase()
             ),
             label: manifest.name,
@@ -1759,18 +1757,18 @@ fn node_catalog(
         step_types,
         vec![
             TriggerTypeEntry {
-                description: "Run workflows on demand from the editor or CLI.".to_string(),
-                label: "Manual".to_string(),
+                description: "Start workflows on demand from the editor or CLI.".to_string(),
+                label: "Run manually".to_string(),
                 type_name: "manual".to_string(),
             },
             TriggerTypeEntry {
-                description: "Schedule executions using cron expressions.".to_string(),
-                label: "Cron".to_string(),
+                description: "Start workflows from a cron schedule.".to_string(),
+                label: "Run on a schedule".to_string(),
                 type_name: "cron".to_string(),
             },
             TriggerTypeEntry {
                 description: "Start workflows from authenticated HTTP requests.".to_string(),
-                label: "Webhook".to_string(),
+                label: "Receive webhook".to_string(),
                 type_name: "webhook".to_string(),
             },
         ],
@@ -2641,12 +2639,12 @@ mod tests {
         authenticate_webhook, build_workflow_summary, compute_signature, connector_inventory,
         connector_view, create_workflow_document, cron_schedule,
         install_starter_connector_pack_endpoint, invalid_connector_view,
-        list_starter_connector_packs, parse_workflow_document_state, read_workflow_document,
-        rename_workflow_document, request_has_engine_token, run_view, save_workflow_document,
-        serialize_workflow_yaml, slugify_workflow_name, validate_secret_value, workflow_file_path,
-        workflow_inventory, AppState, CreateWorkflowRequest, EngineAccessControl,
-        RenameWorkflowRequest, RunDetailResponse, RunPageResponse, TriggerError,
-        WebhookSignatureAuth, WebhookWorkflow,
+        list_starter_connector_packs, node_catalog, parse_workflow_document_state,
+        read_workflow_document, rename_workflow_document, request_has_engine_token, run_view,
+        save_workflow_document, serialize_workflow_yaml, slugify_workflow_name,
+        validate_secret_value, workflow_file_path, workflow_inventory, AppState,
+        CreateWorkflowRequest, EngineAccessControl, RenameWorkflowRequest, RunDetailResponse,
+        RunPageResponse, TriggerError, WebhookSignatureAuth, WebhookWorkflow,
     };
     use crate::{
         connectors::install_starter_connector_pack,
@@ -2717,6 +2715,57 @@ mod tests {
 
         validate_secret_value("steps.send_brief_email.params", &value)
             .expect("secrets_env should be treated as an environment reference map");
+    }
+
+    #[test]
+    fn node_catalog_uses_product_facing_categories_and_labels_for_built_in_steps() {
+        let temp_dir = write_temp_directory("node-catalog-language");
+
+        let (steps, _triggers) = node_catalog(&temp_dir).expect("catalog should load");
+
+        let by_type_name = |type_name: &str| {
+            steps.iter().find(|entry| entry.type_name == type_name).unwrap_or_else(|| {
+                panic!(
+                    "built-in step {type_name} should exist; got {:?}",
+                    steps.iter().map(|entry| entry.type_name.as_str()).collect::<Vec<_>>()
+                )
+            })
+        };
+
+        assert_eq!(by_type_name("constant").category, "Data");
+        assert_eq!(by_type_name("noop").label, "Pass through");
+        assert_eq!(by_type_name("condition").category, "Flow");
+        assert_eq!(by_type_name("database_query").category, "Data");
+        assert_eq!(by_type_name("embedding").label, "Store knowledge");
+        assert_eq!(by_type_name("retrieval").label, "Find related knowledge");
+        assert_eq!(by_type_name("manual_input").category, "Human");
+        assert_eq!(by_type_name("http_request").category, "Apps");
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn node_catalog_uses_outcome_language_for_built_in_triggers() {
+        let temp_dir = write_temp_directory("node-catalog-trigger-language");
+
+        let (_steps, triggers) = node_catalog(&temp_dir).expect("catalog should load");
+
+        let by_type_name = |type_name: &str| {
+            triggers
+                .iter()
+                .find(|entry| entry.type_name == type_name)
+                .expect("built-in trigger should exist")
+        };
+
+        assert_eq!(by_type_name("manual").label, "Run manually");
+        assert_eq!(by_type_name("cron").label, "Run on a schedule");
+        assert_eq!(by_type_name("webhook").label, "Receive webhook");
+        assert_eq!(
+            by_type_name("webhook").description,
+            "Start workflows from authenticated HTTP requests."
+        );
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
     }
 
     #[tokio::test]
