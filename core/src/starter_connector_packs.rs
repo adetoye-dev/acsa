@@ -35,7 +35,7 @@ pub const STARTER_CONNECTOR_PACKS: &[StarterConnectorPack] = &[
             "/../starter-packs/connectors/slack-notify"
         ),
         install_dir_name: "slack-notify",
-        provided_step_types: &["slack.notify"],
+        provided_step_types: &["slack_notify"],
     },
     StarterConnectorPack {
         id: "github-issue-create",
@@ -46,7 +46,7 @@ pub const STARTER_CONNECTOR_PACKS: &[StarterConnectorPack] = &[
             "/../starter-packs/connectors/github-issue-create"
         ),
         install_dir_name: "github-issue-create",
-        provided_step_types: &["github.issue.create"],
+        provided_step_types: &["github_issue_create"],
     },
     StarterConnectorPack {
         id: "google-sheets-append-row",
@@ -57,7 +57,7 @@ pub const STARTER_CONNECTOR_PACKS: &[StarterConnectorPack] = &[
             "/../starter-packs/connectors/google-sheets-append-row"
         ),
         install_dir_name: "google-sheets-append-row",
-        provided_step_types: &["google.sheets.append_row"],
+        provided_step_types: &["google_sheets_append_row"],
     },
     StarterConnectorPack {
         id: "email-send",
@@ -65,7 +65,7 @@ pub const STARTER_CONNECTOR_PACKS: &[StarterConnectorPack] = &[
         description: "Send a representative email payload.",
         source_dir: concat!(env!("CARGO_MANIFEST_DIR"), "/../starter-packs/connectors/email-send"),
         install_dir_name: "email-send",
-        provided_step_types: &["email.send"],
+        provided_step_types: &["email_send"],
     },
 ];
 

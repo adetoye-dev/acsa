@@ -1043,7 +1043,7 @@ mod tests {
             ids,
             vec!["slack-notify", "github-issue-create", "google-sheets-append-row", "email-send",]
         );
-        assert_eq!(catalog[0].provided_step_types, &["slack.notify"]);
+        assert_eq!(catalog[0].provided_step_types, &["slack_notify"]);
     }
 
     #[test]

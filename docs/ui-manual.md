@@ -45,16 +45,14 @@ Use it to:
 
 ### Connectors
 
-`Connectors` is the library and management surface for integration packs.
+`Connectors` is the curated starter-pack library for integration packs.
 
 Use it to:
 
-- inspect loaded connector manifests
-- see setup or trust requirements
-- see which workflows depend on a connector
-- scaffold a new process or WASM connector into `connectors/`
-- run a connector sample input without leaving the product
-- spot invalid connector manifests without breaking the rest of the catalog
+- install a small curated first-party starter set into the local `connectors/` workspace
+- see which installed packs are ready, blocked, or still need setup
+- keep local scaffold/test tooling behind the secondary developer section
+- inspect low-level manifest and runtime details only when you need them
 
 ## Typical workflow
 

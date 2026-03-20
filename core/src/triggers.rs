@@ -2741,7 +2741,7 @@ mod tests {
             .expect("slack starter pack should exist");
         assert_eq!(slack_pack["installed"], json!(true));
         assert_eq!(slack_pack["install_state"], json!("satisfied"));
-        assert_eq!(slack_pack["provided_step_types"], json!(["slack.notify"]));
+        assert_eq!(slack_pack["provided_step_types"], json!(["slack_notify"]));
 
         let github_pack = packs
             .iter()
