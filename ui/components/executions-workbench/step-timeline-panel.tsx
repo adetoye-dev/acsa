@@ -18,10 +18,10 @@
 
 import { useMemo, type ReactNode } from "react";
 
-import { formatDuration, type RunDetailResponse } from "../lib/observability";
-import { latestStepRunsByStep } from "../lib/executions-workbench";
+import { formatDuration, type RunDetailResponse } from "../../lib/observability";
+import { latestStepRunsByStep } from "../../lib/executions-workbench";
 
-type ExecutionStepTimelineProps = {
+type StepTimelinePanelProps = {
   isLoading: boolean;
   nodeLabels: Record<string, string>;
   onSelectStepId: (stepId: string | null) => void;
@@ -29,13 +29,13 @@ type ExecutionStepTimelineProps = {
   selectedStepId: string | null;
 };
 
-export function ExecutionStepTimeline({
+export function StepTimelinePanel({
   isLoading,
   nodeLabels,
   onSelectStepId,
   runDetail,
   selectedStepId
-}: ExecutionStepTimelineProps) {
+}: StepTimelinePanelProps) {
   const latestStepRuns = useMemo(
     () => latestStepRunsByStep(runDetail?.step_runs ?? []),
     [runDetail]

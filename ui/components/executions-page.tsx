@@ -18,10 +18,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { ExecutionStepTimeline } from "./execution-debugger";
 import { RunGraphPanel } from "./executions-workbench/run-graph-panel";
 import { RunListPanel } from "./executions-workbench/run-list-panel";
 import { StepDetailRail } from "./executions-workbench/step-detail-rail";
+import { StepTimelinePanel } from "./executions-workbench/step-timeline-panel";
 import { fetchEngineJson } from "../lib/engine-client";
 import {
   type LogPageResponse,
@@ -180,7 +180,7 @@ export function ExecutionsPage() {
   return (
     <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">
       <header className="flex h-[60px] items-center justify-between gap-4 border-b border-black/10 bg-[rgba(255,255,255,0.72)] px-6">
-        <h1 className="section-title mt-2">Run history</h1>
+        <h1 className="section-title mt-2">Executions</h1>
         <button
           className="ui-button"
           onClick={() => void refreshRunInventory(selectedRunId)}
@@ -214,7 +214,7 @@ export function ExecutionsPage() {
             selectedStepId={selectedStepId}
           />
 
-          <ExecutionStepTimeline
+          <StepTimelinePanel
             isLoading={selectedRunId !== null && isLoadingRunDetail && !runDetail}
             nodeLabels={executionGraphView.nodeLabels}
             onSelectStepId={setSelectedStepId}

@@ -34,14 +34,14 @@ Changes are applied against the in-memory workflow document and then persisted o
 
 ### Executions
 
-`Executions` is the debugging surface for runs.
+`Executions` is the cross-workflow run center.
 
 Use it to:
 
-- scan recent runs
-- inspect the selected run graph
-- review step payloads and logs
-- understand whether a run rendered from an exact historical snapshot or a fallback
+- scan runs across workflows
+- inspect the selected run graph as the main workspace
+- review step payloads and logs in the right rail
+- understand when a run is rendering from a fallback snapshot
 
 ### Connectors
 
