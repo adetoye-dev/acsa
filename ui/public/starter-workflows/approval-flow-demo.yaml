@@ -1,0 +1,43 @@
+version: v1
+name: Approval Flow
+trigger:
+  type: manual
+steps:
+  - id: seed_request
+    type: constant
+    params:
+      value:
+        request_id: REQ-1001
+        summary: Release staging build
+    next:
+      - manager_approval
+    timeout_ms: 1000
+  - id: manager_approval
+    type: approval
+    params:
+      prompt: Approve the staging deployment?
+      details:
+        team: platform
+    next:
+      - finish
+    timeout_ms: 86400000
+  - id: finish
+    type: noop
+    params:
+      label: deployment approved
+    next: []
+    timeout_ms: 1000
+ui:
+  positions:
+    __trigger__:
+      x: -460.0
+      y: 120.0
+    seed_request:
+      x: 20.0
+      y: 120.0
+    manager_approval:
+      x: 420.0
+      y: 120.0
+    finish:
+      x: 820.0
+      y: 120.0

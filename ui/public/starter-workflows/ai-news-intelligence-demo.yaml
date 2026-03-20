@@ -1,0 +1,124 @@
+version: v1
+name: AI News Intelligence
+trigger:
+  type: manual
+steps:
+  - id: collect_news_context
+    type: ai_news_collector
+    params:
+      product_name: Acsa
+      rss_sources:
+        - name: OpenAI
+          url: https://openai.com/news/rss.xml
+        - name: Anthropic
+          url: https://www.anthropic.com/news/rss.xml
+        - name: Hugging Face
+          url: https://huggingface.co/blog/feed.xml
+        - name: Google AI
+          url: https://blog.google/technology/ai/rss/
+      hn:
+        topstories_url: https://hacker-news.firebaseio.com/v0/topstories.json
+        item_url_template: https://hacker-news.firebaseio.com/v0/item/{id}.json
+        max_story_ids: 12
+        max_workers: 6
+        max_matches: 6
+        keywords:
+          - ai
+          - openai
+          - anthropic
+          - claude
+          - gpt
+          - llm
+          - model
+          - agent
+          - inference
+          - hugging face
+          - deepmind
+          - gemini
+          - reasoning
+      max_feed_items_per_source: 4
+      max_ranked_items: 8
+      timeout_secs: 5
+    next:
+      - write_context_snapshot
+      - draft_news_brief
+    retry:
+      attempts: 2
+      backoff_ms: 1000
+    timeout_ms: 30000
+  - id: write_context_snapshot
+    type: file_write
+    params:
+      path: demo/output/ai-news-intelligence-context.json
+      contents_path: collect_news_context
+    next: []
+    retry: null
+    timeout_ms: 1000
+  - id: draft_news_brief
+    type: llm_completion
+    params:
+      provider: openai
+      api_key_env: OPENAI_API_KEY
+      max_tokens: 900
+      prompt_path: collect_news_context.prompt
+      system_prompt: |-
+        You are Acsa's AI news editor.
+        Write concise, high-signal markdown for developers and technical leaders.
+        Prefer direct, concrete language over hype.
+        Keep every source link that appears in the source section.
+    next:
+      - render_news_brief
+    retry:
+      attempts: 2
+      backoff_ms: 1500
+    timeout_ms: 30000
+  - id: render_news_brief
+    type: ai_news_brief_renderer
+    params: {}
+    next:
+      - write_brief_archive
+    retry: null
+    timeout_ms: 3000
+  - id: write_brief_archive
+    type: file_write
+    params:
+      path: demo/output/ai-news-intelligence-brief.md
+      contents_path: render_news_brief.markdown
+    next:
+      - send_brief_email
+    retry: null
+    timeout_ms: 1000
+  - id: send_brief_email
+    type: smtp_email_delivery
+    params:
+      subject_path: render_news_brief.subject
+      body_path: render_news_brief.body
+      body_html_path: render_news_brief.body_html
+      secrets_env:
+        password: ACSA_SMTP_PASSWORD
+    next: []
+    retry: null
+    timeout_ms: 30000
+ui:
+  positions:
+    __trigger__:
+      x: -460.0
+      y: -720.0
+    collect_news_context:
+      x: 40.0
+      y: -720.0
+    write_context_snapshot:
+      x: 520.0
+      y: -540.0
+    draft_news_brief:
+      x: 520.0
+      y: -260.0
+    render_news_brief:
+      x: 900.0
+      y: -40.0
+    write_brief_archive:
+      x: 1300.0
+      y: 0.0
+    send_brief_email:
+      x: 1560.0
+      y: -320.0

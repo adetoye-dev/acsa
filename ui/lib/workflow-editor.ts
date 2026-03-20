@@ -316,8 +316,24 @@ export function describeWorkflow(workflow: WorkflowDefinition): string {
 }
 
 export function createLocalWorkflowDocument(workflowId: string): WorkflowDocument {
-  const workflow = createBlankWorkflow(workflowId);
-  const normalizedId = slugifyIdentifier(workflowId || "workflow");
+  return createLocalWorkflowDocumentFromWorkflow(
+    workflowId,
+    createBlankWorkflow(workflowId)
+  );
+}
+
+export function createLocalWorkflowDocumentFromYaml(
+  workflowId: string,
+  yaml: string
+): WorkflowDocument {
+  return createLocalWorkflowDocumentFromWorkflow(workflowId, parseWorkflowYaml(yaml));
+}
+
+function createLocalWorkflowDocumentFromWorkflow(
+  workflowId: string,
+  workflow: WorkflowDefinition
+): WorkflowDocument {
+  const normalizedId = slugifyIdentifier(workflowId || workflow.name || "workflow");
   return {
     dirty: true,
     id: normalizedId,

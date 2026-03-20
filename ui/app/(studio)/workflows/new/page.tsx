@@ -16,6 +16,27 @@
 
 import { EditorShell } from "../../../../components/editor-shell";
 
-export default function NewWorkflowStudioPage() {
-  return <EditorShell createDraftOnBoot embeddedInProductShell syncRoute />;
+type NewWorkflowStudioPageProps = {
+  searchParams?: Promise<{
+    starter?: string | string[];
+  }>;
+};
+
+export default async function NewWorkflowStudioPage({
+  searchParams
+}: NewWorkflowStudioPageProps) {
+  const resolvedSearchParams = (await searchParams) ?? {};
+  const starterId = Array.isArray(resolvedSearchParams.starter)
+    ? resolvedSearchParams.starter[0] ?? null
+    : resolvedSearchParams.starter ?? null;
+
+  return (
+    <EditorShell
+      createDraftOnBoot
+      embeddedInProductShell
+      key={starterId ?? "blank-draft"}
+      starterId={starterId}
+      syncRoute
+    />
+  );
 }

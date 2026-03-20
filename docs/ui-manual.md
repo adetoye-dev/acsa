@@ -1,98 +1,70 @@
 # UI Manual
 
-The Acsa UI is a lightweight editor on top of the engine API. It is not a separate workflow source of truth. Every change maps back to the YAML model.
+The Acsa UI is a product shell on top of the engine API. It is not a separate workflow source of truth. Saved YAML is still what runs.
 
 ## Main areas
 
-### Workflow explorer
+### Workflows
 
-Use the left-side explorer to:
+`Workflows` is the home surface for the product.
 
-- browse workflows
-- open a workflow
-- create a workflow
-- duplicate a workflow
-- delete a workflow
+Use it to:
 
-Invalid files are surfaced separately so bad YAML does not disappear silently.
+- continue where you left off with recently opened workflows
+- start from curated starter templates/examples
+- browse the compact full workflow inventory
+- spot invalid YAML files near the inventory instead of losing them silently
 
-### Connector manager
+Starter templates open as local drafts first. They do not write workflow files until you save.
 
-The connector manager sits under the workflow explorer and lets you:
+### Workflow studio
 
-- inspect loaded connector manifests
-- see which connectors are blocked by the WASM runtime flag
-- scaffold a new process or WASM connector into `connectors/`
-- run a connector's sample input without leaving the editor
-- spot invalid connector manifests without breaking the rest of the catalog
+Open any workflow from the launchpad to enter the studio.
 
-### Top bar
+The studio provides:
 
-The top bar provides:
-
-- refresh
-- save
-- manual run
-- last action feedback
-- last run summary
-
-### Canvas
-
-The center canvas uses React Flow to display:
-
-- the trigger node
-- step nodes
-- graph edges
-- layout controls and a minimap
-
-You can reposition nodes visually. Edge edits update downstream `next` links.
-
-### Inspector
-
-The inspector is the detailed editing surface for:
-
-- workflow name
-- trigger type
-- trigger details YAML
-- selected step id
-- selected step type
-- retry attempts
-- retry backoff
-- timeout
-- params YAML
+- top-bar actions for refresh, save, and manual run
+- the workflow canvas for trigger and step layout
+- the step library for adding new nodes
+- the inspector for editing trigger and selected-step details
+- preview of the generated workflow YAML
+- the human-task inbox for paused approvals and manual input
 
 Changes are applied against the in-memory workflow document and then persisted on save.
 
-### Human task inbox
+### Executions
 
-The inbox lists pending:
+`Executions` is the debugging surface for runs.
 
-- approvals
-- manual input tasks
+Use it to:
 
-Resolving a task resumes the paused run through the engine API.
+- scan recent runs
+- inspect the selected run graph
+- review step payloads and logs
+- understand whether a run rendered from an exact historical snapshot or a fallback
 
-### Run history panel
+### Connectors
 
-The observability panel shows:
+`Connectors` is the library and management surface for integration packs.
 
-- summary metrics
-- workflow and status filters
-- recent runs
-- selected run timeline
-- step payloads
-- log level and text filtering
+Use it to:
+
+- inspect loaded connector manifests
+- see setup or trust requirements
+- see which workflows depend on a connector
+- scaffold a new process or WASM connector into `connectors/`
+- run a connector sample input without leaving the product
+- spot invalid connector manifests without breaking the rest of the catalog
 
 ## Typical workflow
 
-1. Open or create a workflow
-2. Set the trigger type and details
-3. Add steps from the catalog
-4. Scaffold or test connectors from the left rail when you need a new integration
-5. Edit params and retry or timeout settings
-6. Save the workflow
-7. Run it manually or trigger it through cron or webhook
-8. Use run history and logs to inspect the result
+1. Open `Workflows`
+2. Resume a recent workflow or start from a curated starter
+3. Edit the trigger, steps, retry settings, and params in the workflow studio
+4. Save the workflow
+5. Run it manually or trigger it through cron or webhook
+6. Use `Executions` to inspect the result
+7. Use `Connectors` when a workflow needs new integration capabilities
 
 ## Save behavior
 
@@ -104,7 +76,7 @@ The observability panel shows:
 ## Run behavior
 
 - Manual runs call `/api/workflows/{id}/run`
-- Triggered workflows appear in run history the same way
+- Triggered workflows appear in `Executions` the same way
 - Paused runs remain visible until a human task is resolved
 
 ## Working effectively
@@ -112,5 +84,5 @@ The observability panel shows:
 - Keep the YAML inspector clean and typed
 - Use stable step ids
 - Prefer small steps over large param blobs
-- Use the run history panel after every structural change
-- Resolve validation errors in the inspector before saving
+- Use `Executions` after every structural change
+- Resolve validation and setup issues before saving or running
