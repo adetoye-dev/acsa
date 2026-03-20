@@ -23,6 +23,7 @@ import YAML from "yaml";
 
 import { decorateNodesForExecution } from "./execution-debugger";
 import { ExecutionInspector } from "./execution-inspector";
+import { RunListPanel } from "./executions-workbench/run-list-panel";
 import { WorkflowCanvas } from "./workflow-canvas";
 import { fetchEngineJson } from "../lib/engine-client";
 import {
@@ -32,9 +33,13 @@ import {
   type RunDetailResponse,
   type RunPageResponse,
   runProvenanceLabel,
-  runProvenanceTone,
-  type StepRunView
+  runProvenanceTone
 } from "../lib/observability";
+import {
+  selectDefaultRun,
+  selectDefaultStep,
+  latestStepRunsByStep
+} from "../lib/executions-workbench";
 import {
   type CanvasNode,
   type StepTypeEntry,
@@ -75,7 +80,7 @@ export function ExecutionsPage() {
   const [workflowFilter, setWorkflowFilter] = useState("");
 
   const latestStepRuns = useMemo(
-    () => latestAttemptByStep(runDetail?.step_runs ?? []).sort((left, right) => left.started_at - right.started_at),
+    () => latestStepRunsByStep(runDetail?.step_runs ?? []),
     [runDetail]
   );
   const executionCanvasState = useMemo(
@@ -158,7 +163,7 @@ export function ExecutionsPage() {
 
         setRunDetail(detailResponse);
         setLogs(logResponse);
-        setSelectedStepId((current) => preferredStepId(detailResponse, current));
+        setSelectedStepId((current) => selectDefaultStep(detailResponse, current));
         setError(null);
       } catch (nextError) {
         if (cancelled) {
@@ -189,11 +194,7 @@ export function ExecutionsPage() {
         ...(workflowFilter.trim() ? { workflow_name: workflowFilter.trim() } : {})
       });
       const response = await fetchEngineJson<RunPageResponse>(`/api/runs?${query.toString()}`);
-      const nextRunId =
-        preferredRunId ??
-        (selectedRunId ? response.runs.find((run) => run.id === selectedRunId)?.id : undefined) ??
-        response.runs[0]?.id ??
-        null;
+      const nextRunId = selectDefaultRun(response, selectedRunId, preferredRunId);
       setRunPage(response);
       setSelectedRunId(nextRunId);
       setError(null);
@@ -216,99 +217,28 @@ export function ExecutionsPage() {
     <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">
       <header className="flex h-[60px] items-center justify-between gap-4 border-b border-black/10 bg-[rgba(255,255,255,0.72)] px-6">
         <h1 className="section-title mt-2">Run history</h1>
-        <button className="ui-button" onClick={() => void refreshRunInventory(selectedRunId)} type="button">
+        <button
+          className="ui-button"
+          onClick={() => void refreshRunInventory(selectedRunId)}
+          type="button"
+        >
           {isRefreshingRuns ? "Refreshing..." : "Refresh"}
         </button>
       </header>
 
       <div className="grid min-h-0 xl:grid-cols-[308px_minmax(0,1fr)_360px]">
-        <aside className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] border-r border-black/10 bg-[rgba(255,255,255,0.42)]">
-          <div className="space-y-3 border-b border-black/10 px-4 py-4">
-            <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62">
-              <span className="ui-badge">{runPage?.total ?? 0} runs</span>
-            </div>
-
-            <input
-              className="ui-input"
-              onChange={(event) => setWorkflowFilter(event.target.value)}
-              placeholder="Filter by workflow"
-              type="text"
-              value={workflowFilter}
-            />
-
-            <select
-              className="ui-input"
-              onChange={(event) => setRunStatusFilter(event.target.value)}
-              value={runStatusFilter}
-            >
-              <option value="">All statuses</option>
-              <option value="success">Success</option>
-              <option value="failed">Failed</option>
-              <option value="paused">Paused</option>
-              <option value="running">Running</option>
-            </select>
-          </div>
-
-          <div className="sleek-scroll min-h-0 overflow-y-auto px-3 py-3">
-            {error ? (
-              <div className="rounded-[12px] border border-rose-400/20 bg-rose-50 px-4 py-3 text-sm leading-6 text-[#c65a72]">
-                {error}
-              </div>
-            ) : null}
-
-            {isRefreshingRuns && !runPage ? (
-              <PageEmptyState>Loading executions…</PageEmptyState>
-            ) : runPage?.runs.length ? (
-              <div className="space-y-2">
-                {runPage.runs.map((run) => {
-                  const active = run.id === selectedRunId;
-                  return (
-                    <button
-                      key={run.id}
-                      className={`w-full rounded-[12px] border px-3.5 py-2.5 text-left transition ${
-                        active
-                          ? "border-black/12 bg-white text-ink"
-                          : "border-black/8 bg-white/70 text-ink hover:border-black/12 hover:bg-white"
-                      }`}
-                      onClick={() => handleSelectRun(run.id)}
-                      type="button"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-medium text-ink">
-                            {run.workflow_name}
-                          </div>
-                          <div className="mt-1 font-mono text-[11px] uppercase tracking-[0.14em] text-slate/62">
-                            {run.id.slice(0, 8)}
-                          </div>
-                        </div>
-                        <RunStatusBadge status={run.status} />
-                      </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate">
-                        <span>{formatTimestamp(run.started_at)}</span>
-                        <span className="text-slate/35">•</span>
-                        <span>{formatDuration(run.duration_seconds)}</span>
-                        <span className="text-slate/35">•</span>
-                        <span
-                          className={`rounded-[8px] px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${runProvenanceTone(run)}`}
-                        >
-                          {runProvenanceLabel(run)}
-                        </span>
-                      </div>
-                      {run.error_message ? (
-                        <div className="mt-1 line-clamp-2 text-xs leading-5 text-[#c65a72]">
-                          {run.error_message}
-                        </div>
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <PageEmptyState>No executions matched the current filters.</PageEmptyState>
-            )}
-          </div>
-        </aside>
+        <RunListPanel
+          error={error}
+          isRefreshingRuns={isRefreshingRuns}
+          onRefresh={() => void refreshRunInventory(selectedRunId)}
+          onRunStatusFilterChange={setRunStatusFilter}
+          onSelectRun={handleSelectRun}
+          onWorkflowFilterChange={setWorkflowFilter}
+          runPage={runPage}
+          runStatusFilter={runStatusFilter}
+          selectedRunId={selectedRunId}
+          workflowFilter={workflowFilter}
+        />
 
         <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] border-r border-black/10 bg-[rgba(255,255,255,0.6)]">
           <div className="border-b border-black/10 px-5 py-4">
@@ -487,27 +417,6 @@ export function ExecutionsPage() {
   );
 }
 
-function latestAttemptByStep(stepRuns: StepRunView[]) {
-  const byStep = new Map<string, StepRunView>();
-  for (const stepRun of stepRuns) {
-    const existing = byStep.get(stepRun.step_id);
-    if (!existing || stepRun.attempt >= existing.attempt) {
-      byStep.set(stepRun.step_id, stepRun);
-    }
-  }
-  return Array.from(byStep.values());
-}
-
-function preferredStepId(runDetail: RunDetailResponse, currentStepId: string | null) {
-  const stepRuns = latestAttemptByStep(runDetail.step_runs).sort(
-    (left, right) => left.started_at - right.started_at
-  );
-  if (currentStepId && stepRuns.some((stepRun) => stepRun.step_id === currentStepId)) {
-    return currentStepId;
-  }
-  return stepRuns.find((stepRun) => stepRun.status === "failed")?.step_id ?? stepRuns[0]?.step_id ?? null;
-}
-
 function buildExecutionCanvas(
   runDetail: RunDetailResponse | null,
   stepCatalog: StepTypeEntry[]
@@ -652,6 +561,14 @@ function extractEditorSnapshotPositions(
   }
 }
 
+function PageEmptyState({ children }: { children: string }) {
+  return (
+    <div className="flex min-h-[220px] items-center justify-center rounded-[12px] border border-dashed border-black/10 bg-white/72 px-6 text-center text-sm leading-6 text-slate">
+      {children}
+    </div>
+  );
+}
+
 function RunStatusBadge({ status }: { status: string }) {
   const className =
     status === "success"
@@ -663,16 +580,10 @@ function RunStatusBadge({ status }: { status: string }) {
           : "border-black/10 bg-white text-slate";
 
   return (
-    <span className={`rounded-[8px] border px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${className}`}>
+    <span
+      className={`rounded-[8px] border px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${className}`}
+    >
       {status}
     </span>
-  );
-}
-
-function PageEmptyState({ children }: { children: string }) {
-  return (
-    <div className="flex min-h-[220px] items-center justify-center rounded-[12px] border border-dashed border-black/10 bg-white/72 px-6 text-center text-sm leading-6 text-slate">
-      {children}
-    </div>
   );
 }
