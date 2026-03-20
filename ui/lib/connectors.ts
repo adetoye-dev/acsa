@@ -14,12 +14,18 @@
  * limitations under the License.
  */
 
+import type {
+  ConnectorDependencyMetadata,
+  ConnectorState
+} from "./product-status";
+
 export type ConnectorRuntime = "process" | "wasm";
 
-export type ConnectorInventoryItem = {
+export type ConnectorInventoryItem = ConnectorDependencyMetadata & {
   allowed_env: string[];
   allowed_hosts: string[];
   connector_dir: string;
+  connector_state: ConnectorState;
   entry: string;
   inputs: string[];
   manifest_path: string;
@@ -35,8 +41,9 @@ export type ConnectorInventoryItem = {
   version?: string | null;
 };
 
-export type InvalidConnector = {
+export type InvalidConnector = ConnectorDependencyMetadata & {
   connector_dir: string;
+  connector_state: ConnectorState;
   error: string;
   id: string;
   manifest_path?: string | null;
@@ -60,16 +67,3 @@ export type ConnectorTestResponse = {
   output: unknown;
   params: unknown;
 };
-
-export function connectorRuntimeLabel(runtime: ConnectorRuntime) {
-  return runtime === "wasm" ? "WASM" : "Process";
-}
-
-export function connectorRuntimeTone(connector: ConnectorInventoryItem) {
-  if (!connector.runtime_ready) {
-    return "bg-ember/10 text-ember";
-  }
-  return connector.runtime === "wasm"
-    ? "bg-tide/10 text-tide"
-    : "bg-black/5 text-slate";
-}

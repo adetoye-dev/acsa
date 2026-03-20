@@ -20,6 +20,7 @@ pub mod engine;
 pub mod models;
 pub mod nodes;
 pub mod observability;
+pub mod product_state;
 pub mod storage;
 pub mod triggers;
 pub mod version;

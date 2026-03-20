@@ -24,6 +24,31 @@ Optional webhook fields:
 
 If both token and signature validation are configured, both checks must pass.
 
+## Engine API exposure
+
+- `acsa-core serve` binds to `127.0.0.1` by default.
+- Binding the engine to a non-loopback address now requires `ACSA_ALLOW_REMOTE_ENGINE=1`.
+- If `ACSA_ALLOW_REMOTE_ENGINE=1` is used with a non-loopback bind address, strongly prefer TLS/HTTPS for all client-to-engine traffic.
+- Without TLS, any engine auth token is sent in plaintext on the network.
+- When `ACSA_ENGINE_AUTH_TOKEN` is set, engine API routes require either:
+  - `Authorization: Bearer <token>`
+  - `x-acsa-engine-token: <token>`
+- When `ACSA_ENGINE_AUTH_TOKEN` is not set, engine API routes are unauthenticated and do not require `Authorization: Bearer` or `x-acsa-engine-token`.
+- Do not expose unauthenticated engine routes on non-loopback interfaces; either bind to loopback only or set `ACSA_ENGINE_AUTH_TOKEN` before enabling remote access.
+- For remote engine access, enable native TLS for the engine where available, or terminate TLS at an HTTPS reverse proxy/load balancer with certificates managed by your platform (for example, ingress/LB-managed certs or standard CA-issued cert/key files).
+- Recommended remote configuration example:
+
+  ```bash
+  ACSA_ALLOW_REMOTE_ENGINE=1 \
+  ACSA_ENGINE_AUTH_TOKEN='<long-random-token>' \
+  acsa-core serve --bind 0.0.0.0:3001
+  ```
+
+  Place this behind HTTPS/TLS before exposing it outside trusted local networks.
+- Production risk note: running with `ACSA_ALLOW_REMOTE_ENGINE=1` and no TLS and/or no auth token can allow credential interception and unauthorized workflow administration.
+- `/healthz` remains unauthenticated for local liveness checks.
+- Webhook routes keep using per-workflow shared-secret and/or HMAC authentication instead of the engine admin token.
+
 ## Built-in node controls
 
 - `http_request`
@@ -59,6 +84,11 @@ If both token and signature validation are configured, both checks must pass.
 - `ACSA_LOG_FILE_PATH` mirrors redacted structured logs to disk.
 - `ACSA_LOG_RETENTION_DAYS` and `ACSA_RUN_RETENTION_DAYS` control retention cleanup.
 - Plain-text log messages redact bearer tokens, common key/value credential patterns, and PostgreSQL DSN passwords before persistence.
+
+## UI browser hardening
+
+- The Next.js UI now serves with a default Content Security Policy and baseline hardening headers.
+- Acsa avoids `dangerouslySetInnerHTML`, `eval`, and dynamic function compilation in the browser code.
 
 ## Dependency audit posture
 

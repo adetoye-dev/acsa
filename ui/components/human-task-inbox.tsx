@@ -48,7 +48,7 @@ export function HumanTaskInbox({
       ) : null}
 
       {tasks.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-black/15 bg-white/60 px-4 py-6 text-center text-sm leading-6 text-slate">
+        <div className="rounded-2xl border border-dashed border-black/10 bg-white/68 px-4 py-6 text-center text-sm leading-6 text-slate">
           No pending human tasks. Runs that pause for approval or input will
           appear here and can be resumed without leaving the editor.
         </div>
@@ -57,7 +57,7 @@ export function HumanTaskInbox({
       {tasks.map((task) => (
         <article
           key={task.id}
-          className="rounded-2xl border border-black/10 bg-white/70 p-4"
+          className="rounded-2xl border border-black/10 bg-white/72 p-4"
         >
           <div className="flex items-start justify-between gap-3">
             <div>

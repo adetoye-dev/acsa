@@ -18,14 +18,22 @@
 
 import {
   BaseEdge,
+  EdgeLabelRenderer,
   getSmoothStepPath,
   type EdgeProps
 } from "@xyflow/react";
 
-const SELECTED_EDGE_STROKE = "rgba(15, 108, 115, 0.92)";
+const SELECTED_EDGE_STROKE = "rgba(111, 99, 255, 0.96)";
 const SELECTED_EDGE_WIDTH = 2.8;
 
+type WorkflowEdgeData = {
+  onInsertBetween?: (sourceId: string, targetId: string) => void;
+  sourceId: string;
+  targetId: string;
+};
+
 export function WorkflowEdge({
+  data,
   id,
   markerEnd,
   selected,
@@ -37,7 +45,8 @@ export function WorkflowEdge({
   targetX,
   targetY
 }: EdgeProps) {
-  const [edgePath] = getSmoothStepPath({
+  const edgeData = isWorkflowEdgeData(data) ? data : null;
+  const [edgePath, labelX, labelY] = getSmoothStepPath({
     sourcePosition,
     sourceX,
     sourceY,
@@ -46,7 +55,9 @@ export function WorkflowEdge({
     targetY
   });
   const stroke =
-    selected ? SELECTED_EDGE_STROKE : asStringStyle(style?.stroke, "rgba(16, 26, 29, 0.64)");
+    selected
+      ? SELECTED_EDGE_STROKE
+      : asStringStyle(style?.stroke, "rgba(111, 99, 255, 0.68)");
   const strokeWidth = selected
     ? SELECTED_EDGE_WIDTH
     : asNumericStyle(style?.strokeWidth, 2);
@@ -88,7 +99,41 @@ export function WorkflowEdge({
           strokeWidth
         }}
       />
+      {selected && edgeData?.onInsertBetween ? (
+        <EdgeLabelRenderer>
+          <button
+            aria-label="Insert step on connection"
+            className="nodrag nopan absolute flex h-8 w-8 items-center justify-center rounded-[10px] border border-[#6f63ff]/24 bg-white text-base font-medium text-[#5d52d8] shadow-[0_1px_4px_rgba(16,20,20,0.08)] transition hover:border-[#6f63ff]/36 hover:bg-[#f6f4ff]"
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              edgeData.onInsertBetween?.(edgeData.sourceId, edgeData.targetId);
+            }}
+            style={{
+              pointerEvents: "all",
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`
+            }}
+            type="button"
+          >
+            +
+          </button>
+        </EdgeLabelRenderer>
+      ) : null}
     </>
+  );
+}
+
+function isWorkflowEdgeData(value: unknown): value is WorkflowEdgeData {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Partial<WorkflowEdgeData>;
+  return (
+    typeof candidate.sourceId === "string" &&
+    typeof candidate.targetId === "string" &&
+    (candidate.onInsertBetween === undefined ||
+      typeof candidate.onInsertBetween === "function")
   );
 }
 

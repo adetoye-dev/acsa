@@ -21,3 +21,6 @@ ui/out
 data/demo/output/
 acsa_agent_system/
 acsa_blueprint/
+.worktrees/
+.superpowers/
+superpowers/

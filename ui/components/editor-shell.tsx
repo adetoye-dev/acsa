@@ -17,6 +17,7 @@
 "use client";
 
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useShallow } from "zustand/react/shallow";
 
 import {
@@ -24,8 +25,8 @@ import {
   type XYPosition
 } from "@xyflow/react";
 
+import { NodeBrowser } from "./node-browser";
 import { NodeInspector } from "./node-inspector";
-import { RunHistoryPanel } from "./run-history-panel";
 import { TopBar, type WorkspaceView } from "./top-bar";
 import { WorkflowCanvas } from "./workflow-canvas";
 import {
@@ -36,20 +37,20 @@ import {
 import {
   formatDuration,
   parseMetricsSummary,
-  type LogPageResponse,
   type MetricsSummary,
   type RunDetailResponse,
   type RunPageResponse
 } from "../lib/observability";
 import {
-  observabilityStoreState,
   useObservabilityActions,
   useObservabilityStore
 } from "../lib/observability-store";
 import {
+  addStepAfterNode,
   addStepToWorkflow,
   autoLayoutWorkflow,
   createLocalWorkflowDocument,
+  createLocalWorkflowDocumentFromYaml,
   defaultStepParamsForType,
   defaultTriggerDetailsForType,
   extractTriggerDetails,
@@ -72,10 +73,17 @@ import {
   workflowToYaml,
   updateWorkflowEdges,
   removeStepFromWorkflow,
+  insertStepBetweenNodes,
   slugifyIdentifier,
   summarizeWorkflow,
   withStepUpdated
 } from "../lib/workflow-editor";
+import {
+  readRecentWorkflows,
+  recordRecentWorkflowOpen,
+  writeRecentWorkflows
+} from "../lib/recent-workflows";
+import { WORKFLOW_STARTERS, type WorkflowStarter } from "../lib/workflow-starters";
 import {
   useWorkflowActions,
   useWorkflowStore,
@@ -96,7 +104,27 @@ type HumanTaskResponse = {
   tasks: HumanTask[];
 };
 
-export function EditorShell() {
+type AddStepIntent =
+  | { mode: "detached" }
+  | { mode: "after"; sourceNodeId: string }
+  | { mode: "between"; sourceId: string; targetId: string };
+
+type EditorShellProps = {
+  createDraftOnBoot?: boolean;
+  embeddedInProductShell?: boolean;
+  requestedWorkflowId?: string | null;
+  syncRoute?: boolean;
+  starterId?: string | null;
+};
+
+export function EditorShell({
+  createDraftOnBoot = false,
+  embeddedInProductShell = false,
+  requestedWorkflowId = null,
+  syncRoute = false,
+  starterId = null
+}: EditorShellProps) {
+  const router = useRouter();
   const {
     activeWorkflowId,
     documents,
@@ -108,6 +136,7 @@ export function EditorShell() {
     isRefreshingTasks,
     isRunning,
     isSaving,
+    pendingTasks,
     runStatus,
     selectedNodeId,
     stepCatalog,
@@ -127,6 +156,7 @@ export function EditorShell() {
       isRefreshingTasks: state.isRefreshingTasks,
       isRunning: state.isRunning,
       isSaving: state.isSaving,
+      pendingTasks: state.pendingTasks,
       runStatus: state.runStatus,
       selectedNodeId: state.selectedNodeId,
       stepCatalog: state.stepCatalog,
@@ -138,25 +168,11 @@ export function EditorShell() {
   );
   const {
     isRefreshingHistory,
-    logLevelFilter,
-    logSearch,
-    metrics,
-    runDetail,
-    runLogs,
-    runPage,
-    runStatusFilter,
-    selectedRunId
+    metrics
   } = useObservabilityStore(
     useShallow((state) => ({
       isRefreshingHistory: state.isRefreshingHistory,
-      logLevelFilter: state.logLevelFilter,
-      logSearch: state.logSearch,
-      metrics: state.metrics,
-      runDetail: state.runDetail,
-      runLogs: state.logs,
-      runPage: state.runPage,
-      runStatusFilter: state.runStatusFilter,
-      selectedRunId: state.selectedRunId
+      metrics: state.metrics
     }))
   );
   const { patch: patchWorkflowState, setDocuments, setWorkflows } = useWorkflowActions();
@@ -166,7 +182,11 @@ export function EditorShell() {
   const [centerView, setCenterView] = useState<WorkspaceView>("canvas");
   const [frameRequestKey, setFrameRequestKey] = useState(0);
   const [isAddStepMenuOpen, setIsAddStepMenuOpen] = useState(false);
-  const addStepMenuRef = useRef<HTMLDivElement | null>(null);
+  const [addStepIntent, setAddStepIntent] = useState<AddStepIntent>({ mode: "detached" });
+  const [liveRunId, setLiveRunId] = useState<string | null>(null);
+  const [liveRunDetail, setLiveRunDetail] = useState<RunDetailResponse | null>(null);
+  const hasCreatedDraftOnBoot = useRef(false);
+  const lastRecordedRecentWorkflowKey = useRef<string | null>(null);
   const canvas = useMemo(
     () =>
       activeWorkflow
@@ -175,9 +195,30 @@ export function EditorShell() {
     [activeWorkflow, stepCatalog]
   );
   const displayNodes = useMemo(
-    () => decorateNodesForSelectedRun(canvas.nodes, activeWorkflow, runDetail),
-    [activeWorkflow, canvas.nodes, runDetail]
+    () => decorateNodesForSelectedRun(canvas.nodes, activeWorkflow, liveRunDetail),
+    [activeWorkflow, canvas.nodes, liveRunDetail]
   );
+  const canvasNodeLookup = useMemo(
+    () => new Map(canvas.nodes.map((node) => [node.id, node])),
+    [canvas.nodes]
+  );
+  const nodeBrowserHint = useMemo(() => {
+    if (addStepIntent.mode === "after") {
+      return `Add after ${
+        canvasNodeLookup.get(addStepIntent.sourceNodeId)?.data.label ?? "selected node"
+      }`;
+    }
+
+    if (addStepIntent.mode === "between") {
+      const sourceLabel =
+        canvasNodeLookup.get(addStepIntent.sourceId)?.data.label ?? "source node";
+      const targetLabel =
+        canvasNodeLookup.get(addStepIntent.targetId)?.data.label ?? "target node";
+      return `Insert between ${sourceLabel} and ${targetLabel}`;
+    }
+
+    return "Create an unconnected draft step";
+  }, [addStepIntent, canvasNodeLookup]);
   const selectedNode =
     selectedNodeId === null
       ? null
@@ -198,87 +239,100 @@ export function EditorShell() {
   const canSave = !isSaving && !saveDisabledReason;
   const canRun = !isRunning && !runDisabledReason;
 
-  useEffect(() => {
+  function navigateToWorkflowRoute(workflowId: string | null) {
+    if (!syncRoute) {
+      return;
+    }
+    router.replace(workflowId ? `/workflows/${workflowId}` : "/workflows");
+  }
+
+  function applyInspectorDraftState(
+    document: WorkflowDocument | null,
+    nextSelectedNodeId: string | null
+  ) {
+    patchWorkflowState(buildInspectorDraftState(document, nextSelectedNodeId));
+  }
+
+  useEffect(function bootstrapEditorEffect() {
     void bootstrap();
   }, []);
 
-  useEffect(() => {
-    if (!isAddStepMenuOpen) {
+  useEffect(function syncRequestedWorkflowRouteEffect() {
+    if (!syncRoute || isBooting || createDraftOnBoot || !requestedWorkflowId) {
       return;
     }
 
-    function handlePointerDown(event: PointerEvent) {
-      if (!addStepMenuRef.current?.contains(event.target as Node)) {
-        setIsAddStepMenuOpen(false);
-      }
-    }
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setIsAddStepMenuOpen(false);
-      }
-    }
-
-    window.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("keydown", handleKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [isAddStepMenuOpen]);
-
-  useEffect(() => {
-    if (isBooting) {
+    if (requestedWorkflowId === activeWorkflowId) {
       return;
     }
-    void refreshRunHistory(selectedRunId);
-  }, [isBooting, runStatusFilter, selectedRunId]);
 
-  useEffect(() => {
+    if (!workflows.some((workflow) => workflow.id === requestedWorkflowId)) {
+      if (activeWorkflowId) {
+        navigateToWorkflowRoute(activeWorkflowId);
+      }
+      return;
+    }
+
+    void handleSelectWorkflow(requestedWorkflowId);
+  }, [activeWorkflowId, createDraftOnBoot, isBooting, requestedWorkflowId, syncRoute, workflows]);
+
+  useEffect(function clearLiveRunForWorkflowSwitchEffect() {
     if (!activeWorkflow) {
-      patchWorkflowState({
-        inspectorError: null,
-        stepParamsDraft: "{}",
-        triggerDetailsDraft: "{}"
-      });
+      setLiveRunId(null);
+      setLiveRunDetail(null);
       return;
     }
 
-    const nextWorkflowDraftState: {
-      inspectorError: string | null;
-      stepParamsDraft: string;
-      triggerDetailsDraft: string;
-    } = {
-      inspectorError: null,
-      stepParamsDraft: "{}",
-      triggerDetailsDraft: formatYaml(extractTriggerDetails(activeWorkflow.workflow.trigger))
-    };
+    if (liveRunDetail && liveRunDetail.run.workflow_name !== activeWorkflow.workflow.name) {
+      setLiveRunId(null);
+      setLiveRunDetail(null);
+    }
+  }, [activeWorkflow, liveRunDetail]);
 
-    if (selectedNode?.data.kind === "step") {
-      const selectedStep = activeWorkflow.workflow.steps.find(
-        (step) => step.id === selectedNode.id
+  useEffect(function recordRecentWorkflowOpenEffect() {
+    if (!activeWorkflow) {
+      return;
+    }
+
+    if (activeWorkflow.localDraft && !starterId) {
+      return;
+    }
+
+    const nextKey = [
+      activeWorkflow.id,
+      activeWorkflow.summary.file_name,
+      activeWorkflow.summary.name,
+      activeWorkflow.localDraft ? "draft" : "saved"
+    ].join("|");
+    if (lastRecordedRecentWorkflowKey.current === nextKey) {
+      return;
+    }
+
+    try {
+      const currentRecents = readRecentWorkflows(window.localStorage);
+      writeRecentWorkflows(
+        window.localStorage,
+        recordRecentWorkflowOpen(currentRecents, {
+          fileName: activeWorkflow.summary.file_name,
+          name: activeWorkflow.summary.name,
+          openedAt: Date.now(),
+          workflowId: activeWorkflow.id
+        })
       );
-      nextWorkflowDraftState.stepParamsDraft = formatYaml(selectedStep?.params ?? {});
+      lastRecordedRecentWorkflowKey.current = nextKey;
+    } catch {
+      // Ignore storage failures; recents are best-effort only.
     }
+  }, [
+    activeWorkflow?.id,
+    activeWorkflow?.localDraft,
+    activeWorkflow?.summary.file_name,
+    activeWorkflow?.summary.name,
+    starterId
+  ]);
 
-    patchWorkflowState(nextWorkflowDraftState);
-  }, [activeWorkflow, selectedNode?.data.kind, selectedNode?.id]);
-
-  useEffect(() => {
-    if (isBooting || !selectedRunId) {
-      if (!selectedRunId) {
-        patchObservabilityState({
-          logs: null,
-          runDetail: null
-        });
-      }
-      return;
-    }
-    void loadRunDetail(selectedRunId);
-  }, [isBooting, logLevelFilter, logSearch, selectedRunId]);
-
-  useEffect(() => {
-    if (!selectedRunId || !isRunning) {
+  useEffect(function pollLiveRunDetailEffect() {
+    if (!liveRunId || !isRunning) {
       return;
     }
 
@@ -286,15 +340,17 @@ export function EditorShell() {
     let timer: ReturnType<typeof setTimeout> | null = null;
 
     const poll = async () => {
-      const detail = await loadRunDetail(selectedRunId);
+      const detail = await loadLiveRunDetail(liveRunId);
       if (cancelled) {
         return;
       }
 
-      if (!detail || detail.run.id !== selectedRunId) {
+      if (!detail || detail.run.id !== liveRunId) {
         timer = setTimeout(poll, 900);
         return;
       }
+
+      setLiveRunDetail(detail);
 
       if (detail.run.status === "running") {
         timer = setTimeout(poll, 900);
@@ -330,8 +386,9 @@ export function EditorShell() {
             : null,
         runStatus: null
       });
+      setLiveRunId(null);
       await refreshHumanTasks();
-      await refreshRunHistory(detail.run.id, detail.run.workflow_name);
+      await refreshRunHistory(detail.run.workflow_name);
     };
 
     void poll();
@@ -342,7 +399,7 @@ export function EditorShell() {
         clearTimeout(timer);
       }
     };
-  }, [isRunning, selectedRunId, logLevelFilter, logSearch]);
+  }, [isRunning, liveRunId]);
 
   async function bootstrap() {
     patchWorkflowState({
@@ -350,34 +407,83 @@ export function EditorShell() {
       isBooting: true
     });
     try {
-      const [catalog, inventory, tasks] = await Promise.all([
+      const starter = starterId
+        ? WORKFLOW_STARTERS.find((candidate) => candidate.id === starterId) ?? null
+        : null;
+      const starterYamlPromise = starter
+        ? fetchStarterYaml(starter.yamlPath).catch(() => null)
+        : Promise.resolve(null);
+      const [catalog, inventory, tasks, starterYaml] = await Promise.all([
         fetchEngineJson<NodeCatalogResponse>("/api/node-catalog"),
         fetchEngineJson<WorkflowInventoryResponse>("/api/workflows"),
-        fetchEngineJson<HumanTaskResponse>("/human-tasks")
+        fetchEngineJson<HumanTaskResponse>("/human-tasks"),
+        starterYamlPromise
       ]);
 
+      const currentDocuments = workflowStoreState().documents;
+      const mergedWorkflows = mergeWorkflowSummaries(currentDocuments, inventory.workflows);
       patchWorkflowState({
         invalidFiles: inventory.invalid_files,
         newStepType: catalog.step_types[0]?.type_name ?? "noop",
         pendingTasks: tasks.tasks,
         stepCatalog: catalog.step_types,
         triggerCatalog: catalog.trigger_types,
-        workflows: mergeWorkflowSummaries({}, inventory.workflows)
+        workflows: mergedWorkflows
       });
 
+      if (createDraftOnBoot && !hasCreatedDraftOnBoot.current) {
+        hasCreatedDraftOnBoot.current = true;
+        const document = persistDocumentLayout(
+          createDraftDocumentFromStarter({
+            documents: currentDocuments,
+            persistedWorkflows: mergedWorkflows,
+            starter,
+            starterYaml
+          })
+        );
+        setDocuments((current) => ({
+          ...current,
+          [document.id]: document
+        }));
+        setWorkflows((current) => upsertWorkflowSummary(current, document.summary));
+        patchWorkflowState({
+          activeWorkflowId: document.id,
+          lastAction: starter
+            ? `Loaded ${starter.name} starter draft`
+            : `Created ${document.summary.file_name} draft`,
+          selectedNodeId: TRIGGER_NODE_ID
+        });
+        applyInspectorDraftState(document, TRIGGER_NODE_ID);
+        navigateToWorkflowRoute(document.id);
+        await refreshRunHistory(document.workflow.name);
+        return;
+      }
+
       const preferredWorkflowId =
-        inventory.workflows.find(
+        mergedWorkflows.find((workflow) => workflow.id === requestedWorkflowId)?.id ??
+        mergedWorkflows.find(
           (workflow) => workflow.id === workflowStoreState().activeWorkflowId
         )?.id ??
-        inventory.workflows[0]?.id ??
+        mergedWorkflows[0]?.id ??
         null;
       patchWorkflowState({ activeWorkflowId: preferredWorkflowId });
+      if (requestedWorkflowId !== preferredWorkflowId) {
+        navigateToWorkflowRoute(preferredWorkflowId);
+      }
       let workflowName: string | null = null;
       if (preferredWorkflowId) {
-        const response = await loadWorkflowDocument(preferredWorkflowId);
-        workflowName = response?.summary.name ?? null;
+        const localDraftDocument = currentDocuments[preferredWorkflowId];
+        if (localDraftDocument?.localDraft) {
+          applyInspectorDraftState(localDraftDocument, workflowStoreState().selectedNodeId);
+          workflowName = localDraftDocument.summary.name;
+        } else {
+          const response = await loadWorkflowDocument(preferredWorkflowId);
+          workflowName = response?.summary.name ?? null;
+        }
+      } else {
+        applyInspectorDraftState(null, null);
       }
-      await refreshRunHistory(undefined, workflowName);
+      await refreshRunHistory(workflowName);
       patchWorkflowState({
         lastAction: "Loaded workflow inventory, node catalog, and pending tasks"
       });
@@ -391,13 +497,48 @@ export function EditorShell() {
     }
   }
 
-  async function loadWorkflowDocument(workflowId: string) {
+  async function fetchStarterYaml(yamlPath: string) {
+    const response = await fetch(yamlPath);
+    if (!response.ok) {
+      throw new Error(`Failed to load starter workflow from ${yamlPath}`);
+    }
+    return response.text();
+  }
+
+  function createDraftDocumentFromStarter({
+    documents,
+    persistedWorkflows,
+    starter,
+    starterYaml
+  }: {
+    documents: Record<string, WorkflowDocument>;
+    persistedWorkflows: WorkflowSummary[];
+    starter: WorkflowStarter | null;
+    starterYaml: string | null;
+  }) {
+    if (!starter || !starterYaml) {
+      return createLocalWorkflowDocument(nextDraftWorkflowId(persistedWorkflows, documents));
+    }
+
+    const workflowId = nextStarterDraftWorkflowId(starter.id, persistedWorkflows, documents);
+    try {
+      return createLocalWorkflowDocumentFromYaml(workflowId, starterYaml);
+    } catch {
+      return createLocalWorkflowDocument(nextDraftWorkflowId(persistedWorkflows, documents));
+    }
+  }
+
+  async function loadWorkflowDocument(
+    workflowId: string,
+    nextSelectedNodeId: string | null = workflowStoreState().selectedNodeId
+  ) {
     patchWorkflowState({ isLoadingWorkflow: true });
     try {
       const response = await fetchEngineJson<WorkflowDocumentResponse>(
         `/api/workflows/${workflowId}`
       );
-      applyWorkflowResponse(response);
+      const nextDocument = applyWorkflowResponse(response);
+      applyInspectorDraftState(nextDocument, nextSelectedNodeId);
       patchWorkflowState({ lastAction: `Opened ${response.summary.file_name}` });
       return response;
     } catch (error) {
@@ -439,11 +580,7 @@ export function EditorShell() {
     return nextWorkflowId;
   }
 
-  async function refreshRunHistory(
-    preferredRunId?: string | null,
-    workflowNameOverride?: string | null
-  ) {
-    const currentObservabilityState = observabilityStoreState();
+  async function refreshRunHistory(workflowNameOverride?: string | null) {
     patchObservabilityState({ isRefreshingHistory: true });
     try {
       const query = new URLSearchParams();
@@ -452,9 +589,6 @@ export function EditorShell() {
       if (workflowName) {
         query.set("workflow_name", workflowName);
       }
-      if (currentObservabilityState.runStatusFilter.trim()) {
-        query.set("status", currentObservabilityState.runStatusFilter.trim());
-      }
       query.set("page", "1");
       query.set("page_size", "12");
 
@@ -462,25 +596,10 @@ export function EditorShell() {
         fetchEngineJson<RunPageResponse>(`/api/runs?${query.toString()}`),
         fetchEngineText("/metrics")
       ]);
-
-      const nextRunId =
-        preferredRunId ??
-        (currentObservabilityState.selectedRunId
-          ? pageResponse.runs.find(
-              (run) => run.id === currentObservabilityState.selectedRunId
-            )?.id
-          : undefined) ??
-        null;
       patchObservabilityState({
         isRefreshingHistory: false,
-        logs: nextRunId ? currentObservabilityState.logs : null,
         metrics: parseMetricsSummary(metricsText),
-        runDetail:
-          nextRunId && currentObservabilityState.runDetail?.run.id === nextRunId
-            ? currentObservabilityState.runDetail
-            : null,
-        runPage: pageResponse,
-        selectedRunId: nextRunId
+        runPage: pageResponse
       });
     } catch (error) {
       patchWorkflowState({ globalError: errorMessage(error) });
@@ -489,29 +608,9 @@ export function EditorShell() {
     }
   }
 
-  async function loadRunDetail(runId: string) {
-    const currentObservabilityState = observabilityStoreState();
+  async function loadLiveRunDetail(runId: string) {
     try {
-      const [detailResponse, logResponse] = await Promise.all([
-        fetchEngineJson<RunDetailResponse>(`/api/runs/${runId}`),
-        fetchEngineJson<LogPageResponse>(
-          `/api/runs/${runId}/logs?${new URLSearchParams({
-            ...(currentObservabilityState.logLevelFilter
-              ? { level: currentObservabilityState.logLevelFilter }
-              : {}),
-            ...(currentObservabilityState.logSearch
-              ? { search: currentObservabilityState.logSearch }
-              : {}),
-            page: "1",
-            page_size: "80"
-          }).toString()}`
-        )
-      ]);
-      patchObservabilityState({
-        logs: logResponse,
-        runDetail: detailResponse
-      });
-      return detailResponse;
+      return await fetchEngineJson<RunDetailResponse>(`/api/runs/${runId}`);
     } catch (error) {
       patchWorkflowState({ globalError: errorMessage(error) });
       return null;
@@ -522,7 +621,7 @@ export function EditorShell() {
     updater: (document: WorkflowDocument) => WorkflowDocument
   ) {
     if (!activeWorkflow) {
-      return;
+      return null;
     }
     const nextDocument = persistDocumentLayout(finalizeDocument(updater(activeWorkflow)));
     setDocuments((current) => ({
@@ -534,20 +633,27 @@ export function EditorShell() {
         workflow.id === nextDocument.id ? nextDocument.summary : workflow
       )
     );
+    return nextDocument;
   }
 
   function applyWorkflowResponse(response: WorkflowDocumentResponse) {
+    let nextDocument: WorkflowDocument | null = null;
     setDocuments((current) => ({
       ...current,
-      [response.id]: persistDocumentLayout(
-        workflowDocumentFromResponse(
-          response,
-          current[response.id],
-          readStoredWorkflowPositions(response.id)
-        )
-      )
+      [response.id]: (() => {
+        const hydratedDocument = persistDocumentLayout(
+          workflowDocumentFromResponse(
+            response,
+            current[response.id],
+            readStoredWorkflowPositions(response.id)
+          )
+        );
+        nextDocument = hydratedDocument;
+        return hydratedDocument;
+      })()
     }));
     setWorkflows((current) => upsertWorkflowSummary(current, response.summary));
+    return nextDocument;
   }
 
   async function handleCreateWorkflow() {
@@ -564,7 +670,9 @@ export function EditorShell() {
       lastAction: `Created ${document.summary.file_name} draft`,
       selectedNodeId: TRIGGER_NODE_ID
     });
-    await refreshRunHistory(undefined, document.workflow.name);
+    applyInspectorDraftState(document, TRIGGER_NODE_ID);
+    navigateToWorkflowRoute(document.id);
+    await refreshRunHistory(document.workflow.name);
   }
 
   async function handleDeleteWorkflow(workflowId: string) {
@@ -591,12 +699,16 @@ export function EditorShell() {
         lastAction: `Discarded ${workflowId}.yaml draft`,
         selectedNodeId: null
       });
+      navigateToWorkflowRoute(nextWorkflowId);
       if (nextWorkflowId && !workflowStoreState().documents[nextWorkflowId]) {
-        const response = await loadWorkflowDocument(nextWorkflowId);
-        await refreshRunHistory(undefined, response?.summary.name ?? nextWorkflowId);
+        const response = await loadWorkflowDocument(nextWorkflowId, null);
+        await refreshRunHistory(response?.summary.name ?? nextWorkflowId);
       } else {
+        applyInspectorDraftState(
+          nextWorkflowId ? workflowStoreState().documents[nextWorkflowId] ?? null : null,
+          null
+        );
         await refreshRunHistory(
-          undefined,
           nextWorkflowId ? workflowStoreState().documents[nextWorkflowId]?.workflow.name ?? null : null
         );
       }
@@ -622,16 +734,19 @@ export function EditorShell() {
         if (draftDocument?.localDraft) {
           workflowName = draftDocument.workflow.name;
         } else {
-          const response = await loadWorkflowDocument(nextWorkflowId);
+          const response = await loadWorkflowDocument(nextWorkflowId, null);
           workflowName = response?.summary.name ?? null;
         }
+      } else {
+        applyInspectorDraftState(null, null);
       }
-      await refreshRunHistory(undefined, workflowName);
+      await refreshRunHistory(workflowName);
       patchWorkflowState({
         globalError: null,
         lastAction: `Deleted ${workflowId}.yaml`,
         selectedNodeId: null
       });
+      navigateToWorkflowRoute(nextWorkflowId);
     } catch (error) {
       patchWorkflowState({
         globalError: errorMessage(error),
@@ -682,7 +797,9 @@ export function EditorShell() {
         lastAction: `Duplicated ${workflowId}.yaml to ${duplicateDocument.summary.file_name}`,
         selectedNodeId: null
       });
-      await refreshRunHistory(undefined, duplicateDocument.workflow.name);
+      applyInspectorDraftState(duplicateDocument, null);
+      navigateToWorkflowRoute(targetId);
+      await refreshRunHistory(duplicateDocument.workflow.name);
       return;
     }
 
@@ -697,15 +814,17 @@ export function EditorShell() {
           method: "POST"
         }
       );
-      applyWorkflowResponse(response);
+      const nextDocument = applyWorkflowResponse(response);
       patchWorkflowState({
         activeWorkflowId: response.id,
         globalError: null,
         lastAction: `Duplicated ${workflowId}.yaml to ${response.summary.file_name}`,
         selectedNodeId: null
       });
+      applyInspectorDraftState(nextDocument, null);
+      navigateToWorkflowRoute(response.id);
       await refreshInventory(response.id);
-      await refreshRunHistory(undefined, response.summary.name);
+      await refreshRunHistory(response.summary.name);
     } catch (error) {
       patchWorkflowState({
         globalError: errorMessage(error),
@@ -776,6 +895,10 @@ export function EditorShell() {
         globalError: null,
         lastAction: `Renamed ${workflowId}.yaml to ${renamedDocument.summary.file_name}`
       });
+      if (activeWorkflowId === workflowId) {
+        applyInspectorDraftState(renamedDocument, selectedNodeId);
+        navigateToWorkflowRoute(targetId);
+      }
       return;
     }
 
@@ -794,18 +917,21 @@ export function EditorShell() {
           method: "POST"
         }
       );
+      let renamedDocument: WorkflowDocument | null = null;
       setDocuments((current) => {
         const nextDocuments = { ...current };
         if (workflowId !== response.id) {
           delete nextDocuments[workflowId];
         }
-        nextDocuments[response.id] = persistDocumentLayout(
+        const hydratedDocument = persistDocumentLayout(
           workflowDocumentFromResponse(
             response,
             current[workflowId] ?? current[response.id],
             readStoredWorkflowPositions(response.id)
           )
         );
+        renamedDocument = hydratedDocument;
+        nextDocuments[response.id] = hydratedDocument;
         return nextDocuments;
       });
       setWorkflows((current) => {
@@ -818,8 +944,12 @@ export function EditorShell() {
         globalError: null,
         lastAction: `Renamed ${workflowId}.yaml to ${response.summary.file_name}`
       });
+      if (activeWorkflowId === workflowId) {
+        applyInspectorDraftState(renamedDocument, selectedNodeId);
+        navigateToWorkflowRoute(response.id);
+      }
       await refreshInventory(activeWorkflowId === workflowId ? response.id : activeWorkflowId);
-      await refreshRunHistory(undefined, response.summary.name);
+      await refreshRunHistory(response.summary.name);
     } catch (error) {
       patchWorkflowState({
         globalError: errorMessage(error),
@@ -874,15 +1004,32 @@ export function EditorShell() {
     patchWorkflowState({ lastAction: "Updated node positions" });
   }
 
+  function handleRequestAddAfterNode(nodeId: string) {
+    setAddStepIntent({ mode: "after", sourceNodeId: nodeId });
+    setIsAddStepMenuOpen(true);
+  }
+
+  function handleRequestInsertBetween(sourceId: string, targetId: string) {
+    setAddStepIntent({ mode: "between", sourceId, targetId });
+    setIsAddStepMenuOpen(true);
+  }
+
   function handleAddStep(typeName: string) {
     if (!activeWorkflow) {
       return;
     }
-    const { selectedNodeId: createdNodeId, workflow } = addStepToWorkflow(
-      activeWorkflow.workflow,
-      typeName
-    );
-    applyActiveWorkflowUpdate((document) => ({
+    const { selectedNodeId: createdNodeId, workflow } =
+      addStepIntent.mode === "after"
+        ? addStepAfterNode(activeWorkflow.workflow, typeName, addStepIntent.sourceNodeId)
+        : addStepIntent.mode === "between"
+          ? insertStepBetweenNodes(
+              activeWorkflow.workflow,
+              typeName,
+              addStepIntent.sourceId,
+              addStepIntent.targetId
+            )
+          : addStepToWorkflow(activeWorkflow.workflow, typeName);
+    const nextDocument = applyActiveWorkflowUpdate((document) => ({
       ...document,
       workflow
     }));
@@ -890,6 +1037,8 @@ export function EditorShell() {
       lastAction: `Added ${typeName.replace(/_/g, " ")} step`,
       selectedNodeId: createdNodeId
     });
+    applyInspectorDraftState(nextDocument, createdNodeId);
+    setAddStepIntent({ mode: "detached" });
     setIsAddStepMenuOpen(false);
   }
 
@@ -914,12 +1063,23 @@ export function EditorShell() {
         const draftDocument = workflowStoreState().documents[workflowIdToLoad];
         if (draftDocument?.localDraft) {
           workflowName = draftDocument.workflow.name;
+          applyInspectorDraftState(
+            draftDocument,
+            workflowIdToLoad === workflowStoreState().activeWorkflowId
+              ? workflowStoreState().selectedNodeId
+              : null
+          );
         } else {
-          const response = await loadWorkflowDocument(workflowIdToLoad);
+          const response = await loadWorkflowDocument(
+            workflowIdToLoad,
+            workflowIdToLoad === workflowStoreState().activeWorkflowId
+              ? workflowStoreState().selectedNodeId
+              : null
+          );
           workflowName = response?.summary.name ?? workflowName;
         }
       }
-      await refreshRunHistory(selectedRunId, workflowName);
+      await refreshRunHistory(workflowName);
       patchWorkflowState({
         globalError: null,
         lastAction: "Refreshed workflow inventory, tasks, and run history"
@@ -949,11 +1109,8 @@ export function EditorShell() {
       lastRun: null,
       runStatus: null
     });
-    patchObservabilityState({
-      logs: null,
-      runDetail: null,
-      selectedRunId: null
-    });
+    setLiveRunDetail(null);
+    setLiveRunId(null);
     try {
       const response = await fetchEngineJson<RunStartResponse>(
         `/api/workflows/${activeWorkflow.id}/run-async`,
@@ -968,9 +1125,11 @@ export function EditorShell() {
       patchWorkflowState({
         globalError: null
       });
-      patchObservabilityState({ selectedRunId: response.run_id });
-      await refreshRunHistory(response.run_id, response.workflow_name);
+      setLiveRunId(response.run_id);
+      await refreshRunHistory(response.workflow_name);
     } catch (error) {
+      setLiveRunId(null);
+      setLiveRunDetail(null);
       patchWorkflowState({
         globalError: errorMessage(error),
         isRunning: false,
@@ -1007,7 +1166,7 @@ export function EditorShell() {
           method: activeWorkflow.localDraft ? "POST" : "PUT"
         }
       );
-      applyWorkflowResponse(response);
+      const nextDocument = applyWorkflowResponse(response);
       if (activeWorkflow.localDraft) {
         setDocuments((current) => {
           const nextDocuments = { ...current };
@@ -1024,6 +1183,8 @@ export function EditorShell() {
         lastAction: `Saved ${response.summary.file_name}`,
         selectedNodeId
       });
+      applyInspectorDraftState(nextDocument, selectedNodeId);
+      navigateToWorkflowRoute(response.id);
       await refreshInventory(response.id);
     } catch (error) {
       patchWorkflowState({
@@ -1042,11 +1203,14 @@ export function EditorShell() {
       selectedNodeId: null
     });
     if (!documents[workflowId]) {
-      const response = await loadWorkflowDocument(workflowId);
-      await refreshRunHistory(selectedRunId, response?.summary.name ?? workflowId);
+      navigateToWorkflowRoute(workflowId);
+      const response = await loadWorkflowDocument(workflowId, null);
+      await refreshRunHistory(response?.summary.name ?? workflowId);
       return;
     }
-    await refreshRunHistory(selectedRunId, documents[workflowId].workflow.name);
+    applyInspectorDraftState(documents[workflowId], null);
+    navigateToWorkflowRoute(workflowId);
+    await refreshRunHistory(documents[workflowId].workflow.name);
     patchWorkflowState({ lastAction: `Opened ${workflowId}.yaml` });
   }
 
@@ -1054,7 +1218,7 @@ export function EditorShell() {
     if (!activeWorkflow) {
       return;
     }
-    applyActiveWorkflowUpdate((document) => ({
+    const nextDocument = applyActiveWorkflowUpdate((document) => ({
       ...document,
       workflow: {
         ...document.workflow,
@@ -1068,6 +1232,7 @@ export function EditorShell() {
       lastAction: `Updated trigger type to ${triggerType}`,
       triggerDetailsDraft: formatYaml(defaultTriggerDetailsForType(triggerType, activeWorkflow.id))
     });
+    applyInspectorDraftState(nextDocument, selectedNodeId);
   }
 
   function handleTriggerDetailsChange(text: string) {
@@ -1112,7 +1277,7 @@ export function EditorShell() {
       return;
     }
 
-    applyActiveWorkflowUpdate((document) => ({
+    const nextDocument = applyActiveWorkflowUpdate((document) => ({
       ...document,
       positions: renamePositionKey(document.positions, selectedNode.id, nextId),
       workflow: {
@@ -1141,13 +1306,14 @@ export function EditorShell() {
       lastAction: `Renamed step ${selectedNode.id} to ${nextId}`,
       selectedNodeId: nextId
     });
+    applyInspectorDraftState(nextDocument, nextId);
   }
 
   function handleSelectedNodeTypeChange(typeName: string) {
     if (!selectedNode || selectedNode.data.kind !== "step") {
       return;
     }
-    applyActiveWorkflowUpdate((document) => ({
+    const nextDocument = applyActiveWorkflowUpdate((document) => ({
       ...document,
       workflow: withStepUpdated(document.workflow, selectedNode.id, (step) => ({
         ...step,
@@ -1159,6 +1325,7 @@ export function EditorShell() {
       inspectorError: null,
       lastAction: `Changed ${selectedNode.id} to ${typeName}`
     });
+    applyInspectorDraftState(nextDocument, selectedNode.id);
   }
 
   function handleSelectedNodeTimeoutChange(value: string) {
@@ -1256,7 +1423,7 @@ export function EditorShell() {
       return;
     }
 
-    applyActiveWorkflowUpdate((document) => ({
+    const nextDocument = applyActiveWorkflowUpdate((document) => ({
       ...document,
       positions: omitPosition(document.positions, targetStepId),
       workflow: removeStepFromWorkflow(document.workflow, targetStepId)
@@ -1266,34 +1433,49 @@ export function EditorShell() {
       lastAction: `Removed step ${targetStepId}`,
       selectedNodeId: null
     });
+    applyInspectorDraftState(nextDocument, null);
+  }
+
+  function handleChangeCenterView(nextView: WorkspaceView) {
+    setCenterView(nextView);
+  }
+
+  function handleSelectCanvasNode(nodeId: string | null) {
+    setIsAddStepMenuOpen(false);
+    setAddStepIntent({ mode: "detached" });
+    patchWorkflowState({ selectedNodeId: nodeId });
+    applyInspectorDraftState(activeWorkflow, nodeId);
   }
 
   const showCanvasView = centerView === "canvas";
-  const showNodeRail = showCanvasView && Boolean(selectedNode);
-  const activeRunStatus = isRunning ? "running" : runDetail?.run.status ?? runStatus ?? null;
+  const showNodeBrowser = showCanvasView && isAddStepMenuOpen;
+  const showPreviewView = centerView === "preview";
+  const showRightRail = showNodeBrowser || (showCanvasView && Boolean(selectedNode));
+  const activeRunStatus = isRunning ? "running" : liveRunDetail?.run.status ?? runStatus ?? null;
   const draftNotice = workflowDraftNotice(activeWorkflow);
-  const centerViewLabel =
-    centerView === "canvas"
-      ? "Canvas"
-      : centerView === "preview"
-        ? "Preview"
-        : centerView === "history"
-          ? "History"
-          : "Logs";
+  const showWorkflowSidebar = !embeddedInProductShell;
+  const workspaceGridClassName = showRightRail
+    ? showWorkflowSidebar
+      ? "xl:grid-cols-[256px_minmax(0,1fr)_324px]"
+      : "xl:grid-cols-[minmax(0,1fr)_324px]"
+    : showWorkflowSidebar
+      ? "xl:grid-cols-[256px_minmax(0,1fr)]"
+      : "xl:grid-cols-[minmax(0,1fr)]";
 
   return (
-    <main className="h-[100dvh] overflow-hidden bg-[#edf2f1] p-4 text-ink">
+    <main className={`${embeddedInProductShell ? "h-full" : "h-[100dvh]"} overflow-hidden bg-[#f7f7f8] text-ink`}>
       <div
-        className={`mx-auto grid h-full max-w-[1880px] gap-4 ${
-          globalError ? "grid-rows-[58px_auto_minmax(0,1fr)]" : "grid-rows-[58px_minmax(0,1fr)]"
+        className={`grid h-full ${
+          globalError ? "grid-rows-[60px_auto_minmax(0,1fr)]" : "grid-rows-[60px_minmax(0,1fr)]"
         }`}
       >
         <TopBar
           activeWorkflowFile={activeWorkflow?.summary.file_name ?? "No workflow selected"}
-          activeWorkflowName={activeWorkflow?.workflow.name ?? "No workflow"}
+          activeView={centerView}
           hasUnsavedChanges={activeWorkflow?.dirty ?? false}
           isRunning={isRunning}
           isSaving={isSaving}
+          onChangeView={handleChangeCenterView}
           onRefresh={() => void handleRefresh()}
           onRun={() => void handleRun()}
           onSave={() => void handleSave()}
@@ -1301,122 +1483,88 @@ export function EditorShell() {
           runDisabledReason={runDisabledReason}
           saveDisabled={!canSave}
           saveDisabledReason={saveDisabledReason}
+          showBrand={!embeddedInProductShell}
         />
 
         {globalError ? (
-          <section className="rounded-2xl border border-ember/20 bg-ember/5 px-4 py-3 text-sm leading-6 text-ember">
+          <section className="border-b border-ember/20 bg-[#fff0eb] px-4 py-2.5 text-sm leading-6 text-[#cd694d]">
             {globalError}
           </section>
         ) : null}
 
-        <section
-          className={`grid min-h-0 gap-4 ${
-            showNodeRail
-              ? "xl:grid-cols-[256px_minmax(0,1fr)_336px]"
-              : "xl:grid-cols-[256px_minmax(0,1fr)]"
-          }`}
-        >
-          <aside className="panel-surface grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
-            <div className="border-b border-black/10 px-4 py-4">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/55">
-                Navigation
-              </div>
-              <div className="mt-1 text-lg font-semibold tracking-tight text-ink">
-                Workspace
-              </div>
-            </div>
-
-            <div className="sleek-scroll flex min-h-0 flex-col overflow-y-auto px-3 py-3">
-              <SidebarBlock
-                accessory={
-                  <button
-                    className="ui-button !px-2.5 !py-2 !text-[10px]"
-                    disabled={isBusy}
-                    onClick={() => void handleCreateWorkflow()}
-                    type="button"
-                  >
-                    New
-                  </button>
-                }
-                title="Workflows"
-              >
-                <WorkflowList
-                  activeWorkflowId={activeWorkflowId}
-                  invalidFiles={invalidFiles}
-                  isBusy={isBusy}
-                  onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
-                  onDuplicateWorkflow={(workflowId) => void handleDuplicateWorkflow(workflowId)}
-                  onRenameWorkflow={(workflowId) => void handleRenameWorkflow(workflowId)}
-                  onSelectWorkflow={(workflowId) => void handleSelectWorkflow(workflowId)}
-                  workflows={workflows}
-                />
-              </SidebarBlock>
-
-              <div className="mt-auto pt-8">
-                <SidebarBlock title="Quick status">
-                  <SidebarQuickStatus
-                    activeRunStatus={activeRunStatus}
-                    invalidFileCount={invalidFiles.length}
-                    metrics={metrics}
+        <section className={`grid min-h-0 bg-[rgba(255,255,255,0.76)] ${workspaceGridClassName}`}>
+          {showWorkflowSidebar ? (
+            <aside className="grid min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden border-r border-black/10 bg-[rgba(255,255,255,0.7)]">
+              <div className="sleek-scroll flex min-h-0 flex-col overflow-y-auto px-3 py-3">
+                <SidebarBlock
+                  accessory={
+                    <button
+                      className="ui-button !px-2.5 !py-2 !text-[10px]"
+                      disabled={isBusy}
+                      onClick={() => void handleCreateWorkflow()}
+                      type="button"
+                    >
+                      New
+                    </button>
+                  }
+                  title="Workflows"
+                >
+                  <WorkflowList
+                    activeWorkflowId={activeWorkflowId}
+                    invalidFiles={invalidFiles}
+                    isBusy={isBusy}
+                    onDeleteWorkflow={(workflowId) => void handleDeleteWorkflow(workflowId)}
+                    onDuplicateWorkflow={(workflowId) => void handleDuplicateWorkflow(workflowId)}
+                    onRenameWorkflow={(workflowId) => void handleRenameWorkflow(workflowId)}
+                    onSelectWorkflow={(workflowId) => void handleSelectWorkflow(workflowId)}
+                    workflows={workflows}
                   />
                 </SidebarBlock>
-              </div>
-            </div>
-          </aside>
 
-          <section className="panel-surface grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
-            <div className="flex items-center justify-between border-b border-black/10 px-4 py-3">
-              <div className="min-w-0">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/55">
-                  Center workspace
-                </div>
-                <div className="mt-1 text-lg font-semibold tracking-tight text-ink">
-                  {centerViewLabel}
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2 rounded-2xl border border-black/10 bg-white/80 p-1">
-                {(["canvas", "preview", "history", "logs"] as WorkspaceView[]).map((view) => (
-                  <button
-                    key={view}
-                    className={`rounded-xl px-3 py-2 font-mono text-[11px] uppercase tracking-[0.16em] ${
-                      centerView === view ? "bg-ink text-white" : "text-slate/68"
-                    }`}
-                    onClick={() => setCenterView(view)}
-                    type="button"
-                  >
-                    {view}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {showCanvasView ? (
-              <div className="relative h-full min-h-0">
-                {activeWorkflow ? (
-                  <>
-                    <WorkflowCanvas
-                      key={activeWorkflow.id}
-                      edges={canvas.edges}
-                      frameRequestKey={frameRequestKey}
-                      nodes={displayNodes}
-                      onAttachStepToTrigger={handleAttachStepToTrigger}
-                      onDeleteStep={handleDeleteSelectedNode}
-                      onEdgesCommit={handleEdgesCommit}
-                      onPositionsCommit={handlePositionsCommit}
-                      onSelectNode={(nodeId) => patchWorkflowState({ selectedNodeId: nodeId })}
-                      showControls={false}
-                      showMiniMap={false}
-                      showViewportPanel={false}
+                <div className="mt-auto border-t border-black/10 px-1 pt-3">
+                  <SidebarBlock title="Quick status">
+                    <SidebarQuickStatus
+                      activeRunStatus={activeRunStatus}
+                      invalidFileCount={invalidFiles.length}
+                      metrics={metrics}
                     />
+                  </SidebarBlock>
+                </div>
+              </div>
+            </aside>
+          ) : null}
+
+          <section className="min-h-0 overflow-hidden bg-[rgba(255,255,255,0.7)]">
+            {showCanvasView ? (
+              <div className="h-full min-h-0 overflow-hidden">
+                {activeWorkflow ? (
+                  <div className="relative h-full min-h-0 overflow-hidden bg-[#fbfbfc]">
+                    <div className="relative h-full min-h-0">
+                      <WorkflowCanvas
+                        key={activeWorkflow.id}
+                        edges={canvas.edges}
+                        frameRequestKey={frameRequestKey}
+                        nodes={displayNodes}
+                        onAttachStepToTrigger={handleAttachStepToTrigger}
+                        onDeleteStep={handleDeleteSelectedNode}
+                        onEdgesCommit={handleEdgesCommit}
+                        onInsertBetween={handleRequestInsertBetween}
+                        onPositionsCommit={handlePositionsCommit}
+                        onRequestAddAfterNode={handleRequestAddAfterNode}
+                        onSelectNode={handleSelectCanvasNode}
+                        showControls={false}
+                        showMiniMap={false}
+                        showViewportPanel={false}
+                      />
+                    </div>
                     {draftNotice ? (
-                      <div className="pointer-events-none absolute left-4 top-4 z-20 max-w-sm">
-                        <div className="rounded-2xl border border-black/10 bg-white/92 px-4 py-3 text-sm leading-6 text-slate shadow-panel">
+                      <div className="pointer-events-none absolute left-3 top-3 z-20 max-w-sm">
+                        <div className="rounded-[10px] border border-black/10 bg-white px-3 py-2.5 text-sm leading-6 text-slate shadow-[0_1px_2px_rgba(16,20,20,0.04)]">
                           {draftNotice}
                         </div>
                       </div>
                     ) : null}
-                    <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-end p-4">
+                    <div className="pointer-events-none absolute inset-x-0 top-0 flex justify-end p-3">
                       <div className="pointer-events-auto flex flex-wrap items-center gap-2">
                         <button
                           className="ui-button !px-2.5 !py-2 !text-[10px]"
@@ -1434,133 +1582,121 @@ export function EditorShell() {
                         </button>
                       </div>
                     </div>
-                    <div
-                      className="absolute bottom-4 right-4 z-20"
-                      ref={addStepMenuRef}
-                    >
+                    <div className="absolute bottom-3 right-3 z-20">
                       <button
                         aria-expanded={isAddStepMenuOpen}
                         aria-haspopup="menu"
                         aria-label="Add step"
-                        className={`flex h-11 w-11 items-center justify-center rounded-2xl border text-xl text-white shadow-panel transition ${
+                        className={`flex h-10 w-10 items-center justify-center rounded-[10px] border text-xl shadow-[0_1px_2px_rgba(16,20,20,0.06)] transition ${
                           isAddStepMenuOpen
-                            ? "border-black/10 bg-slate"
-                            : "border-black/10 bg-ink hover:bg-slate"
+                            ? "border-[#171b20] bg-[#171b20] text-white"
+                            : "border-black/10 bg-white text-[#334155] hover:border-black/20 hover:bg-[#f7f7fb]"
                         }`}
-                        onClick={() => setIsAddStepMenuOpen((current) => !current)}
+                        onClick={() => {
+                          setAddStepIntent({ mode: "detached" });
+                          setIsAddStepMenuOpen((current) => !current);
+                        }}
                         type="button"
                       >
                         +
                       </button>
-                      {isAddStepMenuOpen ? (
-                        <AddStepMenu
-                          groupedStepCatalog={groupedOptions(stepCatalog)}
-                          onSelectType={handleAddStep}
-                        />
-                      ) : null}
                     </div>
-                  </>
+                  </div>
                 ) : (
                   <div className="flex h-full items-center justify-center px-10 text-center text-sm leading-7 text-slate">
-                {isBooting
+                    {isBooting
                       ? "Booting the editor..."
                       : "No valid workflow is loaded yet. Create a new workflow or fix invalid YAML files from the sidebar."}
                   </div>
                 )}
               </div>
-            ) : centerView === "preview" ? (
-              <div className="min-h-0 p-4">
+            ) : showPreviewView ? (
+              <div className="grid h-full min-h-0 overflow-hidden">
                 <WorkflowYamlCard
                   fullHeight
                   workflowYaml={activeWorkflow?.yaml ?? ""}
                 />
               </div>
-            ) : (
-              <RunHistoryPanel
-                embedded
-                isLoading={isRefreshingHistory}
-                logLevelFilter={logLevelFilter}
-                logSearch={logSearch}
-                logs={runLogs}
-                metrics={metrics}
-                onLogLevelFilterChange={(value) => patchObservabilityState({ logLevelFilter: value })}
-                onLogSearchChange={(value) => patchObservabilityState({ logSearch: value })}
-                onRefresh={() => void refreshRunHistory(selectedRunId)}
-                onRunStatusFilterChange={(value) => patchObservabilityState({ runStatusFilter: value })}
-                onSelectRun={(runId) => patchObservabilityState({ selectedRunId: runId })}
-                runDetail={runDetail}
-                runPage={runPage}
-                runStatusFilter={runStatusFilter}
-                selectedRunId={selectedRunId}
-                view={centerView === "logs" ? "logs" : "history"}
-                workflowName={activeWorkflow?.workflow.name ?? null}
-              />
-            )}
+            ) : null}
           </section>
 
-          {showNodeRail ? (
-            <aside className="panel-surface grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden">
-              <div className="border-b border-black/10 px-4 py-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/55">
-                      Selected node
-                    </div>
-                    {selectedStep ? (
-                      <div className="mt-2 space-y-1.5">
-                        <input
-                          aria-label="Step id"
-                          className="w-full rounded-xl border border-black/10 bg-black/[0.03] px-2 py-1 font-mono text-[15px] font-semibold tracking-tight text-ink outline-none transition focus:border-tide/45 focus:bg-white focus:ring-2 focus:ring-tide/15 placeholder:text-slate/45"
-                          id="selected-step-name"
-                          onChange={(event) => handleSelectedNodeIdChange(event.target.value)}
-                          placeholder="rename-step"
-                          spellCheck={false}
-                          type="text"
-                          value={selectedStep.id}
-                        />
-                      </div>
-                    ) : (
-                      <div className="mt-1 text-lg font-semibold tracking-tight text-ink">
-                        Trigger
-                      </div>
-                    )}
-                  </div>
-                  {selectedStep ? (
-                    <button
-                      aria-label={`Delete ${selectedStep.id}`}
-                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-black/10 bg-black/[0.03] text-slate/70 transition hover:border-ember/25 hover:bg-ember/5 hover:text-ember"
-                      onClick={() => handleDeleteSelectedNode(selectedStep.id)}
-                      type="button"
-                    >
-                      <TrashIcon />
-                    </button>
-                  ) : (
-                    <ShellBadge
-                      label={activeWorkflow?.workflow.trigger.type ?? "manual"}
-                      tone="info"
-                    />
-                  )}
-                </div>
-              </div>
-
-              <div className="sleek-scroll min-h-0 overflow-y-auto px-3 py-3">
-                <NodeInspector
-                  activeWorkflow={activeWorkflow}
-                  inspectorError={inspectorError}
-                  onSelectedNodeParamsChange={handleSelectedNodeParamsChange}
-                  onSelectedNodeRetryAttemptsChange={handleSelectedNodeRetryAttemptsChange}
-                  onSelectedNodeRetryBackoffChange={handleSelectedNodeRetryBackoffChange}
-                  onSelectedNodeTimeoutChange={handleSelectedNodeTimeoutChange}
-                  onSelectedNodeTypeChange={handleSelectedNodeTypeChange}
-                  onTriggerDetailsChange={handleTriggerDetailsChange}
-                  onTriggerTypeChange={handleTriggerTypeChange}
-                  selectedNode={selectedNode}
+          {showRightRail ? (
+            <aside className="grid min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden border-l border-black/10 bg-[rgba(255,255,255,0.72)]">
+              {showNodeBrowser ? (
+                <NodeBrowser
+                  contextHint={nodeBrowserHint}
+                  onClose={() => {
+                    setAddStepIntent({ mode: "detached" });
+                    setIsAddStepMenuOpen(false);
+                  }}
+                  onSelectType={handleAddStep}
                   stepCatalog={stepCatalog}
-                  stepParamsDraft={stepParamsDraft}
-                  triggerCatalog={triggerCatalog}
-                  triggerDetailsDraft={triggerDetailsDraft}
                 />
-              </div>
+              ) : selectedNode ? (
+                <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+                  <div className="border-b border-black/10 px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/60">
+                          Selected node
+                        </div>
+                        {selectedStep ? (
+                          <div className="mt-1.5 space-y-1">
+                            <input
+                              aria-label="Step id"
+                              className="w-full rounded-[10px] border border-black/10 bg-white px-2.5 py-1.5 font-mono text-[14px] font-medium tracking-tight text-ink outline-none transition focus:border-[#6f63ff]/45 focus:bg-white focus:ring-1 focus:ring-[#6f63ff]/12 placeholder:text-slate/45"
+                              id="selected-step-name"
+                              onChange={(event) => handleSelectedNodeIdChange(event.target.value)}
+                              placeholder="rename-step"
+                              spellCheck={false}
+                              type="text"
+                              value={selectedStep.id}
+                            />
+                          </div>
+                        ) : selectedNode.data.kind === "trigger" ? (
+                          <div className="mt-0.5 text-[15px] font-medium tracking-tight text-ink">
+                            Trigger
+                          </div>
+                        ) : null}
+                      </div>
+                      {selectedStep ? (
+                        <button
+                          aria-label={`Delete ${selectedStep.id}`}
+                          className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-black/10 bg-white text-slate/70 transition hover:border-ember/25 hover:bg-ember/10 hover:text-ember"
+                          onClick={() => handleDeleteSelectedNode(selectedStep.id)}
+                          type="button"
+                        >
+                          <TrashIcon />
+                        </button>
+                      ) : selectedNode.data.kind === "trigger" ? (
+                        <ShellBadge
+                          label={activeWorkflow?.workflow.trigger.type ?? "manual"}
+                          tone="info"
+                        />
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="sleek-scroll min-h-0 overflow-y-auto px-2 py-2">
+                    <NodeInspector
+                      activeWorkflow={activeWorkflow}
+                      inspectorError={inspectorError}
+                      onSelectedNodeParamsChange={handleSelectedNodeParamsChange}
+                      onSelectedNodeRetryAttemptsChange={handleSelectedNodeRetryAttemptsChange}
+                      onSelectedNodeRetryBackoffChange={handleSelectedNodeRetryBackoffChange}
+                      onSelectedNodeTimeoutChange={handleSelectedNodeTimeoutChange}
+                      onSelectedNodeTypeChange={handleSelectedNodeTypeChange}
+                      onTriggerDetailsChange={handleTriggerDetailsChange}
+                      onTriggerTypeChange={handleTriggerTypeChange}
+                      selectedNode={selectedNode}
+                      stepCatalog={stepCatalog}
+                      stepParamsDraft={stepParamsDraft}
+                      triggerCatalog={triggerCatalog}
+                      triggerDetailsDraft={triggerDetailsDraft}
+                    />
+                  </div>
+                </div>
+              ) : null}
             </aside>
           ) : null}
         </section>
@@ -1579,60 +1715,15 @@ function SidebarBlock({
   title: string;
 }) {
   return (
-    <section className="mb-4">
-      <div className="mb-3 flex items-center justify-between gap-3 px-1">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/55">
+    <section className="mb-3">
+      <div className="mb-2 flex items-center justify-between gap-3 px-1">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/60">
           {title}
         </div>
         {accessory}
       </div>
       {children}
     </section>
-  );
-}
-
-function AddStepMenu({
-  groupedStepCatalog,
-  onSelectType
-}: {
-  groupedStepCatalog: [string, StepTypeEntry[]][];
-  onSelectType: (typeName: string) => void;
-}) {
-  return (
-    <div className="absolute bottom-[calc(100%+0.75rem)] right-0 z-30 w-[320px] rounded-2xl border border-black/10 bg-white p-2 shadow-panel">
-      <div className="sleek-scroll max-h-[360px] space-y-3 overflow-y-auto pr-1">
-        {groupedStepCatalog.map(([category, entries]) => (
-          <section key={category}>
-            <div className="mb-2 px-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/55">
-              {titleCase(category)}
-            </div>
-            <div className="space-y-1.5">
-              {entries.map((entry) => (
-                <button
-                  key={entry.type_name}
-                  className="group w-full rounded-xl border border-transparent bg-white px-3 py-2 text-left transition hover:border-black/10 hover:bg-black/[0.02]"
-                  onClick={() => onSelectType(entry.type_name)}
-                  title={entry.description}
-                  type="button"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="text-sm font-medium text-ink">{entry.label}</div>
-                    {entry.runtime ? (
-                      <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-slate/58">
-                        {entry.runtime}
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className="max-h-0 overflow-hidden text-xs leading-5 text-slate opacity-0 transition-all duration-150 group-hover:mt-1 group-hover:max-h-16 group-hover:opacity-100">
-                    {entry.description}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </section>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -1644,16 +1735,16 @@ function ShellBadge({
   tone: "info" | "info-dark" | "neutral" | "neutral-dark" | "warn";
 }) {
   const toneMap = {
-    info: "border-tide/15 bg-tide/10 text-tide",
-    "info-dark": "border-tide/10 bg-tide/15 text-[#8be2e6]",
-    neutral: "border-black/10 bg-black/[0.04] text-slate/72",
-    "neutral-dark": "border-white/10 bg-white/10 text-white/72",
-    warn: "border-ember/15 bg-ember/10 text-ember"
+    info: "border-black/10 bg-white text-[#646b75]",
+    "info-dark": "border-black/10 bg-white text-[#5a616b]",
+    neutral: "border-black/10 bg-white text-[#76869d]",
+    "neutral-dark": "border-black/10 bg-white text-[#6e7680]",
+    warn: "border-rose-200 bg-rose-50 text-[#9a5a38]"
   } as const;
 
   return (
     <span
-      className={`rounded-md border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.16em] ${toneMap[tone]}`}
+      className={`rounded-[8px] border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${toneMap[tone]}`}
     >
       {label}
     </span>
@@ -1670,14 +1761,14 @@ function SidebarQuickStatus({
   metrics: MetricsSummary | null;
 }) {
   return (
-    <div className="rounded-2xl border border-black/10 bg-white/70 px-3 py-3">
-      <div className="grid grid-cols-3 gap-2">
-        <StatPill label="runs" value={String(metrics?.workflowRunsTotal ?? 0)} />
-        <StatPill label="paused" value={String(metrics?.workflowRunsPaused ?? 0)} />
-        <StatPill label="errors" value={String(invalidFileCount)} />
+    <div className="space-y-2 px-1">
+      <div className="grid grid-cols-3 gap-1.5">
+        <StatPill label="runs" tone="violet" value={String(metrics?.workflowRunsTotal ?? 0)} />
+        <StatPill label="paused" tone="amber" value={String(metrics?.workflowRunsPaused ?? 0)} />
+        <StatPill label="errors" tone="rose" value={String(invalidFileCount)} />
       </div>
-      <div className="mt-3 rounded-xl border border-black/10 bg-black/[0.03] px-2.5 py-2">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate/55">
+      <div className={`rounded-[10px] border px-2.5 py-2 ${runStatusCardClassName(activeRunStatus)}`}>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate/60">
           Status
         </div>
         <div className="mt-1 font-mono text-[11px] uppercase tracking-[0.14em] text-ink">
@@ -1688,10 +1779,25 @@ function SidebarQuickStatus({
   );
 }
 
-function StatPill({ label, value }: { label: string; value: string }) {
+function StatPill({
+  label,
+  tone,
+  value
+}: {
+  label: string;
+  tone: "amber" | "rose" | "violet";
+  value: string;
+}) {
+  const toneClass =
+    tone === "amber"
+      ? "border-amber-400/20 bg-[#fdf8eb]"
+      : tone === "rose"
+        ? "border-rose-400/20 bg-[#fdf1f4]"
+        : "border-[#6f63ff]/20 bg-[#f6f4ff]";
+
   return (
-    <div className="rounded-xl border border-black/10 bg-black/[0.03] px-2.5 py-2">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate/55">
+    <div className={`rounded-[8px] border px-2 py-1.5 ${toneClass}`}>
+      <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate/60">
         {label}
       </div>
       <div className="mt-1 font-mono text-[11px] uppercase tracking-[0.14em] text-ink">
@@ -1699,6 +1805,26 @@ function StatPill({ label, value }: { label: string; value: string }) {
       </div>
     </div>
   );
+}
+
+function runStatusCardClassName(activeRunStatus: string | null) {
+  if (!activeRunStatus) {
+    return "border-black/10 bg-white/60";
+  }
+
+  const status = activeRunStatus.split(" • ")[0];
+  switch (status) {
+    case "running":
+      return "border-[#6f63ff]/24 bg-[#f6f4ff]";
+    case "success":
+      return "border-emerald-400/18 bg-[#eff9f2]";
+    case "failed":
+      return "border-rose-400/18 bg-[#fdf1f4]";
+    case "paused":
+      return "border-amber-400/18 bg-[#fdf8eb]";
+    default:
+      return "border-black/10 bg-white";
+  }
 }
 
 function WorkflowList({
@@ -1728,9 +1854,7 @@ function WorkflowList({
         return (
           <article
             key={workflow.id}
-            className={`rounded-2xl border px-3 py-3 ${
-              isActive ? "border-tide/20 bg-tide/10" : "border-black/10 bg-white/70"
-            }`}
+            className={`border px-3.5 py-3 ${workflowCardClassName(isActive)}`}
           >
             <div className="flex items-start gap-2">
               <button
@@ -1738,8 +1862,15 @@ function WorkflowList({
                 onClick={() => onSelectWorkflow(workflow.id)}
                 type="button"
               >
-                <div className="truncate text-sm font-semibold text-ink">{workflow.name}</div>
-                <div className="mt-2 font-mono text-[10px] uppercase tracking-[0.16em] text-slate/58">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      isActive ? "bg-[#171b20]" : "bg-[#b7bec8]"
+                    }`}
+                  />
+                  <div className="truncate text-sm font-medium text-ink">{workflow.name}</div>
+                </div>
+                <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.14em] text-slate/58">
                   {workflow.file_name}
                 </div>
               </button>
@@ -1756,13 +1887,13 @@ function WorkflowList({
       })}
 
       {invalidFiles.length > 0 ? (
-        <div className="rounded-2xl border border-ember/20 bg-ember/5 p-3">
+        <div className="mt-3 rounded-[10px] border border-ember/20 bg-[#fff0eb] p-3">
           <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-ember">
             Needs attention
           </div>
           <div className="mt-2 space-y-2">
             {invalidFiles.map((file) => (
-              <div key={file.id} className="rounded-xl border border-ember/15 bg-white/80 p-3">
+              <div key={file.id} className="rounded-[10px] border border-ember/15 bg-white p-3">
                 <div className="text-sm font-semibold text-ink">{file.file_name}</div>
                 <div className="mt-1 text-sm leading-6 text-slate">{file.error}</div>
               </div>
@@ -1772,6 +1903,12 @@ function WorkflowList({
       ) : null}
     </div>
   );
+}
+
+function workflowCardClassName(isActive: boolean) {
+  return isActive
+    ? "rounded-[12px] border-[#d6d0ff] bg-[#f7f5ff]"
+    : "rounded-[12px] border-black/10 bg-white hover:border-black/18 hover:bg-[#fafafb]";
 }
 
 function WorkflowCardMenu({
@@ -1788,7 +1925,7 @@ function WorkflowCardMenu({
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
+  useEffect(function closeWorkflowCardMenuOnOutsideInteractionEffect() {
     if (!isOpen) {
       return;
     }
@@ -1818,7 +1955,7 @@ function WorkflowCardMenu({
       <button
         aria-expanded={isOpen}
         aria-haspopup="menu"
-        className="flex h-7 w-7 cursor-pointer list-none items-center justify-center rounded-lg border border-black/10 bg-black/[0.03] text-slate/68 transition hover:border-black/20 hover:bg-black/[0.06] [&::-webkit-details-marker]:hidden"
+        className="flex h-7 w-7 cursor-pointer list-none items-center justify-center rounded-[10px] border border-black/10 bg-white text-slate/68 transition hover:border-black/20 hover:bg-[#f7f7fb] [&::-webkit-details-marker]:hidden"
         onClick={() => setIsOpen((current) => !current)}
         type="button"
       >
@@ -1827,9 +1964,9 @@ function WorkflowCardMenu({
       </button>
 
       {isOpen ? (
-        <div className="absolute right-0 top-[calc(100%+0.35rem)] z-20 min-w-[148px] rounded-lg border border-black/10 bg-white p-1 shadow-panel">
+        <div className="absolute right-0 top-[calc(100%+0.35rem)] z-20 min-w-[148px] rounded-[10px] border border-black/10 bg-white p-1 shadow-[0_2px_8px_rgba(16,20,20,0.08)]">
           <button
-            className="flex w-full items-center rounded-md px-2.5 py-2 text-left text-sm text-ink transition hover:bg-black/[0.04] disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex w-full items-center rounded-[8px] px-2.5 py-2 text-left text-sm text-ink transition hover:bg-[#f7f7fb] disabled:cursor-not-allowed disabled:opacity-60"
             disabled={disabled}
             onClick={() => {
               setIsOpen(false);
@@ -1840,7 +1977,7 @@ function WorkflowCardMenu({
             Rename
           </button>
           <button
-            className="flex w-full items-center rounded-md px-2.5 py-2 text-left text-sm text-ink transition hover:bg-black/[0.04] disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex w-full items-center rounded-[8px] px-2.5 py-2 text-left text-sm text-ink transition hover:bg-[#f7f7fb] disabled:cursor-not-allowed disabled:opacity-60"
             disabled={disabled}
             onClick={() => {
               setIsOpen(false);
@@ -1851,7 +1988,7 @@ function WorkflowCardMenu({
             Duplicate
           </button>
           <button
-            className="flex w-full items-center rounded-md px-2.5 py-2 text-left text-sm text-ember transition hover:bg-ember/5 disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex w-full items-center rounded-[8px] px-2.5 py-2 text-left text-sm text-ember transition hover:bg-ember/10 disabled:cursor-not-allowed disabled:opacity-60"
             disabled={disabled}
             onClick={() => {
               setIsOpen(false);
@@ -1912,21 +2049,21 @@ function WorkflowYamlCard({
 }) {
   return (
     <div
-      className={`rounded-2xl border border-black/10 bg-[#101517] p-3 ${
+      className={`h-full min-h-0 border-black/10 bg-white ${
         fullHeight ? "grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]" : ""
       }`}
     >
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <ShellBadge label="canonical" tone="info-dark" />
-        <ShellBadge label="monospace" tone="neutral-dark" />
-      </div>
-      <pre
-        className={`sleek-scroll rounded-xl border border-white/10 bg-black/20 p-3 font-mono text-[12px] leading-6 text-[#E9F8F3] ${
-          fullHeight ? "min-h-0 overflow-auto" : "overflow-x-auto"
-        }`}
-      >
-        {workflowYaml || "# No workflow selected"}
-      </pre>
+      {fullHeight ? (
+        <div className="sleek-scroll min-h-0 overflow-auto bg-[#f6f7fa]">
+          <pre className="min-h-full whitespace-pre-wrap break-words px-4 py-4 font-mono text-[12px] leading-6 text-[#273140]">
+            {workflowYaml || "# No workflow selected"}
+          </pre>
+        </div>
+      ) : (
+        <pre className="overflow-x-auto border border-black/10 bg-[#f6f7fa] px-4 py-4 font-mono text-[12px] leading-6 text-[#273140]">
+          {workflowYaml || "# No workflow selected"}
+        </pre>
+      )}
     </div>
   );
 }
@@ -2034,16 +2171,6 @@ function finalizeDocument(document: WorkflowDocument): WorkflowDocument {
   };
 }
 
-function groupedOptions(stepCatalog: StepTypeEntry[]) {
-  const groups = new Map<string, StepTypeEntry[]>();
-  for (const entry of stepCatalog) {
-    const bucket = groups.get(entry.category) ?? [];
-    bucket.push(entry);
-    groups.set(entry.category, bucket);
-  }
-  return Array.from(groups.entries());
-}
-
 function renamePositionKey(
   positions: Record<string, { x: number; y: number }>,
   from: string,
@@ -2089,6 +2216,73 @@ function errorMessage(error: unknown) {
   return "Unexpected error";
 }
 
+function buildInspectorDraftState(
+  document: WorkflowDocument | null,
+  nextSelectedNodeId: string | null
+) {
+  if (!document) {
+    return {
+      inspectorError: null,
+      stepParamsDraft: "{}",
+      triggerDetailsDraft: "{}"
+    };
+  }
+
+  const selectedStep =
+    nextSelectedNodeId && nextSelectedNodeId !== TRIGGER_NODE_ID
+      ? document.workflow.steps.find((step) => step.id === nextSelectedNodeId) ?? null
+      : null;
+
+  return {
+    inspectorError: null,
+    stepParamsDraft: formatYaml(selectedStep?.params ?? {}),
+    triggerDetailsDraft: formatYaml(extractTriggerDetails(document.workflow.trigger))
+  };
+}
+
+function preferredExecutionStepId(
+  runDetail: RunDetailResponse | null,
+  currentSelectedStepId: string | null
+) {
+  if (!runDetail) {
+    return null;
+  }
+
+  const latestStepRuns = Array.from(
+    runDetail.step_runs.reduce((stepRuns, stepRun) => {
+      const current = stepRuns.get(stepRun.step_id);
+      if (
+        !current ||
+        stepRun.attempt > current.attempt ||
+        (stepRun.attempt === current.attempt && stepRun.started_at > current.started_at)
+      ) {
+        stepRuns.set(stepRun.step_id, stepRun);
+      }
+      return stepRuns;
+    }, new Map<string, RunDetailResponse["step_runs"][number]>())
+  )
+    .map(([, stepRun]) => stepRun)
+    .sort((left, right) => left.started_at - right.started_at);
+
+  if (!latestStepRuns.length) {
+    return null;
+  }
+
+  if (
+    currentSelectedStepId &&
+    latestStepRuns.some((stepRun) => stepRun.step_id === currentSelectedStepId)
+  ) {
+    return currentSelectedStepId;
+  }
+
+  const preferredStep =
+    latestStepRuns.find((stepRun) =>
+      ["failed", "running", "paused"].includes(stepRun.status)
+    ) ?? latestStepRuns[latestStepRuns.length - 1];
+
+  return preferredStep?.step_id ?? null;
+}
+
 function persistDocumentLayout(document: WorkflowDocument) {
   if (!document.localDraft) {
     persistWorkflowPositions(document.id, document.positions);
@@ -2116,13 +2310,41 @@ function mergeWorkflowSummaries(
   );
 }
 
-function nextDraftWorkflowId(workflows: WorkflowSummary[]) {
-  const existingIds = new Set(workflows.map((workflow) => workflow.id));
+function nextDraftWorkflowId(
+  workflows: WorkflowSummary[],
+  documents: Record<string, WorkflowDocument> = {}
+) {
+  const existingIds = new Set([
+    ...workflows.map((workflow) => workflow.id),
+    ...Object.keys(documents)
+  ]);
   let index = 1;
   while (existingIds.has(`untitled-workflow-${index}`)) {
     index += 1;
   }
   return `untitled-workflow-${index}`;
+}
+
+function nextStarterDraftWorkflowId(
+  starterId: string,
+  workflows: WorkflowSummary[],
+  documents: Record<string, WorkflowDocument>
+) {
+  const existingIds = new Set([
+    ...workflows.map((workflow) => workflow.id),
+    ...Object.keys(documents)
+  ]);
+  const baseId = slugifyIdentifier(starterId);
+
+  if (!existingIds.has(baseId)) {
+    return baseId;
+  }
+
+  let index = 2;
+  while (existingIds.has(`${baseId}-${index}`)) {
+    index += 1;
+  }
+  return `${baseId}-${index}`;
 }
 
 function nextSelectableWorkflowId(
@@ -2224,10 +2446,6 @@ function clearStoredWorkflowPositions(workflowId: string) {
 
 function workflowLayoutStorageKey(workflowId: string) {
   return `acsa:workflow-layout:${workflowId}`;
-}
-
-function titleCase(value: string) {
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function normalizeExecutionState(status: string): NodeExecutionState {

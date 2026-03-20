@@ -66,7 +66,7 @@ export function NodeInspector({
 
   if (!activeWorkflow || !selectedNode) {
     return (
-      <div className="rounded-2xl border border-dashed border-black/10 bg-white/70 px-4 py-5 text-sm leading-6 text-slate">
+      <div className="rounded-[12px] border border-dashed border-black/10 bg-white px-4 py-5 text-sm leading-6 text-slate">
         Select a node on the canvas to configure it here.
       </div>
     );
@@ -81,11 +81,13 @@ export function NodeInspector({
               <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62">
                 Trigger
               </div>
-              <div className="mt-1 text-sm text-slate">
+              <div className="mt-1 text-[13px] text-slate">
                 Configure how this workflow starts.
               </div>
             </div>
-            <span className="ui-badge">Entrypoint</span>
+            <span className="rounded-[8px] border border-black/10 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#636b75]">
+              Entrypoint
+            </span>
           </div>
 
           <label
@@ -123,17 +125,21 @@ export function NodeInspector({
       ) : null}
 
       {selectedStep ? (
-        <section className="ui-panel-card p-3">
+        <section className="p-2">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62">
                 Step configuration
               </div>
-              <div className="mt-1 text-sm text-slate">
+              <div className="mt-1 text-[13px] text-slate">
                 Tune runtime behavior and parameters for this step.
               </div>
             </div>
-            {selectedStepIsDetached ? <span className="ui-badge">Detached</span> : null}
+            {selectedStepIsDetached ? (
+              <span className="rounded-[8px] border border-black/10 bg-white px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#666c75]">
+                Detached
+              </span>
+            ) : null}
           </div>
 
           <div className="mt-4 grid gap-3">
@@ -219,7 +225,7 @@ export function NodeInspector({
           </label>
           <YamlEditor
             id="step-params"
-            minHeight={208}
+            minHeight={300}
             onChange={onSelectedNodeParamsChange}
             value={stepParamsDraft}
           />
@@ -227,7 +233,7 @@ export function NodeInspector({
       ) : null}
 
       {inspectorError ? (
-        <div className="rounded-2xl border border-ember/20 bg-ember/5 px-3 py-2.5 text-sm leading-6 text-ember">
+        <div className="rounded-2xl border border-ember/20 bg-[#fff0eb] px-3 py-2.5 text-sm leading-6 text-[#cd694d]">
           {inspectorError}
         </div>
       ) : null}

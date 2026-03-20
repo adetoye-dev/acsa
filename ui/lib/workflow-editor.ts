@@ -22,9 +22,11 @@ import {
 } from "@xyflow/react";
 import YAML from "yaml";
 
+import type { WorkflowState } from "./product-status";
+
 export const ENGINE_PROXY_BASE = "/engine";
-export const EDGE_STROKE = "rgba(16, 26, 29, 0.64)";
-export const TRIGGER_EDGE_STROKE = "rgba(16, 26, 29, 0.44)";
+export const EDGE_STROKE = "rgba(121, 141, 242, 0.68)";
+export const TRIGGER_EDGE_STROKE = "rgba(244, 166, 97, 0.58)";
 export const TRIGGER_NODE_ID = "__trigger__";
 
 export type RetryPolicy = {
@@ -67,6 +69,7 @@ export type WorkflowSummary = {
   name: string;
   step_count: number;
   trigger_type: string;
+  workflow_state: WorkflowState;
 };
 
 export type InvalidWorkflowFile = {
@@ -142,6 +145,7 @@ export type NodeExecutionState =
   | "success";
 
 export type CanvasNodeData = {
+  category?: string | null;
   description: string;
   detached?: boolean;
   executionLabel?: string | null;
@@ -149,6 +153,7 @@ export type CanvasNodeData = {
   executionState?: NodeExecutionState;
   kind: "step" | "trigger";
   label: string;
+  onAddAfter?: ((nodeId: string) => void) | null;
   nodeId: string;
   onDelete?: ((nodeId: string) => void) | null;
   runtime?: string | null;
@@ -174,14 +179,7 @@ export function addStepToWorkflow(
   workflow: WorkflowDefinition,
   typeName: string
 ): { selectedNodeId: string; workflow: WorkflowDefinition } {
-  const nextIndex = nextStepIndex(workflow.steps, typeName);
-  const stepId = `${slugifyIdentifier(typeName)}_${nextIndex}`;
-  const createdStep: StepDefinition = {
-    id: stepId,
-    next: [],
-    params: defaultStepParamsForType(typeName),
-    type: typeName
-  };
+  const { createdStep, stepId } = createStepForType(workflow, typeName);
 
   return {
     selectedNodeId: stepId,
@@ -195,6 +193,84 @@ export function addStepToWorkflow(
         )
       }
     }
+  };
+}
+
+export function addStepAfterNode(
+  workflow: WorkflowDefinition,
+  typeName: string,
+  sourceNodeId: string
+): { selectedNodeId: string; workflow: WorkflowDefinition } {
+  const { createdStep, stepId } = createStepForType(workflow, typeName);
+  const detachedSteps = new Set(workflow.ui?.detached_steps ?? []);
+  detachedSteps.delete(stepId);
+
+  return {
+    selectedNodeId: stepId,
+    workflow: cleanWorkflow({
+      ...workflow,
+      steps:
+        sourceNodeId === TRIGGER_NODE_ID
+          ? [...workflow.steps, createdStep]
+          : workflow.steps.map((step) =>
+              step.id === sourceNodeId
+                ? {
+                    ...step,
+                    next: Array.from(new Set([...step.next, stepId]))
+                  }
+                : step
+            ).concat(createdStep),
+      ui: {
+        ...(workflow.ui ?? {}),
+        ...(detachedSteps.size > 0
+          ? { detached_steps: Array.from(detachedSteps) }
+          : {})
+      }
+    })
+  };
+}
+
+export function insertStepBetweenNodes(
+  workflow: WorkflowDefinition,
+  typeName: string,
+  sourceNodeId: string,
+  targetNodeId: string
+): { selectedNodeId: string; workflow: WorkflowDefinition } {
+  if (sourceNodeId !== TRIGGER_NODE_ID) {
+    const sourceStep = workflow.steps.find((step) => step.id === sourceNodeId);
+    if (!sourceStep || !sourceStep.next.includes(targetNodeId)) {
+      return { selectedNodeId: targetNodeId, workflow };
+    }
+  }
+
+  const { createdStep, stepId } = createStepForType(workflow, typeName, [targetNodeId]);
+  const detachedSteps = new Set(workflow.ui?.detached_steps ?? []);
+  detachedSteps.delete(stepId);
+
+  return {
+    selectedNodeId: stepId,
+    workflow: cleanWorkflow({
+      ...workflow,
+      steps:
+        sourceNodeId === TRIGGER_NODE_ID
+          ? [...workflow.steps, createdStep]
+          : workflow.steps.map((step) =>
+              step.id === sourceNodeId
+                ? {
+                    ...step,
+                    next: step.next.flatMap((candidate) =>
+                      candidate === targetNodeId ? [stepId] : [candidate]
+                    )
+                  }
+                : step
+            ).concat(createdStep),
+      ui: {
+        ...(workflow.ui ?? {}),
+        ...(detachedSteps.size > 0
+          ? { detached_steps: Array.from(detachedSteps) }
+          : {})
+      }
+    })
   };
 }
 
@@ -240,8 +316,24 @@ export function describeWorkflow(workflow: WorkflowDefinition): string {
 }
 
 export function createLocalWorkflowDocument(workflowId: string): WorkflowDocument {
-  const workflow = createBlankWorkflow(workflowId);
-  const normalizedId = slugifyIdentifier(workflowId || "workflow");
+  return createLocalWorkflowDocumentFromWorkflow(
+    workflowId,
+    createBlankWorkflow(workflowId)
+  );
+}
+
+export function createLocalWorkflowDocumentFromYaml(
+  workflowId: string,
+  yaml: string
+): WorkflowDocument {
+  return createLocalWorkflowDocumentFromWorkflow(workflowId, parseWorkflowYaml(yaml));
+}
+
+function createLocalWorkflowDocumentFromWorkflow(
+  workflowId: string,
+  workflow: WorkflowDefinition
+): WorkflowDocument {
+  const normalizedId = slugifyIdentifier(workflowId || workflow.name || "workflow");
   return {
     dirty: true,
     id: normalizedId,
@@ -348,15 +440,33 @@ export function summarizeWorkflow(
   workflow: WorkflowDefinition,
   options?: { localDraft?: boolean }
 ): WorkflowSummary {
+  const requiredStepTypes = workflow.steps
+    .filter((step) => !isBuiltInStepType(step.type))
+    .map((step) => step.type);
+
   return {
     description: describeWorkflow(workflow),
     file_name: `${workflowId}.yaml`,
-    has_connector_steps: workflow.steps.some((step) => !isBuiltInStepType(step.type)),
+    has_connector_steps: requiredStepTypes.length > 0,
     id: workflowId,
     ...(options?.localDraft ? { local_draft: true } : {}),
     name: workflow.name,
     step_count: workflow.steps.length,
-    trigger_type: workflow.trigger.type
+    trigger_type: workflow.trigger.type,
+    workflow_state: {
+      lifecycle: options?.localDraft ? "draft" : "saved",
+      readiness: {
+        connector_requirements: {
+          required_step_types: requiredStepTypes
+        },
+        readiness_state: "ready",
+        validation_state: "valid"
+      },
+      telemetry: {
+        last_run_at: null,
+        last_run_status: null
+      }
+    }
   };
 }
 
@@ -473,10 +583,11 @@ export function workflowToCanvas(
       position: triggerPos,
       type: "workflowNode",
       data: {
-        description: "Workflow entrypoint. Select it to configure trigger settings.",
+        category: "trigger",
+        description: workflow.name,
         detached: false,
         kind: "trigger",
-        label: workflow.name,
+        label: `${titleCase(workflow.trigger.type)} trigger`,
         nodeId: TRIGGER_NODE_ID,
         onDelete: null,
         typeName: workflow.trigger.type
@@ -497,10 +608,11 @@ export function workflowToCanvas(
       position,
       type: "workflowNode",
       data: {
-        description: catalogEntry?.description ?? "Connector or custom step.",
+        category: catalogEntry?.category ?? inferStepCategory(step.type, catalogEntry?.source),
+        description: step.id,
         detached: detachedSteps.has(step.id),
         kind: "step",
-        label: step.id,
+        label: catalogEntry?.label ?? titleCase(step.type),
         nodeId: step.id,
         onDelete: null,
         runtime: catalogEntry?.runtime ?? null,
@@ -748,6 +860,33 @@ function defaultStepParams(typeName: string): Record<string, unknown> {
   }
 }
 
+function inferStepCategory(typeName: string, source?: string | null): string {
+  if (source && source !== "built_in") {
+    return "integration";
+  }
+
+  if (/(llm|embedding|retrieval|classification|extraction|agent)/.test(typeName)) {
+    return "ai";
+  }
+  if (/(approval|manual_input|human)/.test(typeName)) {
+    return "human";
+  }
+  if (/(condition|switch|loop|parallel|if|branch)/.test(typeName)) {
+    return "flow";
+  }
+  if (/(http|database|file|webhook)/.test(typeName)) {
+    return "integration";
+  }
+
+  return "core";
+}
+
+function titleCase(value: string) {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
+}
+
 function isBuiltInStepType(typeName: string): boolean {
   return [
     "approval",
@@ -893,6 +1032,23 @@ function nextStepIndex(steps: StepDefinition[], typeName: string): number {
   }
 
   return maxSuffix + 1;
+}
+
+function createStepForType(
+  workflow: WorkflowDefinition,
+  typeName: string,
+  next: string[] = []
+) {
+  const nextIndex = nextStepIndex(workflow.steps, typeName);
+  const stepId = `${slugifyIdentifier(typeName)}_${nextIndex}`;
+  const createdStep: StepDefinition = {
+    id: stepId,
+    next,
+    params: defaultStepParamsForType(typeName),
+    type: typeName
+  };
+
+  return { createdStep, stepId };
 }
 
 function asRecord(value: unknown, fieldName: string): Record<string, unknown> {

@@ -30,6 +30,7 @@ use petgraph::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::{spawn, sync::Semaphore, task::JoinSet, time::timeout};
 
@@ -148,9 +149,15 @@ impl WorkflowEngine {
         initial_payload: Value,
     ) -> Result<ExecutionSummary, EngineError> {
         self.sync_connectors()?;
-        let workflow = load_workflow_from_path(path)?;
+        let (workflow, saved_yaml) = load_workflow_document_from_path(path)?;
         let plan = compile_workflow(workflow)?;
-        self.execute_plan(&plan, initial_payload).await
+        self.execute_plan_with_snapshots(
+            &plan,
+            initial_payload,
+            saved_yaml.clone(),
+            Some(saved_yaml),
+        )
+        .await
     }
 
     pub async fn start_workflow_path(
@@ -159,9 +166,10 @@ impl WorkflowEngine {
         initial_payload: Value,
     ) -> Result<StartedExecution, EngineError> {
         self.sync_connectors()?;
-        let workflow = load_workflow_from_path(path)?;
+        let (workflow, saved_yaml) = load_workflow_document_from_path(path)?;
         let plan = compile_workflow(workflow)?;
-        self.start_plan(plan, initial_payload).await
+        self.start_plan_with_snapshots(plan, initial_payload, saved_yaml.clone(), Some(saved_yaml))
+            .await
     }
 
     pub async fn execute_plan(
@@ -169,10 +177,29 @@ impl WorkflowEngine {
         plan: &WorkflowPlan,
         initial_payload: Value,
     ) -> Result<ExecutionSummary, EngineError> {
+        let workflow_snapshot = canonical_workflow_snapshot(&plan.workflow)?;
+        self.execute_plan_with_snapshots(plan, initial_payload, workflow_snapshot, None).await
+    }
+
+    async fn execute_plan_with_snapshots(
+        &self,
+        plan: &WorkflowPlan,
+        initial_payload: Value,
+        workflow_snapshot: String,
+        editor_snapshot: Option<String>,
+    ) -> Result<ExecutionSummary, EngineError> {
         self.sync_connectors()?;
-        let workflow_snapshot = serde_json::to_string(&plan.workflow)?;
-        let run =
-            self.store.start_run(&plan.workflow.name, &workflow_snapshot, &initial_payload).await?;
+        let workflow_revision = workflow_revision_identity(&workflow_snapshot);
+        let run = self
+            .store
+            .start_run(
+                &plan.workflow.name,
+                &workflow_revision,
+                &workflow_snapshot,
+                editor_snapshot.as_deref(),
+                &initial_payload,
+            )
+            .await?;
         record_log(
             &self.store,
             LogLevel::Info,
@@ -189,10 +216,29 @@ impl WorkflowEngine {
         plan: WorkflowPlan,
         initial_payload: Value,
     ) -> Result<StartedExecution, EngineError> {
+        let workflow_snapshot = canonical_workflow_snapshot(&plan.workflow)?;
+        self.start_plan_with_snapshots(plan, initial_payload, workflow_snapshot, None).await
+    }
+
+    async fn start_plan_with_snapshots(
+        &self,
+        plan: WorkflowPlan,
+        initial_payload: Value,
+        workflow_snapshot: String,
+        editor_snapshot: Option<String>,
+    ) -> Result<StartedExecution, EngineError> {
         self.sync_connectors()?;
-        let workflow_snapshot = serde_json::to_string(&plan.workflow)?;
-        let run =
-            self.store.start_run(&plan.workflow.name, &workflow_snapshot, &initial_payload).await?;
+        let workflow_revision = workflow_revision_identity(&workflow_snapshot);
+        let run = self
+            .store
+            .start_run(
+                &plan.workflow.name,
+                &workflow_revision,
+                &workflow_snapshot,
+                editor_snapshot.as_deref(),
+                &initial_payload,
+            )
+            .await?;
         record_log(
             &self.store,
             LogLevel::Info,
@@ -305,7 +351,7 @@ impl WorkflowEngine {
         let state_json = run
             .state_json
             .ok_or_else(|| EngineError::MissingRunState { run_id: run.id.clone() })?;
-        let workflow = serde_json::from_str::<Workflow>(&workflow_snapshot)?;
+        let workflow = parse_persisted_workflow_snapshot(&run.id, &workflow_snapshot)?;
         let plan = compile_workflow(workflow)?;
         let initial_payload = serde_json::from_str::<Value>(&initial_payload)?;
         let mut state = serde_json::from_str::<PersistedRunState>(&state_json)?;
@@ -643,6 +689,13 @@ pub fn compile_workflow(workflow: Workflow) -> Result<WorkflowPlan, EngineError>
 }
 
 pub fn load_workflow_from_path(path: impl AsRef<Path>) -> Result<Workflow, EngineError> {
+    let (workflow, _) = load_workflow_document_from_path(path)?;
+    Ok(workflow)
+}
+
+fn load_workflow_document_from_path(
+    path: impl AsRef<Path>,
+) -> Result<(Workflow, String), EngineError> {
     let path = path.as_ref();
     let path_display = path.display().to_string();
     let raw = fs::read_to_string(path)
@@ -653,7 +706,7 @@ pub fn load_workflow_from_path(path: impl AsRef<Path>) -> Result<Workflow, Engin
 
     validate_workflow(&workflow)?;
 
-    Ok(workflow)
+    Ok((workflow, raw))
 }
 
 pub fn load_workflows_from_dir(path: impl AsRef<Path>) -> Result<Vec<Workflow>, EngineError> {
@@ -678,6 +731,32 @@ pub fn load_workflows_from_dir(path: impl AsRef<Path>) -> Result<Vec<Workflow>, 
 
     workflow_paths.sort();
     workflow_paths.into_iter().map(load_workflow_from_path).collect()
+}
+
+fn canonical_workflow_snapshot(workflow: &Workflow) -> Result<String, EngineError> {
+    serde_yaml::to_string(workflow)
+        .map_err(|source| EngineError::SerializeWorkflowSnapshot { source })
+}
+
+fn workflow_revision_identity(workflow_snapshot: &str) -> String {
+    let digest = Sha256::digest(workflow_snapshot.as_bytes());
+    format!("sha256:{digest:x}")
+}
+
+fn parse_persisted_workflow_snapshot(
+    run_id: &str,
+    workflow_snapshot: &str,
+) -> Result<Workflow, EngineError> {
+    serde_yaml::from_str::<Workflow>(workflow_snapshot).or_else(|yaml_error| {
+        serde_json::from_str::<Workflow>(workflow_snapshot).map_err(|json_error| {
+            EngineError::ParseRunWorkflowSnapshot {
+                run_id: run_id.to_string(),
+                message: format!(
+                    "yaml parse failed: {yaml_error}; json parse failed: {json_error}"
+                ),
+            }
+        })
+    })
 }
 
 pub fn validate_workflow(workflow: &Workflow) -> Result<(), EngineError> {
@@ -761,6 +840,11 @@ pub enum EngineError {
         #[source]
         source: std::io::Error,
     },
+    #[error("failed to serialize workflow snapshot: {source}")]
+    SerializeWorkflowSnapshot {
+        #[source]
+        source: serde_yaml::Error,
+    },
     #[error("failed to load connectors: {0}")]
     ConnectorLoad(String),
     #[error("unsupported workflow version {version}; expected v1")]
@@ -812,6 +896,8 @@ pub enum EngineError {
     MissingRunState { run_id: String },
     #[error("run {run_id} is missing its workflow snapshot")]
     MissingRunSnapshot { run_id: String },
+    #[error("run {run_id} contains an unreadable workflow snapshot: {message}")]
+    ParseRunWorkflowSnapshot { run_id: String, message: String },
     #[error("human task {task_id} is no longer pending")]
     HumanTaskNotPending { task_id: String },
     #[error("run {run_id} is not paused")]
@@ -1768,9 +1854,21 @@ steps:
             .execute_plan(&plan, json!({ "trigger": "manual" }))
             .await
             .expect("workflow should pause on approval");
+        let persisted_run = store.get_run(&paused.run_id).await.expect("run should persist");
 
         assert_eq!(paused.status, super::ExecutionStatus::Paused);
         assert_eq!(paused.pending_tasks.len(), 1);
+        assert_eq!(persisted_run.editor_snapshot, None);
+        assert!(persisted_run
+            .workflow_snapshot
+            .as_deref()
+            .expect("workflow snapshot should exist")
+            .contains("version: v1"));
+        assert!(persisted_run
+            .workflow_revision
+            .as_deref()
+            .expect("workflow revision should exist")
+            .starts_with("sha256:"));
 
         let resumed = engine
             .resume_human_task(&paused.pending_tasks[0].id, json!({ "approved": true }))
@@ -1786,6 +1884,67 @@ steps:
         assert_eq!(resumed.completed_steps, 3);
         assert!(pending_tasks.is_empty());
         assert_eq!(runs[0].status, "success");
+        assert_eq!(resumed.outputs["approve"]["approved"], json!(true));
+
+        cleanup_file(temp_db);
+    }
+
+    #[tokio::test]
+    async fn approval_steps_resume_legacy_json_workflow_snapshots() {
+        let workflow = Workflow {
+            version: "v1".to_string(),
+            name: "approval-flow-legacy".to_string(),
+            trigger: Trigger { r#type: "manual".to_string(), details: Default::default() },
+            steps: vec![
+                step(
+                    "seed",
+                    "constant",
+                    json!({ "value": { "request_id": "REQ-1" } }),
+                    vec!["approve"],
+                ),
+                Step {
+                    id: "approve".to_string(),
+                    r#type: "approval".to_string(),
+                    params: serde_yaml::to_value(json!({ "prompt": "Approve this request?" }))
+                        .expect("json should convert to yaml"),
+                    next: vec!["finish".to_string()],
+                    retry: None,
+                    timeout_ms: Some(1_000),
+                },
+                step("finish", "echo", json!({}), vec![]),
+            ],
+            ui: Default::default(),
+        };
+        let legacy_snapshot =
+            serde_json::to_string(&workflow).expect("legacy workflow snapshot should serialize");
+        let plan = compile_workflow(workflow).expect("workflow should plan");
+        let temp_db = temp_db_path("approval-legacy");
+        let store = RunStore::connect(&temp_db).await.expect("sqlite should initialize");
+
+        let registry = NodeRegistry::built_in(BuiltInNodeConfig::default());
+        registry.register(EchoNode);
+
+        let engine =
+            WorkflowEngine::with_registry(store.clone(), registry, ExecutionConfig::default());
+        let paused = engine
+            .execute_plan(&plan, json!({ "trigger": "manual" }))
+            .await
+            .expect("workflow should pause on approval");
+
+        sqlx::query("UPDATE runs SET workflow_snapshot = ?, workflow_revision = NULL WHERE id = ?")
+            .bind(&legacy_snapshot)
+            .bind(&paused.run_id)
+            .execute(store.pool())
+            .await
+            .expect("legacy workflow snapshot should update");
+
+        let resumed = engine
+            .resume_human_task(&paused.pending_tasks[0].id, json!({ "approved": true }))
+            .await
+            .expect("legacy workflow snapshot should resume");
+
+        assert_eq!(resumed.status, super::ExecutionStatus::Success);
+        assert_eq!(resumed.completed_steps, 3);
         assert_eq!(resumed.outputs["approve"]["approved"], json!(true));
 
         cleanup_file(temp_db);

@@ -1,0 +1,60 @@
+version: v1
+name: Webhook Intake
+trigger:
+  type: webhook
+  path: /hooks/webhook-intake
+  secret_env: ACSA_WEBHOOK_SECRET
+steps:
+  - id: classify_priority
+    type: condition
+    params:
+      path: body.priority
+      operator: eq
+      value: urgent
+      when_true: urgent_lane
+      when_false: standard_lane
+    next:
+      - urgent_lane
+      - standard_lane
+    timeout_ms: 1000
+  - id: urgent_lane
+    type: constant
+    params:
+      value:
+        queue: escalations
+        severity: high
+    next:
+      - finish
+    timeout_ms: 1000
+  - id: standard_lane
+    type: constant
+    params:
+      value:
+        queue: triage
+        severity: normal
+    next:
+      - finish
+    timeout_ms: 1000
+  - id: finish
+    type: noop
+    params:
+      label: webhook processed
+    next: []
+    timeout_ms: 1000
+ui:
+  positions:
+    __trigger__:
+      x: -460.0
+      y: 120.0
+    classify_priority:
+      x: 20.0
+      y: 120.0
+    urgent_lane:
+      x: 420.0
+      y: 20.0
+    standard_lane:
+      x: 420.0
+      y: 220.0
+    finish:
+      x: 820.0
+      y: 120.0
