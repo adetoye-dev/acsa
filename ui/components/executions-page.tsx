@@ -18,10 +18,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { ExecutionInspector } from "./execution-inspector";
 import { ExecutionStepTimeline } from "./execution-debugger";
 import { RunGraphPanel } from "./executions-workbench/run-graph-panel";
 import { RunListPanel } from "./executions-workbench/run-list-panel";
+import { StepDetailRail } from "./executions-workbench/step-detail-rail";
 import { fetchEngineJson } from "../lib/engine-client";
 import {
   type LogPageResponse,
@@ -30,19 +30,18 @@ import {
 } from "../lib/observability";
 import {
   buildExecutionGraphViewModel,
+  type ExecutionDetailPane,
   selectDefaultRun,
   selectDefaultStep
 } from "../lib/executions-workbench";
 import { type StepTypeEntry } from "../lib/workflow-editor";
-
-type DetailPane = "input" | "logs" | "output";
 
 type NodeCatalogResponse = {
   step_types: StepTypeEntry[];
 };
 
 export function ExecutionsPage() {
-  const [detailPane, setDetailPane] = useState<DetailPane>("output");
+  const [detailPane, setDetailPane] = useState<ExecutionDetailPane>("output");
   const [error, setError] = useState<string | null>(null);
   const [isRefreshingRuns, setIsRefreshingRuns] = useState(true);
   const [isLoadingRunDetail, setIsLoadingRunDetail] = useState(false);
@@ -226,7 +225,7 @@ export function ExecutionsPage() {
 
         <aside className="min-h-0 overflow-hidden bg-[rgba(255,255,255,0.72)]">
           <div className="sleek-scroll h-full min-h-0 overflow-y-auto">
-            <ExecutionInspector
+            <StepDetailRail
               detailPane={detailPane}
               logLevelFilter={logLevelFilter}
               logSearch={logSearch}

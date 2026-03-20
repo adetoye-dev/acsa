@@ -18,31 +18,27 @@
 
 import { useMemo, type ReactNode } from "react";
 
-import type {
-  LogPageResponse,
-  RunDetailResponse,
-  StepRunView
-} from "../lib/observability";
+import type { LogPageResponse, RunDetailResponse } from "../../lib/observability";
+import { formatDuration, formatTimestamp } from "../../lib/observability";
 import {
-  formatDuration,
-  formatTimestamp
-} from "../lib/observability";
-type DetailPane = "input" | "logs" | "output";
+  latestStepRunsByStep,
+  type ExecutionDetailPane
+} from "../../lib/executions-workbench";
 
-type ExecutionInspectorProps = {
-  detailPane: DetailPane;
+type StepDetailRailProps = {
+  detailPane: ExecutionDetailPane;
   logLevelFilter: string;
   logSearch: string;
   logs: LogPageResponse | null;
   nodeLabels: Record<string, string>;
-  onDetailPaneChange: (value: DetailPane) => void;
+  onDetailPaneChange: (value: ExecutionDetailPane) => void;
   onLogLevelFilterChange: (value: string) => void;
   onLogSearchChange: (value: string) => void;
   runDetail: RunDetailResponse | null;
   selectedStepId: string | null;
 };
 
-export function ExecutionInspector({
+export function StepDetailRail({
   detailPane,
   logLevelFilter,
   logSearch,
@@ -53,9 +49,9 @@ export function ExecutionInspector({
   onLogSearchChange,
   runDetail,
   selectedStepId
-}: ExecutionInspectorProps) {
+}: StepDetailRailProps) {
   const latestStepRuns = useMemo(
-    () => latestAttemptByStep(runDetail?.step_runs ?? []),
+    () => latestStepRunsByStep(runDetail?.step_runs ?? []),
     [runDetail]
   );
   const selectedStepRun =
@@ -94,7 +90,7 @@ export function ExecutionInspector({
   if (!runDetail) {
     return (
       <div className="px-4 py-4 text-sm leading-6 text-slate">
-        Select a run to inspect execution state, payloads, and logs.
+        Select a run to inspect step input, output, and logs.
       </div>
     );
   }
@@ -120,9 +116,7 @@ export function ExecutionInspector({
               </div>
             )}
           </div>
-          {selectedStepRun ? (
-            <StatusBadge status={selectedStepRun.status} />
-          ) : null}
+          {selectedStepRun ? <StatusBadge status={selectedStepRun.status} /> : null}
         </div>
 
         <div className="mt-3 flex items-center gap-1 rounded-[8px] border border-black/10 bg-white p-1">
@@ -282,31 +276,15 @@ function EmptyState({ children }: { children: ReactNode }) {
 
 function PayloadBox({ label, value }: { label: string; value?: string | null }) {
   return (
-    <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-[12px] border border-[#1a2230] bg-[#0d1118] p-4 text-white">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-white/60">
+    <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-[10px] border border-black/10 bg-[#fbfbfc]">
+      <div className="border-b border-black/10 px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate/65">
         {label}
       </div>
-      <pre className="sleek-scroll mt-3 min-h-0 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-6 text-[#dce7f6]">
-        {value ?? "Hidden or unavailable"}
-      </pre>
+      <div className="min-h-0 overflow-hidden p-3">
+        <pre className="sleek-scroll h-full min-h-0 overflow-auto whitespace-pre-wrap break-words rounded-[8px] bg-white px-3 py-3 font-mono text-[12px] leading-6 text-[#42556f]">
+          {value?.trim() ? value : "No payload recorded."}
+        </pre>
+      </div>
     </div>
-  );
-}
-
-function latestAttemptByStep(stepRuns: StepRunView[]) {
-  const latestByStep = new Map<string, StepRunView>();
-  for (const stepRun of stepRuns) {
-    const current = latestByStep.get(stepRun.step_id);
-    if (!current || stepRun.attempt > current.attempt) {
-      latestByStep.set(stepRun.step_id, stepRun);
-    } else if (
-      stepRun.attempt === current.attempt &&
-      (stepRun.started_at ?? 0) > (current.started_at ?? 0)
-    ) {
-      latestByStep.set(stepRun.step_id, stepRun);
-    }
-  }
-  return Array.from(latestByStep.values()).sort(
-    (left, right) => (left.started_at ?? 0) - (right.started_at ?? 0)
   );
 }
