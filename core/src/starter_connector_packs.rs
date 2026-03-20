@@ -85,10 +85,7 @@ mod tests {
     fn starter_connector_pack_catalog_uses_capability_first_copy() {
         let catalog = starter_connector_packs();
         let by_id = |id: &str| {
-            catalog
-                .iter()
-                .find(|pack| pack.id == id)
-                .expect("starter pack should exist")
+            catalog.iter().find(|pack| pack.id == id).expect("starter pack should exist")
         };
 
         let slack = by_id("slack-notify");
