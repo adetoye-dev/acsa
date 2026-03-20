@@ -420,22 +420,23 @@ export function EditorShell({
         starterYamlPromise
       ]);
 
-      const persistedWorkflows = mergeWorkflowSummaries({}, inventory.workflows);
+      const currentDocuments = workflowStoreState().documents;
+      const mergedWorkflows = mergeWorkflowSummaries(currentDocuments, inventory.workflows);
       patchWorkflowState({
         invalidFiles: inventory.invalid_files,
         newStepType: catalog.step_types[0]?.type_name ?? "noop",
         pendingTasks: tasks.tasks,
         stepCatalog: catalog.step_types,
         triggerCatalog: catalog.trigger_types,
-        workflows: persistedWorkflows
+        workflows: mergedWorkflows
       });
 
       if (createDraftOnBoot && !hasCreatedDraftOnBoot.current) {
         hasCreatedDraftOnBoot.current = true;
         const document = persistDocumentLayout(
           createDraftDocumentFromStarter({
-            documents: workflowStoreState().documents,
-            persistedWorkflows,
+            documents: currentDocuments,
+            persistedWorkflows: mergedWorkflows,
             starter,
             starterYaml
           })
@@ -459,11 +460,11 @@ export function EditorShell({
       }
 
       const preferredWorkflowId =
-        inventory.workflows.find((workflow) => workflow.id === requestedWorkflowId)?.id ??
-        inventory.workflows.find(
+        mergedWorkflows.find((workflow) => workflow.id === requestedWorkflowId)?.id ??
+        mergedWorkflows.find(
           (workflow) => workflow.id === workflowStoreState().activeWorkflowId
         )?.id ??
-        inventory.workflows[0]?.id ??
+        mergedWorkflows[0]?.id ??
         null;
       patchWorkflowState({ activeWorkflowId: preferredWorkflowId });
       if (requestedWorkflowId !== preferredWorkflowId) {
@@ -471,8 +472,16 @@ export function EditorShell({
       }
       let workflowName: string | null = null;
       if (preferredWorkflowId) {
-        const response = await loadWorkflowDocument(preferredWorkflowId);
-        workflowName = response?.summary.name ?? null;
+        const localDraftDocument = currentDocuments[preferredWorkflowId];
+        if (localDraftDocument?.localDraft) {
+          applyInspectorDraftState(localDraftDocument, workflowStoreState().selectedNodeId);
+          workflowName = localDraftDocument.summary.name;
+        } else {
+          const response = await loadWorkflowDocument(preferredWorkflowId);
+          workflowName = response?.summary.name ?? null;
+        }
+      } else {
+        applyInspectorDraftState(null, null);
       }
       await refreshRunHistory(workflowName);
       patchWorkflowState({

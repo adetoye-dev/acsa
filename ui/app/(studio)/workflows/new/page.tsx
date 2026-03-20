@@ -34,6 +34,7 @@ export default async function NewWorkflowStudioPage({
     <EditorShell
       createDraftOnBoot
       embeddedInProductShell
+      key={starterId ?? "blank-draft"}
       starterId={starterId}
       syncRoute
     />

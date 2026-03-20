@@ -18,6 +18,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import { fetchEngineJson } from "../lib/engine-client";
 import type { ConnectorInventoryResponse } from "../lib/connectors";
@@ -25,6 +26,7 @@ import { readRecentWorkflows } from "../lib/recent-workflows";
 import {
   buildCompactInventory,
   buildContinueWhereLeftOff,
+  mergeLaunchpadWorkflows,
   resolveLaunchpadEmptyState,
   resolveStarterReadiness,
   type ContinueWhereLeftOffItem,
@@ -32,6 +34,7 @@ import {
 } from "../lib/workflows-home";
 import { WORKFLOW_STARTERS } from "../lib/workflow-starters";
 import type { InvalidWorkflowFile, WorkflowSummary } from "../lib/workflow-editor";
+import { useWorkflowStore } from "../lib/workflow-store";
 import {
   AllWorkflowsPanel,
   type AllWorkflowsPanelEmptyState
@@ -49,6 +52,9 @@ type WorkflowInventoryResponse = {
 type LaunchpadState = AllWorkflowsPanelEmptyState;
 
 export function WorkflowsPage() {
+  const documents = useWorkflowStore(
+    useShallow((state) => state.documents)
+  );
   const [inventory, setInventory] = useState<WorkflowInventoryResponse>({
     invalid_files: [],
     workflows: []
@@ -65,14 +71,19 @@ export function WorkflowsPage() {
     void refreshLaunchpadData();
   }, []);
 
+  const availableWorkflows = useMemo(
+    () => mergeLaunchpadWorkflows(inventory.workflows, documents),
+    [documents, inventory.workflows]
+  );
+
   const continueWhereLeftOff = useMemo<ContinueWhereLeftOffItem[]>(
-    () => buildContinueWhereLeftOff(inventory.workflows, recentEntries),
-    [inventory.workflows, recentEntries]
+    () => buildContinueWhereLeftOff(availableWorkflows, recentEntries),
+    [availableWorkflows, recentEntries]
   );
 
   const compactWorkflows = useMemo(
-    () => buildCompactInventory(inventory.workflows, continueWhereLeftOff.map((item) => item.workflow.id)),
-    [continueWhereLeftOff, inventory.workflows]
+    () => buildCompactInventory(availableWorkflows, continueWhereLeftOff.map((item) => item.workflow.id)),
+    [availableWorkflows, continueWhereLeftOff]
   );
 
   const starterReadiness = useMemo<StarterReadinessItem[]>(
@@ -81,8 +92,8 @@ export function WorkflowsPage() {
   );
 
   const launchpadState = useMemo<LaunchpadState>(
-    () => resolveLaunchpadEmptyState(inventory.workflows, recentEntries),
-    [inventory.workflows, recentEntries]
+    () => resolveLaunchpadEmptyState(availableWorkflows, recentEntries),
+    [availableWorkflows, recentEntries]
   );
 
   const readyStarterCount = starterReadiness.filter((starter) => starter.ready).length;
@@ -116,7 +127,7 @@ export function WorkflowsPage() {
 
         <div className="flex flex-wrap items-center gap-2">
           <span className="ui-badge">{continueWhereLeftOff.length} recent</span>
-          <span className="ui-badge">{inventory.workflows.length} workflows</span>
+          <span className="ui-badge">{availableWorkflows.length} workflows</span>
           <span className="ui-badge">{readyStarterCount} starters ready</span>
           <button className="ui-button" onClick={() => void refreshLaunchpadData()} type="button">
             Refresh

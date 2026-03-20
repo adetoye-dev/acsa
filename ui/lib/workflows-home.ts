@@ -20,7 +20,7 @@ import type {
 } from "./connectors";
 import { type RecentWorkflowEntry, pruneRecentWorkflows } from "./recent-workflows";
 import type { WorkflowStarter } from "./workflow-starters";
-import type { WorkflowSummary } from "./workflow-editor";
+import type { WorkflowDocument, WorkflowSummary } from "./workflow-editor";
 
 export type ContinueWhereLeftOffItem = {
   openedAt: number;
@@ -89,6 +89,24 @@ export function buildContinueWhereLeftOff(
       ];
     })
     .slice(0, 6);
+}
+
+export function mergeLaunchpadWorkflows(
+  workflows: WorkflowSummary[],
+  documents: Record<string, WorkflowDocument>
+): WorkflowSummary[] {
+  const workflowById = new Map(workflows.map((workflow) => [workflow.id, { ...workflow }]));
+
+  for (const document of Object.values(documents)) {
+    if (!document.localDraft) {
+      continue;
+    }
+    workflowById.set(document.id, document.summary);
+  }
+
+  return Array.from(workflowById.values()).sort((left, right) =>
+    left.name.localeCompare(right.name) || left.file_name.localeCompare(right.file_name)
+  );
 }
 
 export function buildCompactInventory(
