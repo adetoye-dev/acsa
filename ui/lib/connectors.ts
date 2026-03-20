@@ -67,3 +67,10 @@ export type ConnectorTestResponse = {
   output: unknown;
   params: unknown;
 };
+
+export type StarterConnectorPackInstallState =
+  | "available"
+  | "invalid"
+  | "runtime_restricted"
+  | "setup_required"
+  | "satisfied";
