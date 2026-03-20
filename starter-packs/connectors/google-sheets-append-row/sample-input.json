@@ -1,0 +1,9 @@
+{
+  "inputs": {
+    "sheet_id": "sheet-123",
+    "row": {
+      "name": "Ada",
+      "status": "ready"
+    }
+  }
+}

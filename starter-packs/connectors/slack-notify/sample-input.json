@@ -1,0 +1,8 @@
+{
+  "inputs": {
+    "message": "Hello from ACSA"
+  },
+  "params": {
+    "channel": "#general"
+  }
+}

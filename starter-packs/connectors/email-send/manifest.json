@@ -1,0 +1,19 @@
+{
+  "name": "Email Send",
+  "type": "email_send",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "inputs": [
+    "subject",
+    "body"
+  ],
+  "outputs": [
+    "sent",
+    "recipient",
+    "subject"
+  ],
+  "limits": {
+    "timeout": 3000
+  },
+  "version": "0.1.0"
+}

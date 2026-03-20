@@ -1,0 +1,18 @@
+{
+  "name": "Slack Notify",
+  "type": "slack_notify",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "inputs": [
+    "message"
+  ],
+  "outputs": [
+    "sent",
+    "channel",
+    "message"
+  ],
+  "limits": {
+    "timeout": 3000
+  },
+  "version": "0.1.0"
+}
