@@ -1,0 +1,19 @@
+{
+  "name": "Google Sheets Append Row",
+  "type": "google_sheets_append_row",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "inputs": [
+    "sheet_id",
+    "row"
+  ],
+  "outputs": [
+    "appended",
+    "sheet_id",
+    "row"
+  ],
+  "limits": {
+    "timeout": 3000
+  },
+  "version": "0.1.0"
+}
