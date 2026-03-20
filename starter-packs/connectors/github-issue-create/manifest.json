@@ -1,0 +1,19 @@
+{
+  "name": "GitHub Issue Create",
+  "type": "github_issue_create",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "inputs": [
+    "title"
+  ],
+  "outputs": [
+    "issue_created",
+    "repository",
+    "title",
+    "labels"
+  ],
+  "limits": {
+    "timeout": 3000
+  },
+  "version": "0.1.0"
+}

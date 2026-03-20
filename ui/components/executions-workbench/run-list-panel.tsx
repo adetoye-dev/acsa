@@ -53,7 +53,7 @@ export function RunListPanel({
   const sortedRuns = sortRunsNewestFirst(runPage?.runs ?? []);
 
   return (
-    <aside className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] border-r border-black/10 bg-[rgba(255,255,255,0.42)]">
+    <aside className="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] border-r border-black/10 bg-white">
       <div className="border-b border-black/10 px-4 py-3.5">
         <div className="flex items-center justify-between gap-3">
           <div>
@@ -70,8 +70,8 @@ export function RunListPanel({
         </div>
       </div>
 
-      <div className="border-b border-black/10 px-4 py-3.5">
-        <label className="grid gap-2 text-sm text-slate" htmlFor="workflow-filter">
+      <div className="grid gap-3 border-b border-black/10 px-4 py-3">
+        <label className="grid gap-1.5 text-sm text-slate" htmlFor="workflow-filter">
           Workflow
           <input
             className="ui-input"
@@ -83,7 +83,7 @@ export function RunListPanel({
           />
         </label>
 
-        <label className="mt-3 grid gap-2 text-sm text-slate" htmlFor="run-status-filter">
+        <label className="grid gap-1.5 text-sm text-slate" htmlFor="run-status-filter">
           Status
           <select
             className="ui-input"
@@ -100,9 +100,9 @@ export function RunListPanel({
         </label>
       </div>
 
-      <div className="sleek-scroll min-h-0 overflow-y-auto px-3 py-3">
+      <div className="sleek-scroll min-h-0 overflow-y-auto">
         {error ? (
-          <div className="rounded-[12px] border border-rose-400/20 bg-rose-50 px-4 py-3 text-sm leading-6 text-[#c65a72]">
+          <div className="border-b border-rose-400/20 bg-rose-50/80 px-4 py-3 text-sm leading-6 text-[#c65a72]">
             {error}
           </div>
         ) : null}
@@ -110,16 +110,16 @@ export function RunListPanel({
         {isRefreshingRuns && !runPage ? (
           <PageEmptyState>Loading executions…</PageEmptyState>
         ) : sortedRuns.length ? (
-          <div className="space-y-2">
+          <div>
             {sortedRuns.map((run) => {
               const active = run.id === selectedRunId;
               return (
                 <button
                   key={run.id}
-                  className={`w-full rounded-[12px] border px-3.5 py-2.5 text-left transition ${
+                  className={`w-full border-b border-black/8 px-4 py-3 text-left transition ${
                     active
-                      ? "border-black/12 bg-white text-ink"
-                      : "border-black/8 bg-white/70 text-ink hover:border-black/12 hover:bg-white"
+                      ? "bg-[#f6f5ff] text-ink"
+                      : "bg-white text-ink hover:bg-[#fafafd]"
                   }`}
                   onClick={() => onSelectRun(run.id)}
                   type="button"
@@ -133,19 +133,19 @@ export function RunListPanel({
                     </div>
                     <RunStatusBadge status={run.status} />
                   </div>
-                  <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate">
+                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate">
                     <span>{formatTimestamp(run.started_at)}</span>
                     <span className="text-slate/35">•</span>
                     <span>{formatDuration(run.duration_seconds)}</span>
                     <span className="text-slate/35">•</span>
                     <span
-                      className={`rounded-[8px] px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${runProvenanceTone(run)}`}
+                      className={`rounded-[8px] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${runProvenanceTone(run)}`}
                     >
                       {runProvenanceLabel(run)}
                     </span>
                   </div>
                   {run.error_message ? (
-                    <div className="mt-2 line-clamp-2 text-xs leading-5 text-[#c65a72]">
+                    <div className="mt-1.5 line-clamp-2 text-xs leading-5 text-[#c65a72]">
                       {run.error_message}
                     </div>
                   ) : null}
@@ -182,7 +182,7 @@ function RunStatusBadge({ status }: { status: string }) {
 
 function PageEmptyState({ children }: { children: string }) {
   return (
-    <div className="flex min-h-[220px] items-center justify-center rounded-[12px] border border-dashed border-black/10 bg-white/72 px-6 text-center text-sm leading-6 text-slate">
+    <div className="flex min-h-[220px] items-center justify-center px-6 text-center text-sm leading-6 text-slate">
       {children}
     </div>
   );

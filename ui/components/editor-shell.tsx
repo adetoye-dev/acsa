@@ -1534,11 +1534,11 @@ export function EditorShell({
             </aside>
           ) : null}
 
-          <section className="min-h-0 overflow-hidden bg-[rgba(255,255,255,0.7)]">
+          <section className="min-h-0 overflow-hidden bg-white">
             {showCanvasView ? (
               <div className="h-full min-h-0 overflow-hidden">
                 {activeWorkflow ? (
-                  <div className="relative h-full min-h-0 overflow-hidden bg-[#fbfbfc]">
+                  <div className="relative h-full min-h-0 overflow-hidden">
                     <div className="relative h-full min-h-0">
                       <WorkflowCanvas
                         key={activeWorkflow.id}
@@ -1621,7 +1621,7 @@ export function EditorShell({
           </section>
 
           {showRightRail ? (
-            <aside className="grid min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden border-l border-black/10 bg-[rgba(255,255,255,0.72)]">
+            <aside className="grid min-h-0 grid-rows-[minmax(0,1fr)] overflow-hidden border-l border-black/10 bg-white">
               {showNodeBrowser ? (
                 <NodeBrowser
                   contextHint={nodeBrowserHint}
@@ -1677,7 +1677,7 @@ export function EditorShell({
                     </div>
                   </div>
 
-                  <div className="sleek-scroll min-h-0 overflow-y-auto px-2 py-2">
+                  <div className="sleek-scroll min-h-0 overflow-y-auto">
                     <NodeInspector
                       activeWorkflow={activeWorkflow}
                       inspectorError={inspectorError}
@@ -2049,18 +2049,18 @@ function WorkflowYamlCard({
 }) {
   return (
     <div
-      className={`h-full min-h-0 border-black/10 bg-white ${
+      className={`h-full min-h-0 bg-white ${
         fullHeight ? "grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]" : ""
       }`}
     >
       {fullHeight ? (
-        <div className="sleek-scroll min-h-0 overflow-auto bg-[#f6f7fa]">
-          <pre className="min-h-full whitespace-pre-wrap break-words px-4 py-4 font-mono text-[12px] leading-6 text-[#273140]">
+        <div className="sleek-scroll min-h-0 overflow-auto">
+          <pre className="min-h-full whitespace-pre-wrap break-words px-5 py-5 font-mono text-[12px] leading-6 text-[#273140]">
             {workflowYaml || "# No workflow selected"}
           </pre>
         </div>
       ) : (
-        <pre className="overflow-x-auto border border-black/10 bg-[#f6f7fa] px-4 py-4 font-mono text-[12px] leading-6 text-[#273140]">
+        <pre className="overflow-x-auto bg-white px-5 py-5 font-mono text-[12px] leading-6 text-[#273140]">
           {workflowYaml || "# No workflow selected"}
         </pre>
       )}

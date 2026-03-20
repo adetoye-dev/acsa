@@ -31,7 +31,7 @@ export function RecentWorkflowsPanel({
   items
 }: RecentWorkflowsPanelProps) {
   return (
-    <section className="grid min-h-0 grid-rows-[56px_minmax(0,1fr)] rounded-[20px] border border-black/10 bg-[rgba(255,255,255,0.7)] shadow-[0_1px_0_rgba(16,20,20,0.02)]">
+    <section className="grid min-h-0 grid-rows-[56px_minmax(0,1fr)] bg-white">
       <div className="flex items-center justify-between gap-4 border-b border-black/10 px-5">
         <h2 className="text-[15px] font-medium tracking-tight text-ink">
           Continue where you left off
@@ -68,7 +68,7 @@ export function RecentWorkflowsPanel({
 
 function PanelEmptyState({ children }: { children: string }) {
   return (
-    <div className="flex min-h-[220px] items-center justify-center rounded-[16px] border border-dashed border-black/10 bg-white/72 px-6 text-center text-sm leading-6 text-slate">
+    <div className="flex min-h-[220px] items-center justify-center px-6 text-center text-sm leading-6 text-slate">
       {children}
     </div>
   );

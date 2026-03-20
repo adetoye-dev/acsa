@@ -120,7 +120,7 @@ export function WorkflowsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex h-[60px] items-center justify-between gap-4 border-b border-black/10 bg-[rgba(255,255,255,0.78)] px-5">
+      <header className="flex h-[60px] items-center justify-between gap-4 border-b border-black/10 bg-white px-5">
         <div className="min-w-0">
           <h1 className="section-title mt-2">Workflows</h1>
         </div>
@@ -138,15 +138,15 @@ export function WorkflowsPage() {
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-hidden px-4 py-4">
+      <div className="min-h-0 flex-1 overflow-hidden">
         {error ? (
-          <div className="mb-4 rounded-[14px] border border-rose-400/18 bg-rose-50 px-4 py-3 text-sm leading-6 text-[#c65a72]">
+          <div className="border-b border-rose-400/18 bg-rose-50 px-5 py-3 text-sm leading-6 text-[#c65a72]">
             {error}
           </div>
         ) : null}
 
-        <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_372px]">
-          <div className="grid min-h-0 gap-4 grid-rows-[minmax(0,1fr)_minmax(0,1fr)]">
+        <div className="grid h-full min-h-0 xl:grid-cols-[minmax(0,1fr)_372px]">
+          <div className="grid min-h-0 border-r border-black/10 grid-rows-[minmax(0,1fr)_minmax(0,1fr)]">
             <RecentWorkflowsPanel
               emptyState={launchpadState}
               isLoading={isLoading}
