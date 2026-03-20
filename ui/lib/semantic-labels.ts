@@ -25,19 +25,47 @@ const SEMANTIC_CATEGORY_LABELS: Record<string, string> = {
   trigger: "Trigger"
 };
 
+const SEMANTIC_CATEGORY_DESCRIPTIONS: Record<string, string> = {
+  ai: "Generate, extract, and reason with AI.",
+  apps: "Connect external tools and services.",
+  core: "Handle the essentials inside a workflow.",
+  data: "Read, store, transform, and look up data.",
+  flow: "Route, branch, and coordinate what happens next.",
+  human: "Bring people into the loop when judgment matters.",
+  integration: "Connect external tools and services.",
+  trigger: "Choose how the workflow begins."
+};
+
 const SEMANTIC_STEP_TYPE_LABELS: Record<string, string> = {
+  ai_news_brief_renderer: "AI news brief generation",
+  ai_news_collector: "AI news collection",
   email_send: "Email delivery",
   github_issue_create: "GitHub issues",
   google_sheets_append_row: "Google Sheets rows",
-  slack_notify: "Slack notifications"
+  slack_notify: "Slack notifications",
+  smtp_email_delivery: "SMTP email delivery"
 };
 
 export function semanticCategoryLabel(category: string): string {
-  return SEMANTIC_CATEGORY_LABELS[category] ?? titleCaseWords(category);
+  const normalizedCategory = category.toLowerCase();
+  return (
+    SEMANTIC_CATEGORY_LABELS[normalizedCategory] ?? titleCaseWords(category)
+  );
+}
+
+export function semanticCategoryDescription(category: string): string {
+  const normalizedCategory = category.toLowerCase();
+  return (
+    SEMANTIC_CATEGORY_DESCRIPTIONS[normalizedCategory] ??
+    "Browse capabilities for this part of the workflow."
+  );
 }
 
 export function semanticStepTypeLabel(typeName: string): string {
-  return SEMANTIC_STEP_TYPE_LABELS[typeName] ?? titleCaseWords(typeName);
+  const normalizedTypeName = typeName.toLowerCase();
+  return (
+    SEMANTIC_STEP_TYPE_LABELS[normalizedTypeName] ?? titleCaseWords(typeName)
+  );
 }
 
 export function semanticStepTypeSummary(typeNames: string[]): string {

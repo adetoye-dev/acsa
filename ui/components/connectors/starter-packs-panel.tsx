@@ -35,20 +35,22 @@ export function StarterPacksPanel({
   return (
     <section className="overflow-hidden border-r border-black/10 bg-white">
       <div className="border-b border-black/10 px-4 py-4">
-        <p className="section-kicker">Starter packs</p>
-        <h2 className="section-title mt-2">Install a curated first-party connector</h2>
+        <p className="section-kicker">Capability packs</p>
+        <h2 className="section-title mt-2">
+          Install a ready-made capability for real automation jobs
+        </h2>
       </div>
 
       <div className="space-y-3 px-4 py-4">
         {isLoading && rows.length === 0 ? (
           <div className="px-4 py-8 text-center text-sm leading-6 text-[#6b7380]">
-            Loading starter packs…
+            Loading capability packs…
           </div>
         ) : null}
 
         {!isLoading && rows.length === 0 ? (
           <div className="px-4 py-8 text-center text-sm leading-6 text-[#6b7380]">
-            No curated starter packs are available right now.
+            No capability packs are available right now.
           </div>
         ) : null}
 
@@ -60,7 +62,11 @@ export function StarterPacksPanel({
             actionTone={row.ctaLabel === "Install" ? "primary" : "default"}
             description={row.description}
             helperText={row.helperText}
-            metadata={row.installed ? ["Installed locally"] : ["Copies into connectors/"]}
+            metadata={
+              row.installed
+                ? ["Installed locally"]
+                : ["Adds this capability to your workspace"]
+            }
             onAction={
               row.ctaLabel === "Install" ? () => onInstallPack(row.id) : undefined
             }

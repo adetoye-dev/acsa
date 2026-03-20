@@ -31,20 +31,20 @@ export function InstalledPacksPanel({
   return (
     <section className="overflow-hidden bg-white">
       <div className="border-b border-black/10 px-4 py-4">
-        <p className="section-kicker">Installed packs</p>
-        <h2 className="section-title mt-2">Readiness at a glance</h2>
+        <p className="section-kicker">Installed capability packs</p>
+        <h2 className="section-title mt-2">See what your workspace is ready to do</h2>
       </div>
 
       <div className="space-y-3 px-4 py-4">
         {isLoading && rows.length === 0 ? (
           <div className="px-4 py-8 text-center text-sm leading-6 text-[#6b7380]">
-            Loading installed packs…
+            Loading installed capability packs…
           </div>
         ) : null}
 
         {!isLoading && rows.length === 0 ? (
           <div className="px-4 py-8 text-center text-sm leading-6 text-[#6b7380]">
-            No starter packs are installed yet.
+            No capability packs are installed yet.
           </div>
         ) : null}
 

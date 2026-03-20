@@ -20,6 +20,7 @@ import type {
   TriggerTypeEntry,
   WorkflowDocument
 } from "../lib/workflow-editor";
+import { semanticCategoryLabel } from "../lib/semantic-labels";
 import { YamlEditor } from "./yaml-editor";
 
 type NodeInspectorProps = {
@@ -148,7 +149,7 @@ export function NodeInspector({
                 className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62"
                 htmlFor="step-type"
               >
-                Step type
+                Capability
               </label>
               <select
                 className="ui-input"
@@ -157,7 +158,7 @@ export function NodeInspector({
                 value={selectedStep.type}
               >
                 {groupedStepOptions(stepCatalog).map(([category, entries]) => (
-                  <optgroup key={category} label={titleCase(category)}>
+                  <optgroup key={category} label={semanticCategoryLabel(category)}>
                     {entries.map((entry) => (
                       <option key={entry.type_name} value={entry.type_name}>
                         {entry.label}
@@ -249,8 +250,4 @@ function groupedStepOptions(stepCatalog: StepTypeEntry[]) {
     groups.set(entry.category, bucket);
   }
   return Array.from(groups.entries());
-}
-
-function titleCase(value: string) {
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }

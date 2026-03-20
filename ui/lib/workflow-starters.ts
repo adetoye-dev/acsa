@@ -24,9 +24,9 @@ export type WorkflowStarter = {
 
 export const WORKFLOW_STARTERS: WorkflowStarter[] = [
   {
-    description: "Collect AI news, draft a concise brief, and publish the result.",
+    description: "Collect AI news, draft a concise brief, and deliver it by email.",
     id: "ai-news-intelligence-demo",
-    name: "AI News Intelligence",
+    name: "Send a daily AI news brief",
     requiredStepTypes: [
       "ai_news_collector",
       "ai_news_brief_renderer",
@@ -35,16 +35,16 @@ export const WORKFLOW_STARTERS: WorkflowStarter[] = [
     yamlPath: "/starter-workflows/ai-news-intelligence-demo.yaml"
   },
   {
-    description: "Seed a request, route it through approval, and finish cleanly.",
+    description: "Capture a request, route it for approval, and finish with a clear decision.",
     id: "approval-flow-demo",
-    name: "Approval Flow",
+    name: "Route a request for approval",
     requiredStepTypes: [],
     yamlPath: "/starter-workflows/approval-flow-demo.yaml"
   },
   {
-    description: "Accept incoming webhook payloads and route them through a simple branch.",
+    description: "Receive inbound webhook events, sort them, and continue down the right path.",
     id: "webhook-intake-demo",
-    name: "Webhook Intake",
+    name: "Receive and triage webhook events",
     requiredStepTypes: [],
     yamlPath: "/starter-workflows/webhook-intake-demo.yaml"
   }
