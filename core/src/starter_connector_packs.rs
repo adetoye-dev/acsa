@@ -28,8 +28,8 @@ pub struct StarterConnectorPack {
 pub const STARTER_CONNECTOR_PACKS: &[StarterConnectorPack] = &[
     StarterConnectorPack {
         id: "slack-notify",
-        name: "Slack Notify",
-        description: "Send a workflow-generated message to Slack.",
+        name: "Slack messages",
+        description: "Send workflow messages to Slack channels and threads.",
         source_dir: concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../starter-packs/connectors/slack-notify"
@@ -39,8 +39,8 @@ pub const STARTER_CONNECTOR_PACKS: &[StarterConnectorPack] = &[
     },
     StarterConnectorPack {
         id: "github-issue-create",
-        name: "GitHub Issue Create",
-        description: "Create a representative GitHub issue payload.",
+        name: "GitHub issues",
+        description: "Create GitHub issues from workflows.",
         source_dir: concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../starter-packs/connectors/github-issue-create"
@@ -50,8 +50,8 @@ pub const STARTER_CONNECTOR_PACKS: &[StarterConnectorPack] = &[
     },
     StarterConnectorPack {
         id: "google-sheets-append-row",
-        name: "Google Sheets Append Row",
-        description: "Append a representative row into Google Sheets.",
+        name: "Google Sheets rows",
+        description: "Add rows to Google Sheets from workflows.",
         source_dir: concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../starter-packs/connectors/google-sheets-append-row"
@@ -61,8 +61,8 @@ pub const STARTER_CONNECTOR_PACKS: &[StarterConnectorPack] = &[
     },
     StarterConnectorPack {
         id: "email-send",
-        name: "Email Send",
-        description: "Send a representative email payload.",
+        name: "Email delivery",
+        description: "Send workflow emails through your configured email provider.",
         source_dir: concat!(env!("CARGO_MANIFEST_DIR"), "/../starter-packs/connectors/email-send"),
         install_dir_name: "email-send",
         provided_step_types: &["email_send"],
@@ -75,4 +75,36 @@ pub fn starter_connector_packs() -> &'static [StarterConnectorPack] {
 
 pub fn starter_connector_pack(id: &str) -> Option<&'static StarterConnectorPack> {
     STARTER_CONNECTOR_PACKS.iter().find(|pack| pack.id == id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::starter_connector_packs;
+
+    #[test]
+    fn starter_connector_pack_catalog_uses_capability_first_copy() {
+        let catalog = starter_connector_packs();
+        let by_id = |id: &str| {
+            catalog.iter().find(|pack| pack.id == id).expect("starter pack should exist")
+        };
+
+        let slack = by_id("slack-notify");
+        assert_eq!(slack.name, "Slack messages");
+        assert_eq!(slack.description, "Send workflow messages to Slack channels and threads.");
+
+        let github = by_id("github-issue-create");
+        assert_eq!(github.name, "GitHub issues");
+        assert_eq!(github.description, "Create GitHub issues from workflows.");
+
+        let sheets = by_id("google-sheets-append-row");
+        assert_eq!(sheets.name, "Google Sheets rows");
+        assert_eq!(sheets.description, "Add rows to Google Sheets from workflows.");
+
+        let email = by_id("email-send");
+        assert_eq!(email.name, "Email delivery");
+        assert_eq!(
+            email.description,
+            "Send workflow emails through your configured email provider."
+        );
+    }
 }

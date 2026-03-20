@@ -18,6 +18,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  semanticCategoryDescription,
+  semanticCategoryLabel
+} from "../lib/semantic-labels";
 import type { StepTypeEntry } from "../lib/workflow-editor";
 import { NodeGlyph } from "./node-visuals";
 
@@ -220,10 +224,10 @@ export function NodeBrowser({
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/60">
-              Step library
+              Capability library
             </div>
             <div className="mt-1 text-[16px] font-medium tracking-tight text-ink">
-              Add a step
+              Choose what this step should do
             </div>
             {contextHint ? (
               <div className="mt-1 text-[12px] text-slate">{contextHint}</div>
@@ -242,13 +246,13 @@ export function NodeBrowser({
 
       <div className="border-b border-black/10 px-4 py-3">
         <label className="sr-only" htmlFor="node-browser-search">
-          Search nodes
+          Search capabilities
         </label>
         <input
           className="ui-input"
           id="node-browser-search"
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search steps, actions, and categories"
+          placeholder="Search capabilities, apps, actions, and flow controls"
           ref={searchInputRef}
           type="search"
           value={search}
@@ -261,7 +265,8 @@ export function NodeBrowser({
             <SectionHeader
               accentClassName="bg-[#6a727b]"
               count={recentEntries.length}
-              title="Recent"
+              description="Jump back into capabilities you have used lately."
+              title="Recently used"
             />
             <div className="space-y-2">
               {recentEntries.map((entry) => (
@@ -282,7 +287,8 @@ export function NodeBrowser({
             <SectionHeader
               accentClassName="bg-[#8a8176]"
               count={suggestedEntries.length}
-              title="Suggested"
+              description="Common starting points for new workflow steps."
+              title="Good starting points"
             />
             <div className="space-y-2">
               {suggestedEntries.map((entry) => (
@@ -304,7 +310,8 @@ export function NodeBrowser({
               <SectionHeader
                 accentClassName={categoryAccentClassName(category)}
                 count={entries.length}
-                title={titleCase(category)}
+                description={semanticCategoryDescription(category)}
+                title={semanticCategoryLabel(category)}
               />
 
               <div className="space-y-2">
@@ -322,7 +329,10 @@ export function NodeBrowser({
           ))
         ) : (
           <div className="rounded-[12px] border border-dashed border-black/10 bg-[#fbfbfa] px-4 py-8 text-center text-sm leading-6 text-slate">
-            No node matched your search. Try a broader keyword like <span className="font-medium text-ink">http</span>, <span className="font-medium text-ink">ai</span>, or <span className="font-medium text-ink">flow</span>.
+            No capability matched your search. Try a broader keyword like{" "}
+            <span className="font-medium text-ink">approval</span>,{" "}
+            <span className="font-medium text-ink">email</span>, or{" "}
+            <span className="font-medium text-ink">ai</span>.
           </div>
         )}
       </div>
@@ -334,19 +344,26 @@ export function NodeBrowser({
 function SectionHeader({
   accentClassName,
   count,
+  description,
   title
 }: {
   accentClassName: string;
   count: number;
+  description?: string;
   title: string;
 }) {
   return (
-    <div className="mb-2 flex items-center justify-between gap-3 px-1">
-      <div className="flex items-center gap-2">
-        <span className={`h-2 w-2 rounded-full ${accentClassName}`} />
-        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/60">
-          {title}
+    <div className="mb-2 flex items-start justify-between gap-3 px-1">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className={`h-2 w-2 rounded-full ${accentClassName}`} />
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/60">
+            {title}
+          </div>
         </div>
+        {description ? (
+          <div className="mt-1 text-[12px] leading-5 text-slate">{description}</div>
+        ) : null}
       </div>
       <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-slate/55">
         {count}
@@ -407,23 +424,21 @@ function categoryAccentClassName(category: string) {
   switch (category.toLowerCase()) {
     case "ai":
       return "bg-[#5d6670]";
+    case "apps":
+    case "integration":
+    case "connector":
+      return "bg-[#858c95]";
+    case "core":
+    case "data":
+      return "bg-[#76808a]";
     case "human":
       return "bg-[#7b7166]";
     case "flow":
     case "logic":
       return "bg-[#6c737c]";
-    case "integration":
-    case "connector":
-      return "bg-[#858c95]";
     default:
       return "bg-[#9ba1a8]";
   }
-}
-
-function titleCase(value: string) {
-  return value
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 function CloseIcon() {

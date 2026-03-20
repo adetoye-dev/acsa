@@ -16,6 +16,7 @@
 
 import Link from "next/link";
 
+import { semanticStepTypeSummary } from "../../lib/semantic-labels";
 import type { StarterReadinessItem } from "../../lib/workflows-home";
 import type { LaunchpadEmptyState } from "./recent-workflows-panel";
 
@@ -33,10 +34,12 @@ export function StarterTemplatesRail({
   return (
     <aside className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] bg-white">
       <div className="border-b border-black/10 px-5 py-4">
-        <h2 className="text-[15px] font-medium tracking-tight text-ink">Starter templates</h2>
+        <h2 className="text-[15px] font-medium tracking-tight text-ink">
+          Outcome-ready starters
+        </h2>
         {emptyState === "empty" ? (
           <div className="mt-3 text-sm leading-6 text-[#5c4aa5]">
-            No workflows exist yet. This rail is the primary way to get started.
+            No workflows exist yet. Start from a real automation outcome instead of a blank canvas.
           </div>
         ) : null}
       </div>
@@ -58,10 +61,11 @@ function StarterCard({ item }: { item: StarterReadinessItem }) {
   const stateTone = starterReadinessTone(item.state);
   const requirementsLabel =
     item.requiredStepTypes.length > 0
-      ? `${item.requiredStepTypes.length} required step type${
+      ? `${item.requiredStepTypes.length} required connector capability${
           item.requiredStepTypes.length === 1 ? "" : "s"
         }`
-      : "No connector dependencies";
+      : "Uses built-in capabilities only";
+  const missingCapabilities = semanticStepTypeSummary(item.missingStepTypes);
 
   return (
     <Link
@@ -86,7 +90,7 @@ function StarterCard({ item }: { item: StarterReadinessItem }) {
 
       {item.missingStepTypes.length > 0 ? (
         <div className="mt-2 text-sm leading-6 text-[#a76825]">
-          Missing {item.missingStepTypes.join(", ")}
+          Missing {missingCapabilities}
         </div>
       ) : (
         <div className="mt-2 text-sm leading-6 text-[#2e7b54]">Opens as a local draft.</div>

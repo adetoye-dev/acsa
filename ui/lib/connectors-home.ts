@@ -21,6 +21,7 @@ import type {
   StarterConnectorPackInstallState
 } from "./connectors";
 import type { StarterConnectorPack } from "./starter-connector-packs";
+import { semanticConnectorCapabilities } from "./semantic-labels";
 
 type StarterConnectorPackInstallPriority = 0 | 1 | 2;
 type InstalledStarterPackPriority = 0 | 1 | 2 | 3;
@@ -244,15 +245,7 @@ function starterConnectorPackInstallStateLabel(
 function starterConnectorPackStepTypesLabel(
   pack: StarterConnectorPack
 ): string {
-  if (pack.provided_step_types.length === 0) {
-    return "";
-  }
-
-  if (pack.provided_step_types.length === 1) {
-    return `Provides ${pack.provided_step_types[0]}`;
-  }
-
-  return `Provides ${pack.provided_step_types.join(", ")}`;
+  return semanticConnectorCapabilities(pack.provided_step_types);
 }
 
 function installedConnectorUsageMetadata(
