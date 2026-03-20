@@ -136,6 +136,16 @@ export function runProvenanceTone(run: RunView) {
     : "bg-amber-50 text-[#a76825]";
 }
 
+export function hasFallbackProvenance(run: RunView) {
+  return run.run_provenance.mode === "fallback";
+}
+
+export function runProvenanceNote(run: RunView) {
+  return run.run_provenance.mode === "exact"
+    ? "Showing the recorded snapshot for this run."
+    : "Showing a fallback rendering for this run.";
+}
+
 export function parseMetricsSummary(metricsText: string): MetricsSummary {
   const metrics = new Map<string, number>();
   for (const line of metricsText.split("\n")) {
