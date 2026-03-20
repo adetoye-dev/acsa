@@ -424,14 +424,18 @@ function categoryAccentClassName(category: string) {
   switch (category.toLowerCase()) {
     case "ai":
       return "bg-[#5d6670]";
+    case "apps":
+    case "integration":
+    case "connector":
+      return "bg-[#858c95]";
+    case "core":
+    case "data":
+      return "bg-[#76808a]";
     case "human":
       return "bg-[#7b7166]";
     case "flow":
     case "logic":
       return "bg-[#6c737c]";
-    case "integration":
-    case "connector":
-      return "bg-[#858c95]";
     default:
       return "bg-[#9ba1a8]";
   }

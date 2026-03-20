@@ -45,7 +45,6 @@ Use it to:
 
 ### Connectors
 
-`Connectors` is the curated starter-pack library for integration packs.
 `Connectors` is the curated capability-pack library for integrations.
 
 Use it to:

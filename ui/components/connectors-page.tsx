@@ -80,7 +80,9 @@ export function ConnectorsPage() {
       await refreshConnectorLibrary();
     } catch (nextError) {
       setError(
-        nextError instanceof Error ? nextError.message : "Failed to install starter pack"
+        nextError instanceof Error
+          ? nextError.message
+          : "Failed to install capability pack"
       );
     } finally {
       setInstallingPackId(null);
@@ -92,7 +94,7 @@ export function ConnectorsPage() {
       <header className="flex h-[60px] items-center justify-between gap-4 border-b border-black/10 bg-white px-5">
         <h1 className="section-title mt-2">Connectors</h1>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="ui-badge">{starterRows.length} starter packs</span>
+          <span className="ui-badge">{starterRows.length} capability packs</span>
           <span className="ui-badge">{installedRows.length} installed</span>
           <button
             className="ui-button"
