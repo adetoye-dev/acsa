@@ -89,7 +89,7 @@ export function ConnectorsPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex h-[60px] items-center justify-between gap-4 border-b border-black/10 bg-[rgba(255,255,255,0.72)] px-5">
+      <header className="flex h-[60px] items-center justify-between gap-4 border-b border-black/10 bg-white px-5">
         <h1 className="section-title mt-2">Connectors</h1>
         <div className="flex flex-wrap items-center gap-2">
           <span className="ui-badge">{starterRows.length} starter packs</span>
@@ -104,14 +104,14 @@ export function ConnectorsPage() {
         </div>
       </header>
 
-      <div className="sleek-scroll min-h-0 flex-1 overflow-y-auto px-4 py-4">
+      <div className="sleek-scroll min-h-0 flex-1 overflow-y-auto">
         {error ? (
-          <div className="mb-4 rounded-[14px] border border-rose-400/18 bg-rose-50 px-4 py-3 text-sm leading-6 text-[#c65a72]">
+          <div className="border-b border-rose-400/18 bg-rose-50 px-5 py-3 text-sm leading-6 text-[#c65a72]">
             {error}
           </div>
         ) : null}
 
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+        <div className="grid xl:grid-cols-[minmax(0,1fr)_380px]">
           <StarterPacksPanel
             activePackId={installingPackId}
             isLoading={isRefreshing}
@@ -124,7 +124,7 @@ export function ConnectorsPage() {
           />
         </div>
 
-        <div className="mt-4">
+        <div className="border-t border-black/10">
           <DeveloperToolsSection>
             <ConnectorManager
               onCatalogInvalidated={() => refreshConnectorLibrary()}

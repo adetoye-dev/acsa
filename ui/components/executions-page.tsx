@@ -179,7 +179,7 @@ export function ExecutionsPage() {
 
   return (
     <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]">
-      <header className="flex h-[60px] items-center justify-between gap-4 border-b border-black/10 bg-[rgba(255,255,255,0.72)] px-6">
+      <header className="flex h-[60px] items-center justify-between gap-4 border-b border-black/10 bg-white px-6">
         <h1 className="section-title mt-2">Executions</h1>
         <button
           className="ui-button"
@@ -204,7 +204,7 @@ export function ExecutionsPage() {
           workflowFilter={workflowFilter}
         />
 
-        <section className="grid min-h-0 grid-rows-[minmax(260px,0.54fr)_minmax(220px,0.46fr)] border-r border-black/10 bg-[rgba(255,255,255,0.6)]">
+        <section className="grid min-h-0 grid-rows-[minmax(260px,0.54fr)_minmax(220px,0.46fr)] border-r border-black/10 bg-white">
           <RunGraphPanel
             graphViewModel={executionGraphView}
             isLoadingRunDetail={selectedRunId !== null && isLoadingRunDetail && !runDetail}
@@ -223,7 +223,7 @@ export function ExecutionsPage() {
           />
         </section>
 
-        <aside className="min-h-0 overflow-hidden bg-[rgba(255,255,255,0.72)]">
+        <aside className="min-h-0 overflow-hidden bg-white">
           <div className="sleek-scroll h-full min-h-0 overflow-y-auto">
             <StepDetailRail
               detailPane={detailPane}

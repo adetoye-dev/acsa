@@ -29,7 +29,7 @@ export function InstalledPacksPanel({
   rows
 }: InstalledPacksPanelProps) {
   return (
-    <section className="panel-surface overflow-hidden">
+    <section className="overflow-hidden bg-white">
       <div className="border-b border-black/10 px-4 py-4">
         <p className="section-kicker">Installed packs</p>
         <h2 className="section-title mt-2">Readiness at a glance</h2>
@@ -37,13 +37,13 @@ export function InstalledPacksPanel({
 
       <div className="space-y-3 px-4 py-4">
         {isLoading && rows.length === 0 ? (
-          <div className="rounded-[12px] border border-dashed border-black/15 bg-white/80 px-4 py-8 text-center text-sm leading-6 text-[#6b7380]">
+          <div className="px-4 py-8 text-center text-sm leading-6 text-[#6b7380]">
             Loading installed packs…
           </div>
         ) : null}
 
         {!isLoading && rows.length === 0 ? (
-          <div className="rounded-[12px] border border-dashed border-black/15 bg-white/80 px-4 py-8 text-center text-sm leading-6 text-[#6b7380]">
+          <div className="px-4 py-8 text-center text-sm leading-6 text-[#6b7380]">
             No starter packs are installed yet.
           </div>
         ) : null}

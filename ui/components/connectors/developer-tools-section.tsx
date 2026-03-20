@@ -29,9 +29,9 @@ export function DeveloperToolsSection({
   const [isOpen, setIsOpen] = useState(false);
 
   return (
-    <section className="panel-surface overflow-hidden">
+    <section className="overflow-hidden bg-white">
       <button
-        className="flex w-full items-center justify-between gap-4 px-4 py-4 text-left"
+        className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
         onClick={() => setIsOpen((current) => !current)}
         type="button"
       >
@@ -43,9 +43,9 @@ export function DeveloperToolsSection({
       </button>
 
       {isOpen ? (
-        <div className="border-t border-black/10 px-4 py-4">{children}</div>
+        <div className="border-t border-black/10 px-5 py-4">{children}</div>
       ) : (
-        <div className="border-t border-black/10 px-4 py-4 text-sm leading-6 text-[#6b7380]">
+        <div className="border-t border-black/10 px-5 py-4 text-sm leading-6 text-[#6b7380]">
           Scaffold connectors, refresh inventory, and run sample payloads when you need low-level local tooling.
         </div>
       )}
