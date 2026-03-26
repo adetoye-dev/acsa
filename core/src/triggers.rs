@@ -57,6 +57,7 @@ use crate::{
         WorkflowEngine, WorkflowPlan,
     },
     models::{Trigger, Workflow},
+    n8n_import::translate_n8n_workflow,
     observability::{
         current_timestamp, metrics_text, payload_visibility_enabled, record_log,
         redact_json_string, redact_text, LogLevel, RetentionPolicy,
@@ -144,6 +145,11 @@ struct RunWorkflowRequest {
 #[derive(Debug, Deserialize)]
 struct SaveWorkflowRequest {
     yaml: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct N8nImportRequest {
+    workflow_json: Value,
 }
 
 #[derive(Debug)]
@@ -452,6 +458,7 @@ pub async fn serve(
         )
         .route("/api/connectors/scaffold", post(create_connector))
         .route("/api/connectors/{connector_type}/test", post(test_connector))
+        .route("/api/imports/n8n", post(import_n8n_workflow))
         .route("/api/node-catalog", get(list_node_catalog))
         .route("/api/runs", get(list_runs))
         .route("/api/runs/{run_id}", get(get_run_detail))
@@ -1168,6 +1175,17 @@ async fn resolve_human_task(
             })),
         ),
         Err(error) => (StatusCode::BAD_REQUEST, Json(json!({ "error": error.to_string() }))),
+    }
+}
+
+async fn import_n8n_workflow(Json(request): Json<N8nImportRequest>) -> impl IntoResponse {
+    match translate_n8n_workflow(request.workflow_json) {
+        Ok(response) => (StatusCode::OK, Json(response)).into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": format!("invalid n8n workflow payload: {error}") })),
+        )
+            .into_response(),
     }
 }
 
@@ -2630,6 +2648,7 @@ mod tests {
         extract::{Path as AxumPath, State as AxumState},
         http::{header::AUTHORIZATION, HeaderMap, HeaderValue, StatusCode},
         response::IntoResponse,
+        Json,
     };
     use chrono::Utc;
     use serde_json::json;
@@ -2637,14 +2656,14 @@ mod tests {
 
     use super::{
         authenticate_webhook, build_workflow_summary, compute_signature, connector_inventory,
-        connector_view, create_workflow_document, cron_schedule,
+        connector_view, create_workflow_document, cron_schedule, import_n8n_workflow,
         install_starter_connector_pack_endpoint, invalid_connector_view,
         list_starter_connector_packs, node_catalog, parse_workflow_document_state,
         read_workflow_document, rename_workflow_document, request_has_engine_token, run_view,
         save_workflow_document, serialize_workflow_yaml, slugify_workflow_name,
         validate_secret_value, workflow_file_path, workflow_inventory, AppState,
-        CreateWorkflowRequest, EngineAccessControl, RenameWorkflowRequest, RunDetailResponse,
-        RunPageResponse, TriggerError, WebhookSignatureAuth, WebhookWorkflow,
+        CreateWorkflowRequest, EngineAccessControl, N8nImportRequest, RenameWorkflowRequest,
+        RunDetailResponse, RunPageResponse, TriggerError, WebhookSignatureAuth, WebhookWorkflow,
     };
     use crate::{
         connectors::install_starter_connector_pack,
@@ -2841,6 +2860,70 @@ mod tests {
         assert_eq!(second_payload["install_state"], json!("satisfied"));
 
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[tokio::test]
+    async fn import_n8n_workflow_endpoint_returns_translation_payload() {
+        let response = import_n8n_workflow(Json(N8nImportRequest {
+            workflow_json: json!({
+                "name": "Customer Intake",
+                "nodes": [
+                    {
+                        "name": "Manual Trigger",
+                        "type": "n8n-nodes-base.manualTrigger",
+                        "parameters": {}
+                    },
+                    {
+                        "name": "Fetch API",
+                        "type": "n8n-nodes-base.httpRequest",
+                        "parameters": {
+                            "method": "GET",
+                            "url": "https://example.com/health"
+                        }
+                    }
+                ],
+                "connections": {
+                    "Manual Trigger": {
+                        "main": [[{ "node": "Fetch API", "type": "main", "index": 0 }]]
+                    }
+                }
+            }),
+        }))
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload =
+            to_bytes(response.into_body(), usize::MAX).await.expect("response body should read");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&payload).expect("import response should deserialize");
+        assert_eq!(payload["workflow_id"], json!("customer-intake"));
+        assert_eq!(payload["workflow_name"], json!("Customer Intake"));
+        assert_eq!(payload["report"]["blocked"], json!([]));
+        assert_eq!(payload["report"]["degraded"], json!([]));
+        assert!(payload["yaml"]
+            .as_str()
+            .expect("yaml should be rendered as a string")
+            .contains("type: http_request"));
+    }
+
+    #[tokio::test]
+    async fn import_n8n_workflow_endpoint_rejects_non_object_payloads() {
+        let response = import_n8n_workflow(Json(N8nImportRequest {
+            workflow_json: json!(["not", "a", "workflow", "object"]),
+        }))
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let payload =
+            to_bytes(response.into_body(), usize::MAX).await.expect("response body should read");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&payload).expect("error response should deserialize");
+        assert!(payload["error"]
+            .as_str()
+            .expect("error should be rendered as a string")
+            .contains("invalid n8n workflow payload"));
     }
 
     async fn starter_pack_test_state(temp_dir: &std::path::Path) -> AppState {
