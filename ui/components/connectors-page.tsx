@@ -100,7 +100,9 @@ export function ConnectorsPage() {
           <span className="ui-badge">{starterRows.length} capability packs</span>
           <span className="ui-badge">{installedRows.length} installed</span>
           <button
+            aria-busy={isRefreshing}
             className="ui-button"
+            disabled={isRefreshing}
             onClick={() => void refreshConnectorLibrary()}
             type="button"
           >
@@ -111,7 +113,7 @@ export function ConnectorsPage() {
 
       <div className="sleek-scroll min-h-0 flex-1 overflow-y-auto">
         {error ? (
-          <div className="border-b border-rose-400/18 bg-rose-50 px-5 py-3 text-sm leading-6 text-[#c65a72]">
+          <div aria-live="assertive" className="border-b border-rose-400/18 bg-rose-50 px-5 py-3 text-sm leading-6 text-[#c65a72]" role="alert">
             {error}
           </div>
         ) : null}

@@ -64,8 +64,8 @@ export function ConnectorPackRow({
           {statusLabel ? (
             <span className="font-medium text-[#1b2530]">{statusLabel}</span>
           ) : null}
-          {metadata.map((item) => (
-            <span key={item}>{item}</span>
+          {metadata.map((item, idx) => (
+            <span key={`${item}-${idx}`}>{item}</span>
           ))}
         </div>
       ) : null}

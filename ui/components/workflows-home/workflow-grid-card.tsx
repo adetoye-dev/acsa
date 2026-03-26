@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
 
 import {
@@ -35,7 +38,14 @@ export function WorkflowGridCard({
   recentOpenedAt,
   workflow
 }: WorkflowGridCardProps) {
-  const lastOpened = recentOpenedAt ? formatRelativeOpenedAt(recentOpenedAt) : null;
+  const [lastOpened, setLastOpened] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (recentOpenedAt) {
+      setLastOpened(formatRelativeOpenedAt(recentOpenedAt));
+    }
+  }, [recentOpenedAt]);
+
   const lastRun = workflowLastRunLabel(workflow.workflow_state);
   const readinessTone = workflowReadinessTone(workflow.workflow_state);
 

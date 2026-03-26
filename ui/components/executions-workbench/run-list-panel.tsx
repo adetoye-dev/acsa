@@ -53,7 +53,7 @@ export function RunListPanel({
   const sortedRuns = sortRunsNewestFirst(runPage?.runs ?? []);
 
   return (
-    <aside className="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] border-r border-black/10 bg-white">
+    <aside className="grid min-h-0 grid-rows-[auto_auto_minmax(0,_1fr)] border-r border-black/10 bg-white">
       <div className="border-b border-black/10 px-4 py-3.5">
         <div className="flex items-center justify-between gap-3">
           <div>
@@ -139,7 +139,7 @@ export function RunListPanel({
                     <span>{formatDuration(run.duration_seconds)}</span>
                     <span className="text-slate/35">•</span>
                     <span
-                      className={`rounded-[8px] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] ${runProvenanceTone(run)}`}
+                      className={`rounded-[8px] px-2 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${runProvenanceTone(run)}`}
                     >
                       {runProvenanceLabel(run)}
                     </span>

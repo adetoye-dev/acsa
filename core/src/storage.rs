@@ -33,6 +33,10 @@ use uuid::Uuid;
 
 use crate::observability::{HistogramBucket, HistogramSnapshot, MetricsSnapshot};
 
+// NOTE: Managed credentials are process-global by design so non-storage modules (connectors,
+// triggers, and nodes) can resolve secrets without holding a RunStore reference.
+// This implies a single-process, single-active-store expectation: initialize one RunStore per
+// process and avoid running multiple database-backed RunStore instances concurrently.
 static MANAGED_CREDENTIALS: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
 
 fn managed_credentials() -> &'static RwLock<HashMap<String, String>> {
@@ -71,6 +75,8 @@ impl RunStore {
             .foreign_keys(true);
 
         let pool = SqlitePoolOptions::new().max_connections(5).connect_with(options).await?;
+        // Connect initializes the shared managed credential cache for this process. Multiple
+        // RunStore instances against different databases in one process are not supported.
         let store = Self { pool };
         store.initialize().await?;
         store.refresh_managed_credentials_cache().await?;
@@ -230,12 +236,14 @@ impl RunStore {
             Ok(mut credentials) => {
                 credentials.remove(name);
             }
-            Err(error) => {
-                tracing::error!(
+            Err(poisoned) => {
+                tracing::warn!(
                     credential = %name,
-                    error = %error,
-                    "failed to acquire managed_credentials write lock while deleting credential"
+                    error = %poisoned,
+                    "managed_credentials write lock poisoned during delete; recovering lock and updating cache. cache will be refreshed on next connect() call"
                 );
+                let mut credentials = poisoned.into_inner();
+                credentials.remove(name);
             }
         }
 

@@ -4,16 +4,55 @@
   "runtime": "process",
   "entry": "python3 main.py",
   "inputs": [
-    "sheet_id",
-    "row"
+    {
+      "name": "sheet_id",
+      "type": "string",
+      "description": "Google spreadsheet ID.",
+      "required": true,
+      "pattern": "^[A-Za-z0-9_-]{20,}$"
+    },
+    {
+      "name": "row",
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      ],
+      "description": "Row values to append. Accepts either an ordered array of strings or an object mapping that will be converted to ordered values.",
+      "required": true
+    }
   ],
   "outputs": [
-    "appended",
-    "sheet_id",
-    "row"
+    {
+      "name": "appended",
+      "type": "boolean",
+      "description": "True when one row was appended successfully; false otherwise."
+    },
+    {
+      "name": "sheet_id",
+      "type": "string",
+      "description": "Spreadsheet ID used for the append operation."
+    },
+    {
+      "name": "row",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Echoed row values attempted or appended by the connector."
+    }
   ],
   "limits": {
-    "timeout": 3000
+    "timeout_ms": 30000
   },
   "version": "0.1.0"
 }

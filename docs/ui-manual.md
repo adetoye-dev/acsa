@@ -15,7 +15,7 @@ Use it to:
 - browse the compact full workflow inventory
 - spot invalid YAML files near the inventory instead of losing them silently
 
-Starter workflows open as local drafts first. They do not write workflow files until you save.
+Outcome-ready starters open as local drafts first. They do not write workflow files until you save.
 
 ### Workflow studio
 
@@ -45,19 +45,19 @@ Use it to:
 
 ### Connectors
 
-`Connectors` is the curated capability-pack library for integrations.
+`Connectors` is the curated capability packs library for integrations.
 
 Use it to:
 
-- install a small curated first-party set of integration capabilities
+- install a small curated first-party set of capability packs (bundles of integration capabilities)
 - see which installed capability packs are ready, blocked, or still need setup
-- keep local scaffold/test tooling behind the secondary developer section
+- access developer-focused scaffold/test tooling in the Developer section
 - inspect low-level manifest and runtime details only when you need them
 
 ## Typical workflow
 
 1. Open `Workflows`
-2. Resume a recent workflow or start from an outcome-ready starter
+2. Resume a recent workflow or start from outcome-ready starters
 3. Edit the trigger, steps, retry settings, and params in the workflow studio
 4. Save the workflow
 5. Run it manually or trigger it through cron or webhook

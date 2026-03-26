@@ -1845,7 +1845,6 @@ export function EditorShell({
                         closeRightPanel("library");
                       }}
                       onSelectType={handleAddStep}
-                      persistent
                       stepCatalog={stepCatalog}
                     />
                   ) : panel === "assistant" ? (

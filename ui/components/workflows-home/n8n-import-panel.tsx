@@ -77,6 +77,7 @@ export function N8nImportPanel({
     setJsonInput(nextText);
     setError(null);
     setResult(null);
+    event.currentTarget.value = "";
   }
 
   return (
@@ -120,9 +121,14 @@ export function N8nImportPanel({
           />
 
           <textarea
+            aria-label="n8n workflow JSON input"
             className="min-h-[260px] w-full resize-y rounded-[12px] border border-black/10 bg-white px-4 py-3 font-mono text-[13px] leading-6 text-[#182232] outline-none transition placeholder:text-[#7a828b] focus:border-[#6f63ff]/45"
             onChange={(event) => setJsonInput(event.target.value)}
-            placeholder='{\n  "name": "My n8n workflow",\n  "nodes": [],\n  "connections": {}\n}'
+            placeholder={`{
+  "name": "My n8n workflow",
+  "nodes": [],
+  "connections": {}
+}`}
             spellCheck={false}
             value={jsonInput}
           />

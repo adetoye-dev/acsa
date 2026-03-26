@@ -183,6 +183,9 @@ function scoreStepSuggestion(entry: StepTypeEntry, tokens: string[]) {
   }
 
   const haystack = [entry.label, entry.description, entry.type_name, entry.category, entry.source]
+    .filter((value) => value !== null && value !== undefined)
+    .map((value) => String(value).trim())
+    .filter((value) => value.length > 0)
     .join(" ")
     .toLowerCase();
 

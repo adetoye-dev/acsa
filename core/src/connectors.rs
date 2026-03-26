@@ -24,7 +24,7 @@ use std::{
 
 use async_trait::async_trait;
 use extism::{Manifest as ExtismManifest, PluginBuilder, Wasm};
-use serde::{Deserialize, Serialize};
+use serde::{de::Deserializer, Deserialize, Serialize};
 use serde_json::{json, Value};
 use shlex::split as shlex_split;
 use thiserror::Error;
@@ -54,12 +54,12 @@ pub struct ConnectorManifest {
     pub entry: String,
     #[serde(default)]
     pub enable_wasi: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_manifest_field_names")]
     pub inputs: Vec<String>,
     #[serde(default)]
     pub limits: ConnectorLimits,
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_manifest_field_names")]
     pub outputs: Vec<String>,
     pub runtime: ConnectorRuntime,
     #[serde(rename = "type")]
@@ -74,6 +74,34 @@ pub struct ConnectorLimits {
     pub memory: Option<u64>,
     #[serde(default)]
     pub timeout: Option<u64>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum ManifestFieldEntry {
+    Name(String),
+    Schema(ManifestFieldSchema),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ManifestFieldSchema {
+    name: String,
+}
+
+fn deserialize_manifest_field_names<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let entries = Vec::<ManifestFieldEntry>::deserialize(deserializer)?;
+    Ok(entries
+        .into_iter()
+        .map(|entry| match entry {
+            ManifestFieldEntry::Name(name) => name,
+            ManifestFieldEntry::Schema(schema) => schema.name,
+        })
+        .collect())
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -385,7 +413,7 @@ pub fn install_starter_connector_pack(
         return Ok(StarterConnectorPackInstallResult::AlreadyInstalled { connector_dir });
     }
 
-    copy_dir_all(Path::new(pack.source_dir), &connector_dir)?;
+    copy_dir_all(&pack.source_dir, &connector_dir)?;
     Ok(StarterConnectorPackInstallResult::Installed { connector_dir })
 }
 
@@ -636,7 +664,7 @@ fn scaffold_process_connector(
         entry: "python3 main.py".to_string(),
         enable_wasi: false,
         inputs: vec!["message".to_string()],
-        limits: ConnectorLimits { memory: None, timeout: Some(10_000) },
+        limits: ConnectorLimits { memory: None, timeout: Some(10_000), timeout_ms: None },
         name: name.to_string(),
         outputs: vec!["echoed".to_string()],
         runtime: ConnectorRuntime::Process,
@@ -671,7 +699,11 @@ fn scaffold_wasm_connector(
         entry: "dist/connector.wasm".to_string(),
         enable_wasi: false,
         inputs: vec!["message".to_string()],
-        limits: ConnectorLimits { memory: Some(64), timeout: Some(10_000) },
+        limits: ConnectorLimits {
+            memory: Some(64),
+            timeout: Some(10_000),
+            timeout_ms: None,
+        },
         name: name.to_string(),
         outputs: vec!["echoed".to_string()],
         runtime: ConnectorRuntime::Wasm,
@@ -786,7 +818,11 @@ fn resolve_secrets(params: &Value) -> Result<Value, NodeError> {
 }
 
 fn timeout_ms(manifest: &ConnectorManifest) -> u64 {
-    manifest.limits.timeout.unwrap_or(DEFAULT_CONNECTOR_TIMEOUT_MS)
+    manifest
+        .limits
+        .timeout_ms
+        .or(manifest.limits.timeout)
+        .unwrap_or(DEFAULT_CONNECTOR_TIMEOUT_MS)
 }
 
 fn validate_manifest(
@@ -803,9 +839,14 @@ fn validate_manifest(
             message: "connector manifest entry must be non-empty".to_string(),
         });
     }
-    let timeout_ms = manifest.limits.timeout.ok_or_else(|| ConnectorError::InvalidManifest {
-        message: "connector manifest must define limits.timeout".to_string(),
-    })?;
+    let timeout_ms = manifest
+        .limits
+        .timeout_ms
+        .or(manifest.limits.timeout)
+        .ok_or_else(|| ConnectorError::InvalidManifest {
+            message: "connector manifest must define limits.timeout_ms (or legacy limits.timeout)"
+                .to_string(),
+        })?;
     if timeout_ms == 0 || timeout_ms > MAX_CONNECTOR_TIMEOUT_MS {
         return Err(ConnectorError::InvalidManifest {
             message: format!(
@@ -1057,7 +1098,7 @@ mod tests {
 
         let pack = super::starter_connector_packs::starter_connector_pack("slack-notify")
             .expect("starter pack should exist");
-        let result = super::install_starter_connector_pack(&connectors_dir, pack)
+        let result = super::install_starter_connector_pack(&connectors_dir, &pack)
             .expect("starter pack should install");
 
         match result {
@@ -1103,7 +1144,7 @@ mod tests {
                 entry: "main.py".to_string(),
                 enable_wasi: false,
                 inputs: vec!["message".to_string()],
-                limits: ConnectorLimits { memory: None, timeout: Some(1_000) },
+                limits: ConnectorLimits { memory: None, timeout: Some(1_000), timeout_ms: None },
                 name: "Slack Notify".to_string(),
                 outputs: vec!["sent".to_string()],
                 runtime: ConnectorRuntime::Process,
@@ -1116,7 +1157,7 @@ mod tests {
 
         let pack = super::starter_connector_packs::starter_connector_pack("slack-notify")
             .expect("starter pack should exist");
-        let result = super::install_starter_connector_pack(&connectors_dir, pack)
+        let result = super::install_starter_connector_pack(&connectors_dir, &pack)
             .expect("starter pack install should succeed");
 
         match result {
@@ -1172,7 +1213,7 @@ mod tests {
                 entry: "sh connector.sh".to_string(),
                 enable_wasi: false,
                 inputs: vec!["message".to_string()],
-                limits: ConnectorLimits { memory: None, timeout: Some(1_000) },
+                limits: ConnectorLimits { memory: None, timeout: Some(1_000), timeout_ms: None },
                 name: "Echo".to_string(),
                 outputs: vec!["echoed".to_string()],
                 runtime: ConnectorRuntime::Process,
@@ -1240,7 +1281,7 @@ mod tests {
             entry: "dist/connector.wasm".to_string(),
             enable_wasi: false,
             inputs: vec![],
-            limits: ConnectorLimits { memory: Some(64), timeout: Some(1_000) },
+            limits: ConnectorLimits { memory: Some(64), timeout: Some(1_000), timeout_ms: None },
             name: "Echo".to_string(),
             outputs: vec![],
             runtime: ConnectorRuntime::Wasm,
@@ -1285,7 +1326,7 @@ mod tests {
                 entry: "python3 main.py".to_string(),
                 enable_wasi: false,
                 inputs: vec!["message".to_string()],
-                limits: ConnectorLimits { memory: None, timeout: Some(1_000) },
+                limits: ConnectorLimits { memory: None, timeout: Some(1_000), timeout_ms: None },
                 name: "valid".to_string(),
                 outputs: vec!["echoed".to_string()],
                 runtime: ConnectorRuntime::Process,
@@ -1329,7 +1370,7 @@ mod tests {
                 entry: "python3 main.py".to_string(),
                 enable_wasi: false,
                 inputs: vec!["message".to_string()],
-                limits: ConnectorLimits { memory: None, timeout: None },
+                limits: ConnectorLimits { memory: None, timeout: None, timeout_ms: None },
                 name: "broken".to_string(),
                 outputs: vec!["echoed".to_string()],
                 runtime: ConnectorRuntime::Process,

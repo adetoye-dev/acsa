@@ -4,16 +4,19 @@
   "runtime": "process",
   "entry": "python3 main.py",
   "inputs": [
+    "recipient",
     "subject",
     "body"
   ],
   "outputs": [
     "sent",
     "recipient",
-    "subject"
+    "subject",
+    "mock",
+    "would_send"
   ],
   "limits": {
-    "timeout": 3000
+    "timeout_ms": 30000
   },
   "version": "0.1.0"
 }

@@ -15,66 +15,109 @@
 #![deny(warnings)]
 #![allow(dead_code)]
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use std::path::PathBuf;
+use std::env;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StarterConnectorPack {
     pub id: &'static str,
     pub name: &'static str,
     pub description: &'static str,
-    pub source_dir: &'static str,
+    pub source_dir: PathBuf,
     pub install_dir_name: &'static str,
     pub provided_step_types: &'static [&'static str],
 }
 
-pub const STARTER_CONNECTOR_PACKS: &[StarterConnectorPack] = &[
-    StarterConnectorPack {
+#[cfg(test)]
+pub const BUILD_TIME_MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
+
+/// Static metadata for starter connector packs (built at compile time).
+#[derive(Debug, Clone, Copy)]
+struct StarterConnectorPackMetadata {
+    id: &'static str,
+    name: &'static str,
+    description: &'static str,
+    rel_path: &'static str,
+    install_dir_name: &'static str,
+    provided_step_types: &'static [&'static str],
+}
+
+const PACK_METADATA: &[StarterConnectorPackMetadata] = &[
+    StarterConnectorPackMetadata {
         id: "slack-notify",
         name: "Slack messages",
         description: "Send workflow messages to Slack channels and threads.",
-        source_dir: concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../starter-packs/connectors/slack-notify"
-        ),
+        rel_path: "starter-packs/connectors/slack-notify",
         install_dir_name: "slack-notify",
         provided_step_types: &["slack_notify"],
     },
-    StarterConnectorPack {
+    StarterConnectorPackMetadata {
         id: "github-issue-create",
         name: "GitHub issues",
         description: "Create GitHub issues from workflows.",
-        source_dir: concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../starter-packs/connectors/github-issue-create"
-        ),
+        rel_path: "starter-packs/connectors/github-issue-create",
         install_dir_name: "github-issue-create",
         provided_step_types: &["github_issue_create"],
     },
-    StarterConnectorPack {
+    StarterConnectorPackMetadata {
         id: "google-sheets-append-row",
         name: "Google Sheets rows",
         description: "Add rows to Google Sheets from workflows.",
-        source_dir: concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../starter-packs/connectors/google-sheets-append-row"
-        ),
+        rel_path: "starter-packs/connectors/google-sheets-append-row",
         install_dir_name: "google-sheets-append-row",
         provided_step_types: &["google_sheets_append_row"],
     },
-    StarterConnectorPack {
+    StarterConnectorPackMetadata {
         id: "email-send",
         name: "Email delivery",
         description: "Send workflow emails through your configured email provider.",
-        source_dir: concat!(env!("CARGO_MANIFEST_DIR"), "/../starter-packs/connectors/email-send"),
+        rel_path: "starter-packs/connectors/email-send",
         install_dir_name: "email-send",
         provided_step_types: &["email_send"],
     },
 ];
 
-pub fn starter_connector_packs() -> &'static [StarterConnectorPack] {
-    STARTER_CONNECTOR_PACKS
+/// Compute the source directory path for a starter pack at runtime.
+/// First checks STARTER_PACKS_DIR environment variable, then falls back to
+/// a path relative to the running executable.
+fn compute_source_dir(rel_path: &str) -> PathBuf {
+    if let Ok(starter_packs_dir) = env::var("STARTER_PACKS_DIR") {
+        return PathBuf::from(starter_packs_dir).join(rel_path);
+    }
+
+    if let Ok(exe_path) = env::current_exe() {
+        if let Some(exe_dir) = exe_path.parent() {
+            return exe_dir.join(rel_path);
+        }
+    }
+
+    #[cfg(test)]
+    {
+        return PathBuf::from(BUILD_TIME_MANIFEST_DIR).join("..").join(rel_path);
+    }
+
+    #[cfg(not(test))]
+    {
+        PathBuf::from(rel_path)
+    }
 }
 
-pub fn starter_connector_pack(id: &str) -> Option<&'static StarterConnectorPack> {
-    STARTER_CONNECTOR_PACKS.iter().find(|pack| pack.id == id)
+pub fn starter_connector_packs() -> Vec<StarterConnectorPack> {
+    PACK_METADATA
+        .iter()
+        .map(|meta| StarterConnectorPack {
+            id: meta.id,
+            name: meta.name,
+            description: meta.description,
+            source_dir: compute_source_dir(meta.rel_path),
+            install_dir_name: meta.install_dir_name,
+            provided_step_types: meta.provided_step_types,
+        })
+        .collect()
+}
+
+pub fn starter_connector_pack(id: &str) -> Option<StarterConnectorPack> {
+    starter_connector_packs().into_iter().find(|pack| pack.id == id)
 }
 
 #[cfg(test)]

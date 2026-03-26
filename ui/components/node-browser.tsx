@@ -30,7 +30,6 @@ type NodeBrowserProps = {
   contextHint?: string | null;
   onClose?: () => void;
   onSelectType: (typeName: string) => void;
-  persistent?: boolean;
   stepCatalog: StepTypeEntry[];
   subtitle?: string;
   title?: string;
@@ -52,7 +51,6 @@ export function NodeBrowser({
   contextHint,
   onClose,
   onSelectType,
-  persistent = false,
   stepCatalog,
   subtitle = "Choose what this step should do",
   title = "Capability library"

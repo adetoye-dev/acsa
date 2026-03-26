@@ -149,11 +149,11 @@ export function CredentialsPage() {
     }
 
     const normalizedName = name.trim().toUpperCase();
-    const normalizedValue = value.trim();
+    const preservedValue = value;
 
     setIsSaving(true);
     try {
-      await saveCredential(normalizedName, normalizedValue);
+      await saveCredential(normalizedName, preservedValue);
       setName("");
       setValue("");
       setEditingName(null);
@@ -288,6 +288,7 @@ export function CredentialsPage() {
                       <div className="flex shrink-0 items-center gap-2">
                         <button
                           className="ui-button"
+                          disabled={isSaving}
                           onClick={() => startReplace(credential.name)}
                           type="button"
                         >
@@ -349,7 +350,10 @@ export function CredentialsPage() {
 }
 
 function formatRelativeDate(timestamp: number) {
-  const deltaMinutes = Math.max(1, Math.round((Date.now() - timestamp * 1000) / 60000));
+  const deltaMinutes = Math.round((Date.now() - timestamp * 1000) / 60000);
+  if (deltaMinutes <= 0) {
+    return "just now";
+  }
   if (deltaMinutes < 60) {
     return `${deltaMinutes}m ago`;
   }

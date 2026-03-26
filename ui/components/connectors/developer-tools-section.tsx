@@ -31,6 +31,7 @@ export function DeveloperToolsSection({
   return (
     <section className="overflow-hidden bg-white">
       <button
+        aria-expanded={isOpen}
         className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
         onClick={() => setIsOpen((current) => !current)}
         type="button"

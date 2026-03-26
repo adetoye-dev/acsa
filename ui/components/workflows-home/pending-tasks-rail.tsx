@@ -14,13 +14,15 @@
  * limitations under the License.
  */
 
+import { useState } from "react";
+
 import type { HumanTask } from "../../lib/workflow-editor";
 
 type PendingTasksRailProps = {
   isRefreshing: boolean;
-  onApprove: (taskId: string, approved: boolean) => void;
+  onApprove: (taskId: string, approved: boolean) => Promise<void> | void;
   onRefresh: () => void;
-  onResolveValue: (taskId: string) => void;
+  onResolveValue: (taskId: string) => Promise<void> | void;
   onValueChange: (taskId: string, value: string) => void;
   taskValues: Record<string, string>;
   tasks: HumanTask[];
@@ -35,6 +37,39 @@ export function PendingTasksRail({
   taskValues,
   tasks
 }: PendingTasksRailProps) {
+  const [processingTaskIds, setProcessingTaskIds] = useState<Record<string, boolean>>({});
+
+  async function handleApprove(taskId: string, approved: boolean) {
+    if (processingTaskIds[taskId]) {
+      return;
+    }
+    setProcessingTaskIds((current) => ({ ...current, [taskId]: true }));
+    try {
+      await Promise.resolve(onApprove(taskId, approved));
+    } finally {
+      setProcessingTaskIds((current) => {
+        const next = { ...current };
+        delete next[taskId];
+        return next;
+      });
+    }
+  }
+
+  async function handleResolveValue(taskId: string) {
+    if (processingTaskIds[taskId]) {
+      return;
+    }
+    setProcessingTaskIds((current) => ({ ...current, [taskId]: true }));
+    try {
+      await Promise.resolve(onResolveValue(taskId));
+    } finally {
+      setProcessingTaskIds((current) => {
+        const next = { ...current };
+        delete next[taskId];
+        return next;
+      });
+    }
+  }
   return (
     <aside className="grid min-h-0 grid-rows-[60px_minmax(0,1fr)] border-l border-black/10 bg-[rgba(255,255,255,0.84)]">
       <div className="flex items-center justify-between gap-3 border-b border-black/10 px-5">
@@ -46,7 +81,7 @@ export function PendingTasksRail({
             Approvals and inputs
           </div>
         </div>
-        <button className="ui-button !px-2.5 !py-1.5" onClick={onRefresh} type="button">
+        <button aria-busy={isRefreshing} className="ui-button !px-2.5 !py-1.5" disabled={isRefreshing} onClick={onRefresh} type="button">
           {isRefreshing ? "Refreshing..." : "Refresh"}
         </button>
       </div>
@@ -58,7 +93,11 @@ export function PendingTasksRail({
           </div>
         ) : (
           <div className="space-y-3">
-            {tasks.map((task) => (
+            {tasks.map((task) => {
+              const isProcessing = Boolean(processingTaskIds[task.id]);
+              const manualValue = taskValues[task.id] ?? "";
+
+              return (
               <article
                 className="rounded-[16px] border border-black/10 bg-white px-4 py-4"
                 key={task.id}
@@ -76,24 +115,26 @@ export function PendingTasksRail({
                 </div>
 
                 <div className="mt-3 text-[12px] leading-5 text-slate/72">
-                  Run {task.run_id.slice(0, 8)}
+                  Run {task.run_id?.slice(0, 8) || task.id.slice(0, 8)}
                 </div>
 
                 {task.kind === "approval" ? (
                   <div className="mt-4 flex gap-2">
                     <button
                       className="ui-button ui-button-primary !px-3 !py-2"
-                      onClick={() => onApprove(task.id, true)}
+                      disabled={isProcessing}
+                      onClick={() => void handleApprove(task.id, true)}
                       type="button"
                     >
-                      Approve
+                      {isProcessing ? "Processing..." : "Approve"}
                     </button>
                     <button
                       className="ui-button ui-button-danger !px-3 !py-2"
-                      onClick={() => onApprove(task.id, false)}
+                      disabled={isProcessing}
+                      onClick={() => void handleApprove(task.id, false)}
                       type="button"
                     >
-                      Reject
+                      {isProcessing ? "Processing..." : "Reject"}
                     </button>
                   </div>
                 ) : (
@@ -108,15 +149,17 @@ export function PendingTasksRail({
                     />
                     <button
                       className="ui-button ui-button-primary !px-3 !py-2"
-                      onClick={() => onResolveValue(task.id)}
+                      disabled={isProcessing || !manualValue.trim()}
+                      onClick={() => void handleResolveValue(task.id)}
                       type="button"
                     >
-                      Send value
+                      {isProcessing ? "Sending..." : "Send value"}
                     </button>
                   </div>
                 )}
               </article>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

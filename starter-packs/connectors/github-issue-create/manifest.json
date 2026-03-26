@@ -4,16 +4,22 @@
   "runtime": "process",
   "entry": "python3 main.py",
   "inputs": [
-    "title"
+    "repository",
+    "title",
+    "body",
+    "labels",
+    "assignees",
+    "milestone"
   ],
   "outputs": [
     "issue_created",
-    "repository",
-    "title",
-    "labels"
+    "mock",
+    "issue_number",
+    "issue_url",
+    "issue_id"
   ],
   "limits": {
-    "timeout": 3000
+    "timeout_ms": 30000
   },
   "version": "0.1.0"
 }

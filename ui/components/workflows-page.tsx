@@ -114,7 +114,8 @@ export function WorkflowsPage() {
         fetchEngineJson<HumanTaskResponse>("/human-tasks")
       ]);
       setInventory(workflowResponse);
-      patch({ pendingTasks: taskResponse.tasks });
+      const pendingTasks = Array.isArray(taskResponse?.tasks) ? taskResponse.tasks : [];
+      patch({ pendingTasks });
       setError(null);
     } catch (nextError) {
       setError(
@@ -162,7 +163,9 @@ export function WorkflowsPage() {
 
       const nextWorkflows = [...current];
       nextWorkflows[existingIndex] = document.summary;
-      return nextWorkflows;
+      return nextWorkflows.sort((left, right) =>
+        left.file_name.localeCompare(right.file_name)
+      );
     });
 
     try {

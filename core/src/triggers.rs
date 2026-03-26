@@ -695,7 +695,7 @@ async fn install_starter_connector_pack_endpoint(
             .into_response();
     };
 
-    match install_starter_connector_pack(&state.connectors_dir, pack) {
+    match install_starter_connector_pack(&state.connectors_dir, &pack) {
         Ok(_) => {
             let pack_states =
                 match starter_pack_install_state_map(&state.connectors_dir, &state.workflows_dir) {
@@ -708,7 +708,7 @@ async fn install_starter_connector_pack_endpoint(
                             .into_response();
                     }
                 };
-            let view = starter_connector_pack_view(pack, pack_states.get(pack.install_dir_name));
+            let view = starter_connector_pack_view(&pack, pack_states.get(pack.install_dir_name));
             (StatusCode::OK, Json(json!(view))).into_response()
         }
         Err(error) => connector_error_response(TriggerError::Connector(error)),
@@ -2601,7 +2601,7 @@ async fn upsert_credential(
         });
     }
 
-    match state.engine.store().upsert_credential(request.name.trim(), &request.value).await {
+    match state.engine.store().upsert_credential(request.name.trim(), request.value.trim()).await {
         Ok(record) => (StatusCode::OK, Json(json!(credential_view(record)))).into_response(),
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
@@ -2914,7 +2914,7 @@ mod tests {
         let temp_dir = write_temp_directory("starter-pack-inventory");
         let state = starter_pack_test_state(&temp_dir).await;
         let pack = starter_connector_pack("slack-notify").expect("starter pack should exist");
-        install_starter_connector_pack(&state.connectors_dir, pack)
+        install_starter_connector_pack(&state.connectors_dir, &pack)
             .expect("starter pack should install");
 
         let response = list_starter_connector_packs(AxumState(state.clone())).await.into_response();
