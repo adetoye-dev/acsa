@@ -77,20 +77,30 @@ const yamlHighlightStyle = HighlightStyle.define([
 ]);
 
 type YamlEditorProps = {
+  fill?: boolean;
   id: string;
   minHeight: number;
   onChange: (value: string) => void;
   value: string;
 };
 
-export function YamlEditor({ id, minHeight, onChange, value }: YamlEditorProps) {
+export function YamlEditor({
+  fill = false,
+  id,
+  minHeight,
+  onChange,
+  value
+}: YamlEditorProps) {
   const extensions = useMemo(
     () => [yaml(), EditorView.lineWrapping, yamlEditorTheme, syntaxHighlighting(yamlHighlightStyle)],
     []
   );
 
   return (
-    <div className="yaml-editor overflow-hidden" style={{ minHeight }}>
+    <div
+      className={`yaml-editor overflow-hidden ${fill ? "h-full min-h-0" : ""}`}
+      style={fill ? undefined : { minHeight }}
+    >
       <CodeMirror
         basicSetup={{
           autocompletion: true,
@@ -101,7 +111,7 @@ export function YamlEditor({ id, minHeight, onChange, value }: YamlEditorProps) 
           lineNumbers: true
         }}
         extensions={extensions}
-        height={`${minHeight}px`}
+        height={fill ? "100%" : `${minHeight}px`}
         id={id}
         indentWithTab={false}
         onChange={onChange}

@@ -22,7 +22,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
 import { fetchEngineJson } from "../lib/engine-client";
-import type { ConnectorInventoryResponse } from "../lib/connectors";
 import {
   readRecentWorkflows,
   recordRecentWorkflowOpen,
@@ -31,6 +30,8 @@ import {
 import {
   createLocalWorkflowDocumentFromYaml,
   type InvalidWorkflowFile,
+  type HumanTask,
+  type RunSummary,
   type WorkflowSummary
 } from "../lib/workflow-editor";
 import {
@@ -39,45 +40,44 @@ import {
   type N8nImportResponse
 } from "../lib/n8n-import";
 import {
-  buildCompactInventory,
-  buildContinueWhereLeftOff,
+  buildRecentFirstWorkflowInventory,
   mergeLaunchpadWorkflows,
-  resolveLaunchpadEmptyState,
-  resolveStarterReadiness,
-  type ContinueWhereLeftOffItem,
-  type StarterReadinessItem
 } from "../lib/workflows-home";
-import { WORKFLOW_STARTERS } from "../lib/workflow-starters";
 import { useWorkflowActions, useWorkflowStore } from "../lib/workflow-store";
-import {
-  AllWorkflowsPanel,
-  type AllWorkflowsPanelEmptyState
-} from "./workflows-home/all-workflows-panel";
 import { N8nImportPanel } from "./workflows-home/n8n-import-panel";
-import {
-  RecentWorkflowsPanel
-} from "./workflows-home/recent-workflows-panel";
-import { StarterTemplatesRail } from "./workflows-home/starter-templates-rail";
+import { PendingTasksRail } from "./workflows-home/pending-tasks-rail";
+import { WorkflowGridCard } from "./workflows-home/workflow-grid-card";
 
 type WorkflowInventoryResponse = {
   invalid_files: InvalidWorkflowFile[];
   workflows: WorkflowSummary[];
 };
 
-type LaunchpadState = AllWorkflowsPanelEmptyState;
+type HumanTaskResponse = {
+  tasks: HumanTask[];
+};
 
 export function WorkflowsPage() {
   const router = useRouter();
-  const documents = useWorkflowStore(
-    useShallow((state) => state.documents)
+  const {
+    documents,
+    isRefreshingTasks,
+    pendingTasks,
+    taskValues
+  } = useWorkflowStore(
+    useShallow((state) => ({
+      documents: state.documents,
+      isRefreshingTasks: state.isRefreshingTasks,
+      pendingTasks: state.pendingTasks,
+      taskValues: state.taskValues
+    }))
   );
-  const { patch, setDocuments, setWorkflows } = useWorkflowActions();
+  const { clearTaskValue, patch, setDocuments, setTaskValue, setWorkflows } =
+    useWorkflowActions();
   const [inventory, setInventory] = useState<WorkflowInventoryResponse>({
     invalid_files: [],
     workflows: []
   });
-  const [connectorInventory, setConnectorInventory] =
-    useState<ConnectorInventoryResponse | null>(null);
   const [recentEntries, setRecentEntries] = useState<
     ReturnType<typeof readRecentWorkflows>
   >([]);
@@ -94,44 +94,34 @@ export function WorkflowsPage() {
     [documents, inventory.workflows]
   );
 
-  const continueWhereLeftOff = useMemo<ContinueWhereLeftOffItem[]>(
-    () => buildContinueWhereLeftOff(availableWorkflows, recentEntries),
+  const orderedWorkflows = useMemo(
+    () => buildRecentFirstWorkflowInventory(availableWorkflows, recentEntries),
     [availableWorkflows, recentEntries]
   );
 
-  const compactWorkflows = useMemo(
-    () => buildCompactInventory(availableWorkflows, continueWhereLeftOff.map((item) => item.workflow.id)),
-    [availableWorkflows, continueWhereLeftOff]
+  const recentByWorkflowId = useMemo(
+    () => new Map(recentEntries.map((entry) => [entry.workflowId, entry.openedAt])),
+    [recentEntries]
   );
-
-  const starterReadiness = useMemo<StarterReadinessItem[]>(
-    () => resolveStarterReadiness(WORKFLOW_STARTERS, connectorInventory),
-    [connectorInventory]
-  );
-
-  const launchpadState = useMemo<LaunchpadState>(
-    () => resolveLaunchpadEmptyState(availableWorkflows, recentEntries),
-    [availableWorkflows, recentEntries]
-  );
-
-  const readyStarterCount = starterReadiness.filter((starter) => starter.ready).length;
 
   async function refreshLaunchpadData() {
     setIsLoading(true);
+    patch({ isRefreshingTasks: true });
     try {
       setRecentEntries(readRecentWorkflows(window.localStorage));
-      const [workflowResponse, connectorResponse] = await Promise.all([
+      const [workflowResponse, taskResponse] = await Promise.all([
         fetchEngineJson<WorkflowInventoryResponse>("/api/workflows"),
-        fetchEngineJson<ConnectorInventoryResponse>("/api/connectors")
+        fetchEngineJson<HumanTaskResponse>("/human-tasks")
       ]);
       setInventory(workflowResponse);
-      setConnectorInventory(connectorResponse);
+      patch({ pendingTasks: taskResponse.tasks });
       setError(null);
     } catch (nextError) {
       setError(
         nextError instanceof Error ? nextError.message : "Failed to load workflows"
       );
     } finally {
+      patch({ isRefreshingTasks: false });
       setIsLoading(false);
     }
   }
@@ -199,6 +189,40 @@ export function WorkflowsPage() {
     router.push(`/workflows/${document.id}`);
   }
 
+  async function handleResolveApproval(taskId: string, approved: boolean) {
+    try {
+      await fetchEngineJson<RunSummary>(`/human-tasks/${taskId}/resolve`, {
+        body: JSON.stringify({ approved }),
+        headers: { "content-type": "application/json" },
+        method: "POST"
+      });
+      clearTaskValue(taskId);
+      await refreshLaunchpadData();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Failed to resolve task");
+    }
+  }
+
+  async function handleResolveManualInput(taskId: string) {
+    const value = taskValues[taskId] ?? "";
+    if (!value.trim()) {
+      setError("Enter a value before resolving this task.");
+      return;
+    }
+
+    try {
+      await fetchEngineJson<RunSummary>(`/human-tasks/${taskId}/resolve`, {
+        body: JSON.stringify({ value }),
+        headers: { "content-type": "application/json" },
+        method: "POST"
+      });
+      clearTaskValue(taskId);
+      await refreshLaunchpadData();
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : "Failed to resolve task");
+    }
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex h-[60px] items-center justify-between gap-4 border-b border-black/10 bg-white px-5">
@@ -207,9 +231,7 @@ export function WorkflowsPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <span className="ui-badge">{continueWhereLeftOff.length} recent</span>
           <span className="ui-badge">{availableWorkflows.length} workflows</span>
-          <span className="ui-badge">{readyStarterCount} starters ready</span>
           <button className="ui-button" onClick={() => void refreshLaunchpadData()} type="button">
             Refresh
           </button>
@@ -241,24 +263,53 @@ export function WorkflowsPage() {
         ) : null}
 
         <div className="grid h-full min-h-0 xl:grid-cols-[minmax(0,1fr)_372px]">
-          <div className="grid min-h-0 border-r border-black/10 grid-rows-[minmax(0,1fr)_minmax(0,1fr)]">
-            <RecentWorkflowsPanel
-              emptyState={launchpadState}
-              isLoading={isLoading}
-              items={continueWhereLeftOff}
-            />
-            <AllWorkflowsPanel
-              emptyState={launchpadState}
-              invalidFiles={inventory.invalid_files}
-              isLoading={isLoading}
-              workflows={compactWorkflows}
-            />
-          </div>
+          <section className="grid min-h-0 grid-rows-[60px_minmax(0,1fr)] border-r border-black/10 bg-white">
+            <div className="flex items-center justify-between gap-4 border-b border-black/10 px-5">
+              <div className="text-[15px] font-medium tracking-tight text-ink">
+                Your workflows
+              </div>
+              <span className="ui-badge">{orderedWorkflows.length}</span>
+            </div>
 
-          <StarterTemplatesRail
-            emptyState={launchpadState}
-            items={starterReadiness}
-            primary={launchpadState === "empty"}
+            <div className="sleek-scroll min-h-0 overflow-y-auto px-5 py-5">
+              {inventory.invalid_files.length > 0 ? (
+                <div className="mb-4 rounded-[16px] border border-rose-400/18 bg-rose-50/70 px-4 py-3 text-sm leading-6 text-[#c65a72]">
+                  {inventory.invalid_files.length} invalid workflow file
+                  {inventory.invalid_files.length === 1 ? "" : "s"} need attention.
+                </div>
+              ) : null}
+
+              {isLoading ? (
+                <div className="rounded-[18px] border border-black/10 bg-white px-5 py-8 text-sm leading-6 text-slate">
+                  Loading workflows…
+                </div>
+              ) : orderedWorkflows.length > 0 ? (
+                <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-3">
+                  {orderedWorkflows.map((workflow) => (
+                    <WorkflowGridCard
+                      href={`/workflows/${workflow.id}`}
+                      key={workflow.id}
+                      recentOpenedAt={recentByWorkflowId.get(workflow.id) ?? null}
+                      workflow={workflow}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-[18px] border border-black/10 bg-white px-5 py-8 text-sm leading-6 text-slate">
+                  No workflows yet. Create one or import an existing n8n flow.
+                </div>
+              )}
+            </div>
+          </section>
+
+          <PendingTasksRail
+            isRefreshing={isRefreshingTasks}
+            onApprove={(taskId, approved) => void handleResolveApproval(taskId, approved)}
+            onRefresh={() => void refreshLaunchpadData()}
+            onResolveValue={(taskId) => void handleResolveManualInput(taskId)}
+            onValueChange={(taskId, value) => setTaskValue(taskId, value)}
+            taskValues={taskValues}
+            tasks={pendingTasks}
           />
         </div>
       </div>

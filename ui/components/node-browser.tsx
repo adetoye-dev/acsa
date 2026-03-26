@@ -26,10 +26,14 @@ import type { StepTypeEntry } from "../lib/workflow-editor";
 import { NodeGlyph } from "./node-visuals";
 
 type NodeBrowserProps = {
+  autoFocusSearch?: boolean;
   contextHint?: string | null;
-  onClose: () => void;
+  onClose?: () => void;
   onSelectType: (typeName: string) => void;
+  persistent?: boolean;
   stepCatalog: StepTypeEntry[];
+  subtitle?: string;
+  title?: string;
 };
 
 const RECENT_STEP_TYPES_KEY = "acsa.node-browser.recent-step-types";
@@ -44,10 +48,14 @@ const SUGGESTED_TYPE_NAMES = [
 ];
 
 export function NodeBrowser({
+  autoFocusSearch = true,
   contextHint,
   onClose,
   onSelectType,
-  stepCatalog
+  persistent = false,
+  stepCatalog,
+  subtitle = "Choose what this step should do",
+  title = "Capability library"
 }: NodeBrowserProps) {
   const [search, setSearch] = useState("");
   const [highlightedTypeName, setHighlightedTypeName] = useState<string | null>(null);
@@ -152,8 +160,11 @@ export function NodeBrowser({
   }, []);
 
   useEffect(function focusNodeBrowserSearchEffect() {
+    if (!autoFocusSearch) {
+      return;
+    }
     searchInputRef.current?.focus();
-  }, []);
+  }, [autoFocusSearch]);
 
   useEffect(function keepHighlightedOptionInViewEffect() {
     if (!activeHighlightedTypeName) {
@@ -187,6 +198,9 @@ export function NodeBrowser({
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement | HTMLInputElement>) {
     if (event.key === "Escape") {
+      if (!onClose) {
+        return;
+      }
       event.preventDefault();
       onClose();
       return;
@@ -224,23 +238,25 @@ export function NodeBrowser({
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/60">
-              Capability library
+              {title}
             </div>
             <div className="mt-1 text-[16px] font-medium tracking-tight text-ink">
-              Choose what this step should do
+              {subtitle}
             </div>
             {contextHint ? (
               <div className="mt-1 text-[12px] text-slate">{contextHint}</div>
             ) : null}
           </div>
-          <button
-            aria-label="Close node browser"
-            className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-black/10 bg-white text-slate/70 transition hover:border-black/20 hover:bg-[#fafaf8]"
-            onClick={onClose}
-            type="button"
-          >
-            <CloseIcon />
-          </button>
+          {onClose ? (
+            <button
+              aria-label="Close node browser"
+              className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-black/10 bg-white text-slate/70 transition hover:border-black/20 hover:bg-[#fafaf8]"
+              onClick={onClose}
+              type="button"
+            >
+              <CloseIcon />
+            </button>
+          ) : null}
         </div>
       </div>
 

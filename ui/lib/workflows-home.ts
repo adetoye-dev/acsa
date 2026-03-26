@@ -109,6 +109,31 @@ export function mergeLaunchpadWorkflows(
   );
 }
 
+export function buildRecentFirstWorkflowInventory(
+  workflows: WorkflowSummary[],
+  recents: RecentWorkflowEntry[]
+): WorkflowSummary[] {
+  const recentByWorkflowId = new Map(
+    pruneRecentWorkflows(recents).map((recent) => [recent.workflowId, recent.openedAt])
+  );
+
+  return [...workflows].sort((left, right) => {
+    const leftOpenedAt = recentByWorkflowId.get(left.id) ?? 0;
+    const rightOpenedAt = recentByWorkflowId.get(right.id) ?? 0;
+    if (leftOpenedAt !== rightOpenedAt) {
+      return rightOpenedAt - leftOpenedAt;
+    }
+
+    const leftLastRun = left.workflow_state.telemetry.last_run_at ?? 0;
+    const rightLastRun = right.workflow_state.telemetry.last_run_at ?? 0;
+    if (leftLastRun !== rightLastRun) {
+      return rightLastRun - leftLastRun;
+    }
+
+    return left.name.localeCompare(right.name) || left.file_name.localeCompare(right.file_name);
+  });
+}
+
 export function buildCompactInventory(
   workflows: WorkflowSummary[],
   featuredWorkflowIds: string[]

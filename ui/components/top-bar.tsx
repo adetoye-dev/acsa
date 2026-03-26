@@ -16,7 +16,7 @@
 
 import type { ReactNode } from "react";
 
-export type WorkspaceView = "canvas" | "preview";
+export type WorkspaceView = "canvas" | "yaml";
 
 type TopBarProps = {
   activeWorkflowFile: string;
@@ -89,7 +89,7 @@ export function TopBar({
               className="flex items-center gap-0.5 rounded-[9px] bg-black/[0.06] p-0.5"
               role="tablist"
             >
-            {(["canvas", "preview"] as WorkspaceView[]).map((view) => (
+            {(["canvas", "yaml"] as WorkspaceView[]).map((view) => (
               <button
                 aria-selected={activeView === view}
                 key={view}
@@ -98,7 +98,7 @@ export function TopBar({
                 role="tab"
                 type="button"
               >
-                {view.charAt(0).toUpperCase() + view.slice(1)}
+                {view === "yaml" ? "YAML" : "Canvas"}
               </button>
             ))}
             </div>
