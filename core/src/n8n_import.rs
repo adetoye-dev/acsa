@@ -141,6 +141,18 @@ pub fn translate_n8n_workflow(workflow_json: Value) -> Result<N8nImportResponse,
     if !report.blocked.is_empty() {
         return Ok(N8nImportResponse { workflow_id, workflow_name, yaml: String::new(), report });
     }
+    let chain_nodes = chain.iter().cloned().collect::<HashSet<_>>();
+    for node in nodes_by_name.values() {
+        if node.node_type == HTTP_REQUEST_NODE_TYPE && !chain_nodes.contains(&node.name) {
+            report.degraded.push(ReportItem {
+                item_type: "node".to_string(),
+                item_name: node.name.clone(),
+                message:
+                    "supported httpRequest node not reachable from chosen trigger; omitted from imported workflow"
+                        .to_string(),
+            });
+        }
+    }
 
     let mut steps = Vec::new();
     let mut step_ids = HashMap::new();
@@ -209,6 +221,20 @@ pub fn translate_n8n_workflow(workflow_json: Value) -> Result<N8nImportResponse,
     }
 
     if !report.blocked.is_empty() {
+        return Ok(N8nImportResponse { workflow_id, workflow_name, yaml: String::new(), report });
+    }
+    if steps.is_empty() {
+        report.blocked.push(ReportItem {
+            item_type: "workflow".to_string(),
+            item_name: workflow_name.clone(),
+            message: "trigger-only workflows cannot be represented in Acsa today".to_string(),
+        });
+        report.requirements.push(RequirementItem {
+            requirement_type: "trigger_only".to_string(),
+            message:
+                "Add at least one supported httpRequest node downstream of the chosen trigger, then retry the import or rebuild the workflow manually in Acsa."
+                    .to_string(),
+        });
         return Ok(N8nImportResponse { workflow_id, workflow_name, yaml: String::new(), report });
     }
 
@@ -342,16 +368,8 @@ fn is_supported_trigger_type(node_type: &str) -> bool {
 }
 
 fn cron_schedule_from_node(node: &N8nNode) -> Result<String, String> {
-    let schedule = node
-        .parameters
-        .get("cronExpression")
-        .or_else(|| node.parameters.get("expression"))
-        .or_else(|| node.parameters.get("schedule"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "schedule trigger missing cron expression".to_string())?
-        .to_string();
+    let schedule = read_cron_expression(&node.parameters)
+        .ok_or_else(|| "schedule trigger missing cron expression".to_string())?;
 
     schedule
         .parse::<Schedule>()
@@ -364,6 +382,30 @@ fn webhook_trigger_details(
     report: &mut TranslationReport,
 ) -> Option<BTreeMap<String, serde_yaml::Value>> {
     let mut details = BTreeMap::new();
+    match read_named_string(&node.parameters, &["httpMethod", "method"]) {
+        Some(method) if method.eq_ignore_ascii_case("POST") => {}
+        Some(method) => {
+            report.blocked.push(ReportItem {
+                item_type: "trigger".to_string(),
+                item_name: node.name.clone(),
+                message: format!(
+                    "webhook method {method} is not supported; Acsa imports webhook handlers as POST only"
+                ),
+            });
+            report.requirements.push(RequirementItem {
+                requirement_type: "webhook_method".to_string(),
+                message: "Change the n8n webhook to POST before importing, or rebuild this webhook manually in Acsa.".to_string(),
+            });
+            return None;
+        }
+        None => {
+            report.degraded.push(ReportItem {
+                item_type: "trigger".to_string(),
+                item_name: node.name.clone(),
+                message: "webhook method was not explicit; imported as POST".to_string(),
+            });
+        }
+    }
     let path = node
         .parameters
         .get("path")
@@ -385,65 +427,72 @@ fn webhook_trigger_details(
             return None;
         }
     };
-    if path.starts_with('/') {
-        details.insert("path".to_string(), serde_yaml::Value::String(path.to_string()));
+    let normalized_path = if path.starts_with('/') {
+        path.to_string()
     } else {
-        details.insert("path".to_string(), serde_yaml::Value::String(format!("/{path}")));
         report.degraded.push(ReportItem {
             item_type: "trigger".to_string(),
             item_name: node.name.clone(),
             message: "webhook path missing leading slash; added".to_string(),
         });
-    }
+        format!("/{path}")
+    };
+    details.insert("path".to_string(), serde_yaml::Value::String(normalized_path));
 
-    let secret_env = read_string_param(&node.parameters, &["secretEnv", "secret_env"]);
-    let token_env = read_string_param(&node.parameters, &["tokenEnv", "token_env"]);
-    let signature_env = read_string_param(&node.parameters, &["signatureEnv", "signature_env"]);
-
-    if secret_env.is_none() && token_env.is_none() && signature_env.is_none() {
-        report.blocked.push(ReportItem {
-            item_type: "trigger".to_string(),
-            item_name: node.name.clone(),
-            message: "webhook trigger missing authentication env configuration".to_string(),
-        });
-        report.requirements.push(RequirementItem {
-            requirement_type: "webhook_auth".to_string(),
-            message: "Provide secretEnv/tokenEnv/signatureEnv for webhook authentication"
-                .to_string(),
-        });
-        return None;
-    }
-
-    if let Some(secret) = secret_env {
-        details.insert("secret_env".to_string(), serde_yaml::Value::String(secret));
-    }
-    if let Some(token) = token_env {
-        details.insert("token_env".to_string(), serde_yaml::Value::String(token));
-    }
-    if let Some(signature) = signature_env {
-        details.insert("signature_env".to_string(), serde_yaml::Value::String(signature));
-    }
-
-    if let Some(header) = read_string_param(&node.parameters, &["signatureHeader"]) {
-        details.insert("signature_header".to_string(), serde_yaml::Value::String(header));
-    }
-    if let Some(prefix) = read_string_param(&node.parameters, &["signaturePrefix"]) {
-        details.insert("signature_prefix".to_string(), serde_yaml::Value::String(prefix));
-    }
+    details.insert(
+        "secret_env".to_string(),
+        serde_yaml::Value::String("ACSA_IMPORTED_WEBHOOK_SECRET".to_string()),
+    );
+    report.degraded.push(ReportItem {
+        item_type: "trigger".to_string(),
+        item_name: node.name.clone(),
+        message: "raw n8n webhook authentication cannot be derived exactly; inserted placeholder secret_env for manual follow-up".to_string(),
+    });
+    report.requirements.push(RequirementItem {
+        requirement_type: "webhook_auth_manual_follow_up".to_string(),
+        message: "Set ACSA_IMPORTED_WEBHOOK_SECRET (or replace secret_env) before running the imported webhook in Acsa.".to_string(),
+    });
 
     Some(details)
 }
 
-fn read_string_param(parameters: &Value, keys: &[&str]) -> Option<String> {
-    for key in keys {
-        if let Some(value) = parameters.get(*key).and_then(Value::as_str) {
-            let trimmed = value.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed.to_string());
-            }
+fn read_cron_expression(parameters: &Value) -> Option<String> {
+    read_non_empty_string(parameters.get("cronExpression"))
+        .or_else(|| read_non_empty_string(parameters.get("expression")))
+        .or_else(|| read_non_empty_string(parameters.get("schedule")))
+        .or_else(|| {
+            let rule = parameters.get("rule")?.as_object()?;
+            read_non_empty_string(rule.get("cronExpression"))
+                .or_else(|| read_non_empty_string(rule.get("expression")))
+                .or_else(|| read_non_empty_string(rule.get("schedule")))
+                .or_else(|| read_rule_interval_cron_expression(rule))
+        })
+}
+
+fn read_rule_interval_cron_expression(rule: &Map<String, Value>) -> Option<String> {
+    let intervals = rule.get("interval").or_else(|| rule.get("intervals"))?.as_array()?;
+    intervals.iter().find_map(|entry| {
+        let entry = entry.as_object()?;
+        let field = read_non_empty_string(entry.get("field"))?;
+        if field != "cronExpression" {
+            return None;
         }
-    }
-    None
+        read_non_empty_string(entry.get("expression"))
+            .or_else(|| read_non_empty_string(entry.get("value")))
+            .or_else(|| read_non_empty_string(entry.get("cronExpression")))
+    })
+}
+
+fn read_non_empty_string(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn read_named_string(parameters: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| read_non_empty_string(parameters.get(*key)))
 }
 
 fn build_connection_map(
@@ -455,7 +504,28 @@ fn build_connection_map(
         return map;
     };
     for (node_name, connection_value) in connections {
-        let Some(main_outputs) = connection_value.get("main").and_then(Value::as_array) else {
+        let Some(connection_object) = connection_value.as_object() else {
+            report.blocked.push(ReportItem {
+                item_type: "connection".to_string(),
+                item_name: node_name.to_string(),
+                message: "unsupported connection shape for node".to_string(),
+            });
+            return HashMap::new();
+        };
+        for (channel_name, channel_value) in connection_object {
+            if channel_name == "main" || is_empty_connection_channel(channel_value) {
+                continue;
+            }
+            report.blocked.push(ReportItem {
+                item_type: "connection".to_string(),
+                item_name: node_name.to_string(),
+                message: format!(
+                    "unsupported connection channel {channel_name}; only main connections are imported"
+                ),
+            });
+            return HashMap::new();
+        }
+        let Some(main_outputs) = connection_object.get("main").and_then(Value::as_array) else {
             continue;
         };
         let mut downstream = Vec::new();
@@ -657,8 +727,18 @@ fn looks_like_secret_key(key: &str) -> bool {
         || key.contains("token")
         || key.contains("password")
         || key.contains("credential")
+        || key.contains("authorization")
         || key.contains("api_key")
         || key.contains("apikey")
+}
+
+fn is_empty_connection_channel(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::Array(items) => items.iter().all(is_empty_connection_channel),
+        Value::Object(map) => map.values().all(is_empty_connection_channel),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -790,7 +870,127 @@ mod tests {
     }
 
     #[test]
-    fn translates_webhook_trigger_with_auth_and_path() {
+    fn blocks_trigger_only_workflows_that_acsa_cannot_represent() {
+        let workflow_json = json!({
+            "name": "Trigger Only",
+            "nodes": [
+                { "name": "Manual Trigger", "type": "n8n-nodes-base.manualTrigger", "parameters": {} }
+            ],
+            "connections": {}
+        });
+
+        let response = translate_n8n_workflow(workflow_json).expect("translation should return");
+
+        assert!(response.yaml.trim().is_empty());
+        assert!(response.report.blocked.iter().any(|item| item.message.contains("trigger-only")));
+        assert!(response
+            .report
+            .requirements
+            .iter()
+            .any(|item| item.message.contains("Add at least one supported httpRequest node")));
+    }
+
+    #[test]
+    fn reports_supported_http_request_nodes_not_reachable_from_trigger() {
+        let workflow_json = json!({
+            "name": "Disconnected Request",
+            "nodes": [
+                { "name": "Manual Trigger", "type": "n8n-nodes-base.manualTrigger", "parameters": {} },
+                {
+                    "name": "Reachable API",
+                    "type": "n8n-nodes-base.httpRequest",
+                    "parameters": { "method": "GET", "url": "https://example.com/reachable" }
+                },
+                {
+                    "name": "Orphaned API",
+                    "type": "n8n-nodes-base.httpRequest",
+                    "parameters": { "method": "GET", "url": "https://example.com/orphaned" }
+                }
+            ],
+            "connections": {
+                "Manual Trigger": {
+                    "main": [[{ "node": "Reachable API", "type": "main", "index": 0 }]]
+                }
+            }
+        });
+
+        let response = translate_n8n_workflow(workflow_json).expect("translation should succeed");
+
+        assert!(response.yaml.contains("https://example.com/reachable"));
+        assert!(!response.yaml.contains("https://example.com/orphaned"));
+        assert!(
+            response
+                .report
+                .degraded
+                .iter()
+                .any(|item| item.item_name == "Orphaned API"
+                    && item.message.contains("not reachable"))
+        );
+    }
+
+    #[test]
+    fn blocks_unsupported_non_main_connection_channels() {
+        let workflow_json = json!({
+            "name": "Ai Branch",
+            "nodes": [
+                { "name": "Manual Trigger", "type": "n8n-nodes-base.manualTrigger", "parameters": {} },
+                {
+                    "name": "Fetch API",
+                    "type": "n8n-nodes-base.httpRequest",
+                    "parameters": { "method": "GET", "url": "https://example.com/health" }
+                }
+            ],
+            "connections": {
+                "Manual Trigger": {
+                    "main": [[{ "node": "Fetch API", "type": "main", "index": 0 }]],
+                    "ai_languageModel": [[{ "node": "Fetch API", "type": "main", "index": 0 }]]
+                }
+            }
+        });
+
+        let response = translate_n8n_workflow(workflow_json).expect("translation should return");
+
+        assert!(response.yaml.trim().is_empty());
+        assert!(response.report.blocked.iter().any(|item| {
+            item.message.contains("unsupported connection channel ai_languageModel")
+        }));
+    }
+
+    #[test]
+    fn removes_authorization_headers_from_http_request_nodes() {
+        let workflow_json = json!({
+            "name": "Authorized Request",
+            "nodes": [
+                { "name": "Manual Trigger", "type": "n8n-nodes-base.manualTrigger", "parameters": {} },
+                {
+                    "name": "Fetch API",
+                    "type": "n8n-nodes-base.httpRequest",
+                    "parameters": {
+                        "method": "GET",
+                        "url": "https://example.com/health",
+                        "headers": {
+                            "Authorization": "Bearer super-secret",
+                            "Accept": "application/json"
+                        }
+                    }
+                }
+            ],
+            "connections": {
+                "Manual Trigger": {
+                    "main": [[{ "node": "Fetch API", "type": "main", "index": 0 }]]
+                }
+            }
+        });
+
+        let response = translate_n8n_workflow(workflow_json).expect("translation should succeed");
+
+        assert!(!response.yaml.contains("Authorization"));
+        assert!(response.yaml.contains("Accept"));
+        assert!(response.report.degraded.iter().any(|item| item.message.contains("Authorization")));
+    }
+
+    #[test]
+    fn degrades_webhook_translation_when_auth_cannot_be_derived_from_raw_n8n_fields() {
         let workflow_json = json!({
             "name": "Inbound Webhook",
             "nodes": [
@@ -798,8 +998,8 @@ mod tests {
                     "name": "Webhook",
                     "type": "n8n-nodes-base.webhook",
                     "parameters": {
-                        "path": "/incoming",
-                        "secretEnv": "ACSA_WEBHOOK_SECRET"
+                        "httpMethod": "POST",
+                        "path": "/incoming"
                     }
                 },
                 {
@@ -819,8 +1019,18 @@ mod tests {
 
         assert!(response.yaml.contains("type: webhook"));
         assert!(response.yaml.contains("path: /incoming"));
-        assert!(response.yaml.contains("secret_env: ACSA_WEBHOOK_SECRET"));
+        assert!(response.yaml.contains("secret_env: ACSA_IMPORTED_WEBHOOK_SECRET"));
         assert!(response.report.blocked.is_empty());
+        assert!(response
+            .report
+            .degraded
+            .iter()
+            .any(|item| { item.message.contains("placeholder secret_env") }));
+        assert!(response
+            .report
+            .requirements
+            .iter()
+            .any(|item| item.message.contains("ACSA_IMPORTED_WEBHOOK_SECRET")));
     }
 
     #[test]
@@ -831,7 +1041,7 @@ mod tests {
                 {
                     "name": "Webhook",
                     "type": "n8n-nodes-base.webhook",
-                    "parameters": { "path": "/incoming" }
+                    "parameters": { "httpMethod": "POST", "path": "/incoming" }
                 }
             ],
             "connections": {}
@@ -841,6 +1051,81 @@ mod tests {
 
         assert!(response.yaml.trim().is_empty());
         assert!(!response.report.blocked.is_empty());
-        assert!(response.report.blocked[0].message.contains("webhook"));
+        assert!(response.report.blocked.iter().any(|item| item.message.contains("trigger-only")));
+    }
+
+    #[test]
+    fn blocks_non_post_webhook_methods() {
+        let workflow_json = json!({
+            "name": "Get Webhook",
+            "nodes": [
+                {
+                    "name": "Webhook",
+                    "type": "n8n-nodes-base.webhook",
+                    "parameters": {
+                        "httpMethod": "GET",
+                        "path": "/incoming"
+                    }
+                },
+                {
+                    "name": "Fetch API",
+                    "type": "n8n-nodes-base.httpRequest",
+                    "parameters": { "method": "GET", "url": "https://example.com/health" }
+                }
+            ],
+            "connections": {
+                "Webhook": {
+                    "main": [[{ "node": "Fetch API", "type": "main", "index": 0 }]]
+                }
+            }
+        });
+
+        let response = translate_n8n_workflow(workflow_json).expect("translation should return");
+
+        assert!(response.yaml.trim().is_empty());
+        assert!(response.report.blocked.iter().any(|item| item.message.contains("POST only")));
+    }
+
+    #[test]
+    fn translates_schedule_trigger_with_rule_interval_cron_expression() {
+        let workflow_json = json!({
+            "name": "Rule-based Schedule",
+            "nodes": [
+                {
+                    "name": "Schedule Trigger",
+                    "type": "n8n-nodes-base.scheduleTrigger",
+                    "parameters": {
+                        "rule": {
+                            "interval": [
+                                {
+                                    "field": "cronExpression",
+                                    "expression": "0 */4 * * * *"
+                                }
+                            ]
+                        }
+                    }
+                },
+                {
+                    "name": "Fetch API",
+                    "type": "n8n-nodes-base.httpRequest",
+                    "parameters": { "method": "GET", "url": "https://example.com/health" }
+                }
+            ],
+            "connections": {
+                "Schedule Trigger": {
+                    "main": [[{ "node": "Fetch API", "type": "main", "index": 0 }]]
+                }
+            }
+        });
+
+        let response = translate_n8n_workflow(workflow_json).expect("translation should succeed");
+        let workflow_yaml: YamlValue =
+            serde_yaml::from_str(&response.yaml).expect("workflow yaml should parse");
+
+        assert_eq!(
+            workflow_yaml["trigger"]["schedule"],
+            YamlValue::String("0 */4 * * * *".to_string())
+        );
+        assert!(response.report.blocked.is_empty());
     }
 }

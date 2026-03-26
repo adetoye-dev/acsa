@@ -2908,6 +2908,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn import_n8n_workflow_endpoint_reports_trigger_only_workflows_as_blocked() {
+        let response = import_n8n_workflow(Json(N8nImportRequest {
+            workflow_json: json!({
+                "name": "Trigger Only",
+                "nodes": [
+                    {
+                        "name": "Manual Trigger",
+                        "type": "n8n-nodes-base.manualTrigger",
+                        "parameters": {}
+                    }
+                ],
+                "connections": {}
+            }),
+        }))
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let payload =
+            to_bytes(response.into_body(), usize::MAX).await.expect("response body should read");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&payload).expect("import response should deserialize");
+        assert_eq!(payload["yaml"], json!(""));
+        assert!(payload["report"]["blocked"]
+            .as_array()
+            .expect("blocked report should be an array")
+            .iter()
+            .any(|item| item["message"]
+                == json!("trigger-only workflows cannot be represented in Acsa today")));
+    }
+
+    #[tokio::test]
     async fn import_n8n_workflow_endpoint_rejects_non_object_payloads() {
         let response = import_n8n_workflow(Json(N8nImportRequest {
             workflow_json: json!(["not", "a", "workflow", "object"]),
