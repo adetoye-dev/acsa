@@ -15,8 +15,10 @@
 #![deny(warnings)]
 
 use std::{
+    collections::HashMap,
     path::Path,
     str::FromStr,
+    sync::{OnceLock, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -30,6 +32,18 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::observability::{HistogramBucket, HistogramSnapshot, MetricsSnapshot};
+
+static MANAGED_CREDENTIALS: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
+
+fn managed_credentials() -> &'static RwLock<HashMap<String, String>> {
+    MANAGED_CREDENTIALS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+pub fn resolve_secret_value(name: &str) -> Option<String> {
+    std::env::var(name).ok().or_else(|| {
+        managed_credentials().read().ok().and_then(|credentials| credentials.get(name).cloned())
+    })
+}
 
 #[derive(Debug, Clone)]
 pub struct RunStore {
@@ -59,6 +73,7 @@ impl RunStore {
         let pool = SqlitePoolOptions::new().max_connections(5).connect_with(options).await?;
         let store = Self { pool };
         store.initialize().await?;
+        store.refresh_managed_credentials_cache().await?;
         store.mark_incomplete_runs_failed().await?;
         Ok(store)
     }
@@ -138,6 +153,93 @@ impl RunStore {
         .ok_or_else(|| StorageError::RunNotFound(run_id.to_string()))?;
 
         map_run_row(row)
+    }
+
+    pub async fn list_credentials(&self) -> Result<Vec<CredentialRecord>, StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT name, updated_at
+            FROM credentials
+            ORDER BY name ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                Ok(CredentialRecord {
+                    name: row.try_get("name")?,
+                    updated_at: row.try_get("updated_at")?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn upsert_credential(
+        &self,
+        name: &str,
+        value: &str,
+    ) -> Result<CredentialRecord, StorageError> {
+        let updated_at = current_timestamp();
+        sqlx::query(
+            r#"
+            INSERT INTO credentials (name, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(name) DO UPDATE
+            SET value = excluded.value,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(name)
+        .bind(value)
+        .bind(updated_at)
+        .execute(&self.pool)
+        .await?;
+
+        match managed_credentials().write() {
+            Ok(mut credentials) => {
+                credentials.insert(name.to_string(), value.to_string());
+            }
+            Err(poisoned) => {
+                tracing::warn!(
+                    credential = %name,
+                    error = %poisoned,
+                    "managed_credentials write lock poisoned during upsert; recovering lock and updating cache. cache will be refreshed on next connect() call"
+                );
+                let mut credentials = poisoned.into_inner();
+                credentials.insert(name.to_string(), value.to_string());
+            }
+        }
+
+        Ok(CredentialRecord { name: name.to_string(), updated_at })
+    }
+
+    pub async fn delete_credential(&self, name: &str) -> Result<(), StorageError> {
+        sqlx::query(
+            r#"
+            DELETE FROM credentials
+            WHERE name = ?
+            "#,
+        )
+        .bind(name)
+        .execute(&self.pool)
+        .await?;
+
+        match managed_credentials().write() {
+            Ok(mut credentials) => {
+                credentials.remove(name);
+            }
+            Err(error) => {
+                tracing::error!(
+                    credential = %name,
+                    error = %error,
+                    "failed to acquire managed_credentials write lock while deleting credential"
+                );
+            }
+        }
+
+        Ok(())
     }
 
     pub async fn complete_run_success(&self, run_id: &str) -> Result<(), StorageError> {
@@ -934,6 +1036,18 @@ impl RunStore {
 
         sqlx::query(
             r#"
+            CREATE TABLE IF NOT EXISTS credentials (
+              name TEXT PRIMARY KEY,
+              value TEXT NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
             CREATE TABLE IF NOT EXISTS step_runs (
               id TEXT PRIMARY KEY,
               run_id TEXT NOT NULL,
@@ -1085,6 +1199,42 @@ impl RunStore {
             .await?;
         Ok(())
     }
+
+    async fn refresh_managed_credentials_cache(&self) -> Result<(), StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT name, value
+            FROM credentials
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut next_credentials = HashMap::new();
+        for row in rows {
+            let name: String = row.try_get("name")?;
+            let value: String = row.try_get("value")?;
+            next_credentials.insert(name, value);
+        }
+
+        match managed_credentials().write() {
+            Ok(mut credentials) => {
+                *credentials = next_credentials;
+            }
+            Err(error) => {
+                tracing::error!(
+                    error = %error,
+                    "failed to acquire managed_credentials write lock in refresh_managed_credentials_cache"
+                );
+                return Err(StorageError::DataIntegrity(
+                    "failed to acquire managed_credentials write lock in refresh_managed_credentials_cache"
+                        .to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1124,6 +1274,12 @@ pub struct LogRecord {
     pub timestamp: i64,
     pub level: String,
     pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialRecord {
+    pub name: String,
+    pub updated_at: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

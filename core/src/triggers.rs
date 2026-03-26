@@ -71,7 +71,8 @@ use crate::{
         WorkflowValidationState,
     },
     storage::{
-        LogQuery, LogRecord, PaginatedResponse, RunQuery, RunRecord, RunStore, StepRunRecord,
+        resolve_secret_value, CredentialRecord, LogQuery, LogRecord, PaginatedResponse, RunQuery,
+        RunRecord, RunStore, StepRunRecord,
     },
 };
 
@@ -150,6 +151,12 @@ struct SaveWorkflowRequest {
 #[derive(Debug, Deserialize)]
 struct N8nImportRequest {
     workflow_json: Value,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpsertCredentialRequest {
+    name: String,
+    value: String,
 }
 
 #[derive(Debug)]
@@ -271,6 +278,18 @@ struct ConnectorTestResponse {
     inputs: Value,
     output: Value,
     params: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CredentialView {
+    is_overridden_by_env: bool,
+    name: String,
+    updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CredentialsResponse {
+    credentials: Vec<CredentialView>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -450,6 +469,8 @@ pub async fn serve(
     };
     let protected_routes = Router::new()
         .route("/metrics", get(export_metrics))
+        .route("/api/credentials", get(list_credentials).post(upsert_credential))
+        .route("/api/credentials/{credential_name}", axum::routing::delete(delete_credential))
         .route("/api/connectors", get(list_connectors))
         .route("/api/connectors/starter-packs", get(list_starter_connector_packs))
         .route(
@@ -2506,11 +2527,12 @@ fn build_webhook_workflow(plan: WorkflowPlan) -> Result<WebhookWorkflow, Trigger
                         .to_string(),
                     message: error.to_string(),
                 })?;
-            let secret =
-                env::var(secret_env).map_err(|_| TriggerError::MissingWebhookSecretEnv {
+            let secret = resolve_secret_value(secret_env).ok_or_else(|| {
+                TriggerError::MissingWebhookSecretEnv {
                     env_name: secret_env.to_string(),
                     workflow_name: plan.workflow.name.clone(),
-                })?;
+                }
+            })?;
             Some(WebhookTokenAuth { header_name, secret })
         }
         None => None,
@@ -2526,11 +2548,12 @@ fn build_webhook_workflow(plan: WorkflowPlan) -> Result<WebhookWorkflow, Trigger
                         .to_string(),
                     message: error.to_string(),
                 })?;
-            let secret =
-                env::var(secret_env).map_err(|_| TriggerError::MissingWebhookSecretEnv {
+            let secret = resolve_secret_value(secret_env).ok_or_else(|| {
+                TriggerError::MissingWebhookSecretEnv {
                     env_name: secret_env.to_string(),
                     workflow_name: plan.workflow.name.clone(),
-                })?;
+                }
+            })?;
             Some(WebhookSignatureAuth {
                 header_name,
                 prefix: trigger_detail(trigger, "signature_prefix")
@@ -2549,6 +2572,103 @@ fn build_webhook_workflow(plan: WorkflowPlan) -> Result<WebhookWorkflow, Trigger
     }
 
     Ok(WebhookWorkflow { path, plan, signature_auth, token_auth })
+}
+
+async fn list_credentials(State(state): State<AppState>) -> Response {
+    match state.engine.store().list_credentials().await {
+        Ok(records) => {
+            let credentials = records.into_iter().map(credential_view).collect::<Vec<_>>();
+            (StatusCode::OK, Json(json!(CredentialsResponse { credentials }))).into_response()
+        }
+        Err(error) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+                .into_response()
+        }
+    }
+}
+
+async fn upsert_credential(
+    State(state): State<AppState>,
+    Json(request): Json<UpsertCredentialRequest>,
+) -> Response {
+    if let Err(error) = validate_credential_name(&request.name) {
+        return credential_validation_error_response(error);
+    }
+    if request.value.trim().is_empty() {
+        return credential_validation_error_response(TriggerError::InvalidCredentialName {
+            name: request.name,
+            message: "credential value must not be empty".to_string(),
+        });
+    }
+
+    match state.engine.store().upsert_credential(request.name.trim(), &request.value).await {
+        Ok(record) => (StatusCode::OK, Json(json!(credential_view(record)))).into_response(),
+        Err(error) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+                .into_response()
+        }
+    }
+}
+
+async fn delete_credential(
+    State(state): State<AppState>,
+    AxumPath(credential_name): AxumPath<String>,
+) -> Response {
+    if let Err(error) = validate_credential_name(&credential_name) {
+        return credential_validation_error_response(error);
+    }
+
+    match state.engine.store().delete_credential(credential_name.trim()).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+                .into_response()
+        }
+    }
+}
+
+fn credential_view(record: CredentialRecord) -> CredentialView {
+    CredentialView {
+        is_overridden_by_env: env::var_os(&record.name).is_some(),
+        name: record.name,
+        updated_at: record.updated_at,
+    }
+}
+
+fn validate_credential_name(name: &str) -> Result<(), TriggerError> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(TriggerError::InvalidCredentialName {
+            name: name.to_string(),
+            message: "credential name must not be empty".to_string(),
+        });
+    }
+
+    if !trimmed.chars().all(|character| {
+        character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+    }) {
+        return Err(TriggerError::InvalidCredentialName {
+            name: trimmed.to_string(),
+            message: "credential names must use A-Z, 0-9, and underscores only".to_string(),
+        });
+    }
+
+    Ok(())
+}
+
+fn credential_validation_error_response(error: TriggerError) -> Response {
+    match error {
+        TriggerError::InvalidCredentialName { name, message } => (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": message,
+                "name": name,
+            })),
+        )
+            .into_response(),
+        other => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": other.to_string() })))
+            .into_response(),
+    }
 }
 
 fn cron_schedule(trigger: &Trigger) -> Result<Schedule, TriggerError> {
@@ -2635,6 +2755,8 @@ pub enum TriggerError {
     WorkflowAlreadyExists { workflow_id: String },
     #[error("workflow {workflow_id} was not found")]
     WorkflowNotFound { workflow_id: String },
+    #[error("invalid credential name {name}: {message}")]
+    InvalidCredentialName { name: String, message: String },
     #[error("binding the engine to {bind_addr} requires ACSA_ALLOW_REMOTE_ENGINE=1")]
     RemoteBindingRequiresExplicitOptIn { bind_addr: SocketAddr },
 }

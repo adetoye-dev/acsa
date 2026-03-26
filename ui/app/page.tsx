@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { redirect } from "next/navigation";
+import { LandingPage } from "../components/landing-page";
 
 export default function HomePage() {
-  redirect("/workflows");
+  return <LandingPage />;
 }

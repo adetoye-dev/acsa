@@ -92,7 +92,10 @@ export function ConnectorsPage() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex h-[60px] items-center justify-between gap-4 border-b border-black/10 bg-white px-5">
-        <h1 className="section-title mt-2">Connectors</h1>
+        <div>
+          <h1 className="section-title mt-2">Connectors</h1>
+          <p className="mt-0.5 text-sm text-[#68707a]">Install ready-made packs like Email, Slack, GitHub, or Sheets, then use their steps in workflows.</p>
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="ui-badge">{starterRows.length} capability packs</span>
           <span className="ui-badge">{installedRows.length} installed</span>

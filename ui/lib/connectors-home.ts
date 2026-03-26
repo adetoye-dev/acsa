@@ -213,13 +213,13 @@ function starterConnectorPackHelperText(
 ): string | null {
   switch (pack.install_state) {
     case "available":
-      return "Installs a real local connector into your workspace.";
+      return "Installs the real connector files into your workspace so flows can use its steps.";
     case "setup_required":
-      return "Installed locally. Finish setup before using it in workflows.";
+      return "Installed. Add the credentials or complete the setup it needs before using it in workflows.";
     case "runtime_restricted":
-      return "Installed locally, but runtime permissions still need attention.";
+      return "Installed, but runtime permissions still need attention.";
     case "invalid":
-      return "Installed locally, but the connector files need attention.";
+      return "Installed, but the connector files need attention.";
     case "satisfied":
       return "Already installed and ready to use.";
   }

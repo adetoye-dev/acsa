@@ -33,6 +33,7 @@ use tokio::{io::AsyncWriteExt, process::Command, time::timeout};
 pub use crate::starter_connector_packs;
 
 use crate::nodes::{ensure_relative_path, Node, NodeError, NodeRegistry};
+use crate::storage::resolve_secret_value;
 
 const DEFAULT_CONNECTOR_TIMEOUT_MS: u64 = 10_000;
 const MAX_CONNECTOR_TIMEOUT_MS: u64 = 5 * 60_000;
@@ -427,7 +428,7 @@ async fn execute_process_connector(
         process.env("PATH", path);
     }
     for env_name in &manifest.allowed_env {
-        if let Ok(value) = std::env::var(env_name) {
+        if let Some(value) = resolve_secret_value(env_name) {
             process.env(env_name, value);
         }
     }
@@ -773,10 +774,11 @@ fn resolve_secrets(params: &Value) -> Result<Value, NodeError> {
                 message: "all secret mappings must be strings".to_string(),
             });
         };
-        let secret_value = std::env::var(env_name).map_err(|_| NodeError::InvalidParameter {
-            parameter: "secrets_env".to_string(),
-            message: format!("environment variable {env_name} is not set"),
-        })?;
+        let secret_value =
+            resolve_secret_value(env_name).ok_or_else(|| NodeError::InvalidParameter {
+                parameter: "secrets_env".to_string(),
+                message: format!("environment variable {env_name} is not set"),
+            })?;
         secrets.insert(key.clone(), Value::String(secret_value));
     }
 

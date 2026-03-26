@@ -45,6 +45,12 @@ const navItems = [
     icon: <ConnectorsIcon />,
     label: "Connectors",
     match: (pathname: string) => pathname.startsWith("/connectors")
+  },
+  {
+    href: "/credentials",
+    icon: <CredentialsIcon />,
+    label: "Credentials",
+    match: (pathname: string) => pathname.startsWith("/credentials")
   }
 ] as const;
 
@@ -275,6 +281,27 @@ function ConnectorsIcon() {
         x="5.75"
         y="6.5"
       />
+    </svg>
+  );
+}
+
+function CredentialsIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-4 w-4"
+      fill="none"
+      viewBox="0 0 16 16"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M3.5 7.25a2.75 2.75 0 1 1 5.15 1.35H13v2.15h-1.4v1.5h-1.9v-1.5H8.2A2.75 2.75 0 0 1 3.5 7.25Z"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.35"
+      />
+      <circle cx="6.25" cy="7.25" fill="currentColor" r="0.8" />
     </svg>
   );
 }
