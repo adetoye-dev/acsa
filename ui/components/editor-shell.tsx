@@ -304,6 +304,15 @@ export function EditorShell({
     });
   }
 
+  async function refreshNodeCatalog() {
+    const catalog = await fetchEngineJson<NodeCatalogResponse>("/api/node-catalog");
+    patchWorkflowState({
+      newStepType: catalog.step_types[0]?.type_name ?? "noop",
+      stepCatalog: catalog.step_types,
+      triggerCatalog: catalog.trigger_types
+    });
+  }
+
   useEffect(function bootstrapEditorEffect() {
     void bootstrap();
   }, []);
@@ -1931,6 +1940,7 @@ export function EditorShell({
                   ) : panel === "assistant" ? (
                     <AiAssistantRail
                       onClose={() => closeRightPanel("assistant")}
+                      onNodeRecordSaved={() => refreshNodeCatalog()}
                       onSelectType={handleAddStep}
                       stepCatalog={stepCatalog}
                     />

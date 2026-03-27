@@ -40,6 +40,20 @@ type ConnectorManagerProps = {
   onCatalogInvalidated: () => Promise<void> | void;
 };
 
+function connectorSourceLabel(connector: ConnectorInventoryItem) {
+  const sourceKind = connector.app_record?.source_kind;
+  if (sourceKind === "starter_pack") {
+    return "Installed in app";
+  }
+  if (sourceKind === "custom") {
+    return "Created in app";
+  }
+  if (sourceKind === "generated") {
+    return "Generated in app";
+  }
+  return null;
+}
+
 export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps) {
   const [inventory, setInventory] = useState<ConnectorInventoryResponse | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
@@ -296,6 +310,9 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
                           </span>
                           {connector.version ? (
                             <span className="ui-badge font-mono">{connector.version}</span>
+                          ) : null}
+                          {connectorSourceLabel(connector) ? (
+                            <span className="ui-badge">{connectorSourceLabel(connector)}</span>
                           ) : null}
                           <span className="ui-badge">
                             {connectorTrustLabel(connector.connector_state.trust)}

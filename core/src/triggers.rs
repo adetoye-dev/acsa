@@ -71,8 +71,9 @@ use crate::{
         WorkflowValidationState,
     },
     storage::{
-        resolve_secret_value, CredentialRecord, LogQuery, LogRecord, PaginatedResponse, RunQuery,
-        RunRecord, RunStore, StepRunRecord, WorkflowRecord,
+        resolve_secret_value, CredentialRecord, LogQuery, LogRecord, NewConnectorRecord,
+        NewNodeRecord, PaginatedResponse, RunQuery, RunRecord, RunStore, StepRunRecord,
+        WorkflowRecord,
     },
 };
 
@@ -173,6 +174,17 @@ struct CreateConnectorRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct UpsertNodeRecordRequest {
+    category: String,
+    description: String,
+    label: String,
+    source_kind: String,
+    #[serde(default)]
+    source_ref: Option<String>,
+    type_name: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct TestConnectorRequest {
     #[serde(default)]
     inputs: Option<Value>,
@@ -207,6 +219,7 @@ struct InvalidWorkflowFile {
 
 #[derive(Debug, Clone, Serialize)]
 struct StepTypeEntry {
+    app_record: Option<NodeRecordView>,
     category: String,
     description: String,
     label: String,
@@ -281,6 +294,18 @@ struct ConnectorTestResponse {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct NodeRecordResponse {
+    category: String,
+    description: String,
+    id: String,
+    label: String,
+    source_kind: String,
+    source_ref: Option<String>,
+    type_name: String,
+    updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct CredentialView {
     is_overridden_by_env: bool,
     name: String,
@@ -296,6 +321,7 @@ struct CredentialsResponse {
 struct ConnectorView {
     allowed_env: Vec<String>,
     allowed_hosts: Vec<String>,
+    app_record: Option<ConnectorRecordView>,
     connector_dir: String,
     connector_state: ProductConnectorState,
     entry: String,
@@ -318,6 +344,7 @@ struct ConnectorView {
 
 #[derive(Debug, Clone, Serialize)]
 struct InvalidConnectorView {
+    app_record: Option<ConnectorRecordView>,
     connector_dir: String,
     connector_state: ProductConnectorState,
     error: String,
@@ -326,6 +353,18 @@ struct InvalidConnectorView {
     provided_step_types: Vec<String>,
     required_by_templates: Vec<String>,
     used_by_workflows: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ConnectorRecordView {
+    source_kind: String,
+    source_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NodeRecordView {
+    source_kind: String,
+    source_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -479,6 +518,7 @@ pub async fn serve(
             post(install_starter_connector_pack_endpoint),
         )
         .route("/api/connectors/scaffold", post(create_connector))
+        .route("/api/node-records", get(list_node_records).post(upsert_node_record))
         .route("/api/connectors/{connector_type}/test", post(test_connector))
         .route("/api/imports/n8n", post(import_n8n_workflow))
         .route("/api/node-catalog", get(list_node_catalog))
@@ -652,7 +692,7 @@ async fn export_metrics(State(state): State<AppState>) -> Response {
 }
 
 async fn list_node_catalog(State(state): State<AppState>) -> impl IntoResponse {
-    match node_catalog(&state.connectors_dir) {
+    match node_catalog(state.engine.store(), &state.connectors_dir).await {
         Ok((step_types, trigger_types)) => (
             StatusCode::OK,
             Json(json!({
@@ -684,6 +724,18 @@ async fn list_starter_connector_packs(State(state): State<AppState>) -> impl Int
     }
 }
 
+async fn list_node_records(State(state): State<AppState>) -> impl IntoResponse {
+    match state.engine.store().list_node_records().await {
+        Ok(records) => (
+            StatusCode::OK,
+            Json(json!(records.into_iter().map(node_record_response).collect::<Vec<_>>())),
+        ),
+        Err(error) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+        }
+    }
+}
+
 async fn install_starter_connector_pack_endpoint(
     State(state): State<AppState>,
     AxumPath(pack_id): AxumPath<String>,
@@ -702,6 +754,17 @@ async fn install_starter_connector_pack_endpoint(
 
     match install_starter_connector_pack(&state.connectors_dir, &pack) {
         Ok(_) => {
+            if let Err(error) = persist_connector_record_from_dir(
+                state.engine.store(),
+                &state.connectors_dir,
+                &state.connectors_dir.join(pack.install_dir_name),
+                "starter_pack",
+                Some(pack.id),
+            )
+            .await
+            {
+                return connector_error_response(error);
+            }
             let pack_states =
                 match starter_pack_install_state_map(state.engine.store(), &state.connectors_dir)
                     .await
@@ -738,6 +801,17 @@ async fn create_connector(
         runtime,
     ) {
         Ok(connector_dir) => {
+            if let Err(error) = persist_connector_record_from_dir(
+                state.engine.store(),
+                &state.connectors_dir,
+                &connector_dir,
+                "custom",
+                None,
+            )
+            .await
+            {
+                return connector_error_response(error);
+            }
             match connector_inventory(state.engine.store(), &state.connectors_dir).await {
                 Ok(inventory) => match inventory
                     .connectors
@@ -783,6 +857,31 @@ async fn create_connector(
     }
 }
 
+async fn upsert_node_record(
+    State(state): State<AppState>,
+    Json(request): Json<UpsertNodeRecordRequest>,
+) -> Response {
+    match state
+        .engine
+        .store()
+        .upsert_node_record(NewNodeRecord {
+            type_name: request.type_name.trim(),
+            label: request.label.trim(),
+            description: request.description.trim(),
+            category: request.category.trim(),
+            source_kind: request.source_kind.trim(),
+            source_ref: request.source_ref.as_deref().map(str::trim),
+        })
+        .await
+    {
+        Ok(record) => (StatusCode::OK, Json(json!(node_record_response(record)))).into_response(),
+        Err(error) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+                .into_response()
+        }
+    }
+}
+
 async fn test_connector(
     State(state): State<AppState>,
     AxumPath(connector_type): AxumPath<String>,
@@ -818,7 +917,7 @@ async fn test_connector(
         Ok(output) => (
             StatusCode::OK,
             Json(json!(ConnectorTestResponse {
-                connector: connector_view(&connector, &HashMap::new()),
+                connector: connector_view(&connector, &HashMap::new(), &HashMap::new()),
                 inputs,
                 output,
                 params,
@@ -838,6 +937,49 @@ async fn list_workflows(State(state): State<AppState>) -> impl IntoResponse {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
         }
     }
+}
+
+async fn persist_connector_record_from_dir(
+    store: &RunStore,
+    connectors_dir: &Path,
+    connector_dir: &Path,
+    source_kind: &str,
+    source_ref: Option<&str>,
+) -> Result<(), TriggerError> {
+    let canonical_connector_dir = fs::canonicalize(connector_dir).map_err(TriggerError::Io)?;
+    let inspection = inspect_connectors(connectors_dir)?;
+    let connector = inspection
+        .connectors
+        .into_iter()
+        .find(|candidate| candidate.connector_dir == canonical_connector_dir)
+        .ok_or_else(|| {
+            TriggerError::Connector(ConnectorError::InvalidManifest {
+                message: format!(
+                    "connector at {} could not be reloaded after install",
+                    canonical_connector_dir.display()
+                ),
+            })
+        })?;
+    let manifest_json = serde_json::to_string(&connector.manifest)
+        .map_err(|error| TriggerError::Connector(ConnectorError::Json(error)))?;
+    let connector_dir_string = connector.connector_dir.display().to_string();
+    let manifest_path_string = connector.manifest_path.display().to_string();
+    let runtime = connector_runtime_name(connector.manifest.runtime);
+
+    store
+        .upsert_connector_record(NewConnectorRecord {
+            type_name: &connector.manifest.type_id,
+            name: &connector.manifest.name,
+            runtime,
+            source_kind,
+            source_ref,
+            connector_dir: &connector_dir_string,
+            manifest_path: &manifest_path_string,
+            manifest_json: &manifest_json,
+        })
+        .await?;
+
+    Ok(())
 }
 
 async fn list_runs(State(state): State<AppState>, Query(query): Query<RunsQuery>) -> Response {
@@ -1569,20 +1711,58 @@ async fn connector_inventory(
 ) -> Result<ConnectorInventoryResponse, TriggerError> {
     let inspection = inspect_connectors(connectors_dir)?;
     let workflow_dependencies = connector_usage_by_workflow(store).await?;
+    let connector_records = connector_record_map(store).await?;
     Ok(ConnectorInventoryResponse {
         connectors: inspection
             .connectors
             .iter()
-            .map(|connector| connector_view(connector, &workflow_dependencies))
+            .map(|connector| connector_view(connector, &workflow_dependencies, &connector_records))
             .collect(),
         connectors_dir: connectors_dir.display().to_string(),
         invalid_connectors: inspection
             .invalid
             .iter()
-            .map(|connector| invalid_connector_view(connector, &workflow_dependencies))
+            .map(|connector| {
+                invalid_connector_view(connector, &workflow_dependencies, &connector_records)
+            })
             .collect(),
         wasm_enabled: wasm_connectors_enabled(),
     })
+}
+
+async fn connector_record_map(
+    store: &RunStore,
+) -> Result<HashMap<String, ConnectorRecordView>, TriggerError> {
+    Ok(store
+        .list_connector_records()
+        .await?
+        .into_iter()
+        .map(|record| {
+            (
+                record.type_name,
+                ConnectorRecordView {
+                    source_kind: record.source_kind,
+                    source_ref: record.source_ref,
+                },
+            )
+        })
+        .collect())
+}
+
+async fn node_record_map(
+    store: &RunStore,
+) -> Result<HashMap<String, NodeRecordView>, TriggerError> {
+    Ok(store
+        .list_node_records()
+        .await?
+        .into_iter()
+        .map(|record| {
+            (
+                record.type_name,
+                NodeRecordView { source_kind: record.source_kind, source_ref: record.source_ref },
+            )
+        })
+        .collect())
 }
 
 async fn starter_connector_pack_views(
@@ -1655,6 +1835,19 @@ fn starter_connector_pack_install_state(
     }
 }
 
+fn node_record_response(record: crate::storage::NodeRecord) -> NodeRecordResponse {
+    NodeRecordResponse {
+        category: record.category,
+        description: record.description,
+        id: record.id,
+        label: record.label,
+        source_kind: record.source_kind,
+        source_ref: record.source_ref,
+        type_name: record.type_name,
+        updated_at: record.updated_at,
+    }
+}
+
 async fn connector_usage_by_workflow(
     store: &RunStore,
 ) -> Result<HashMap<String, Vec<String>>, TriggerError> {
@@ -1680,11 +1873,14 @@ async fn connector_usage_by_workflow(
         .collect())
 }
 
-fn node_catalog(
+async fn node_catalog(
+    store: &RunStore,
     connectors_dir: &Path,
 ) -> Result<(Vec<StepTypeEntry>, Vec<TriggerTypeEntry>), TriggerError> {
+    let node_records = node_record_map(store).await?;
     let mut step_types = vec![
         StepTypeEntry {
+            app_record: node_records.get("constant").cloned(),
             category: "Data".to_string(),
             description: "Produce a fixed value for downstream steps.".to_string(),
             label: "Set value".to_string(),
@@ -1693,6 +1889,7 @@ fn node_catalog(
             type_name: "constant".to_string(),
         },
         StepTypeEntry {
+            app_record: node_records.get("noop").cloned(),
             category: "Flow".to_string(),
             description: "Pass inputs through without changing them.".to_string(),
             label: "Pass through".to_string(),
@@ -1701,6 +1898,7 @@ fn node_catalog(
             type_name: "noop".to_string(),
         },
         StepTypeEntry {
+            app_record: node_records.get("condition").cloned(),
             category: "Flow".to_string(),
             description: "Route execution based on a condition.".to_string(),
             label: "Branch".to_string(),
@@ -1709,6 +1907,7 @@ fn node_catalog(
             type_name: "condition".to_string(),
         },
         StepTypeEntry {
+            app_record: node_records.get("switch").cloned(),
             category: "Flow".to_string(),
             description: "Select one branch from named options.".to_string(),
             label: "Choose path".to_string(),
@@ -1717,6 +1916,7 @@ fn node_catalog(
             type_name: "switch".to_string(),
         },
         StepTypeEntry {
+            app_record: node_records.get("loop").cloned(),
             category: "Flow".to_string(),
             description: "Run the inner step for each item in a collection.".to_string(),
             label: "Repeat for each item".to_string(),
@@ -1725,6 +1925,7 @@ fn node_catalog(
             type_name: "loop".to_string(),
         },
         StepTypeEntry {
+            app_record: node_records.get("parallel").cloned(),
             category: "Flow".to_string(),
             description: "Run nested steps at the same time and join their outputs.".to_string(),
             label: "Run in parallel".to_string(),
@@ -1733,6 +1934,7 @@ fn node_catalog(
             type_name: "parallel".to_string(),
         },
         StepTypeEntry {
+            app_record: node_records.get("http_request").cloned(),
             category: "Apps".to_string(),
             description: "Send an HTTP request to an app or API.".to_string(),
             label: "Send request".to_string(),
@@ -1741,6 +1943,7 @@ fn node_catalog(
             type_name: "http_request".to_string(),
         },
         StepTypeEntry {
+            app_record: node_records.get("database_query").cloned(),
             category: "Data".to_string(),
             description: "Run a query against the configured database.".to_string(),
             label: "Query data".to_string(),
@@ -1749,6 +1952,7 @@ fn node_catalog(
             type_name: "database_query".to_string(),
         },
         StepTypeEntry {
+            app_record: node_records.get("file_read").cloned(),
             category: "Data".to_string(),
             description: "Read a file from the local data workspace.".to_string(),
             label: "Read file".to_string(),
@@ -1757,6 +1961,7 @@ fn node_catalog(
             type_name: "file_read".to_string(),
         },
         StepTypeEntry {
+            app_record: node_records.get("file_write").cloned(),
             category: "Data".to_string(),
             description: "Write a file to the local data workspace.".to_string(),
             label: "Write file".to_string(),
@@ -1765,6 +1970,7 @@ fn node_catalog(
             type_name: "file_write".to_string(),
         },
         StepTypeEntry {
+            app_record: node_records.get("llm_completion").cloned(),
             category: "AI".to_string(),
             description: "Generate a completion with the configured LLM provider.".to_string(),
             label: "Generate text".to_string(),
@@ -1773,6 +1979,7 @@ fn node_catalog(
             type_name: "llm_completion".to_string(),
         },
         StepTypeEntry {
+            app_record: node_records.get("classification").cloned(),
             category: "AI".to_string(),
             description: "Assign labels to a record using the AI model.".to_string(),
             label: "Classify".to_string(),
@@ -1781,6 +1988,7 @@ fn node_catalog(
             type_name: "classification".to_string(),
         },
         StepTypeEntry {
+            app_record: node_records.get("extraction").cloned(),
             category: "AI".to_string(),
             description: "Pull structured fields from unstructured text.".to_string(),
             label: "Extract fields".to_string(),
@@ -1789,6 +1997,7 @@ fn node_catalog(
             type_name: "extraction".to_string(),
         },
         StepTypeEntry {
+            app_record: node_records.get("embedding").cloned(),
             category: "AI".to_string(),
             description: "Store text as an embedding in the in-memory vector store.".to_string(),
             label: "Store knowledge".to_string(),
@@ -1797,6 +2006,7 @@ fn node_catalog(
             type_name: "embedding".to_string(),
         },
         StepTypeEntry {
+            app_record: node_records.get("retrieval").cloned(),
             category: "AI".to_string(),
             description: "Search stored embeddings for similar content.".to_string(),
             label: "Find related knowledge".to_string(),
@@ -1805,6 +2015,7 @@ fn node_catalog(
             type_name: "retrieval".to_string(),
         },
         StepTypeEntry {
+            app_record: node_records.get("approval").cloned(),
             category: "Human".to_string(),
             description: "Pause until a reviewer approves or rejects the task.".to_string(),
             label: "Request approval".to_string(),
@@ -1813,6 +2024,7 @@ fn node_catalog(
             type_name: "approval".to_string(),
         },
         StepTypeEntry {
+            app_record: node_records.get("manual_input").cloned(),
             category: "Human".to_string(),
             description: "Pause until a human provides a value.".to_string(),
             label: "Ask for input".to_string(),
@@ -1824,6 +2036,7 @@ fn node_catalog(
     let mut connectors = discover_connector_manifests(connectors_dir)?
         .into_iter()
         .map(|manifest| StepTypeEntry {
+            app_record: node_records.get(&manifest.type_id).cloned(),
             category: "Apps".to_string(),
             description: format!(
                 "{} app connector loaded from manifest.",
@@ -1836,6 +2049,27 @@ fn node_catalog(
         })
         .collect::<Vec<_>>();
     step_types.append(&mut connectors);
+    let existing_type_names =
+        step_types.iter().map(|entry| entry.type_name.clone()).collect::<HashSet<_>>();
+    let mut standalone_records = store
+        .list_node_records()
+        .await?
+        .into_iter()
+        .filter(|record| !existing_type_names.contains(&record.type_name))
+        .map(|record| StepTypeEntry {
+            app_record: Some(NodeRecordView {
+                source_kind: record.source_kind.clone(),
+                source_ref: record.source_ref.clone(),
+            }),
+            category: record.category,
+            description: record.description,
+            label: record.label,
+            runtime: None,
+            source: record.source_kind,
+            type_name: record.type_name,
+        })
+        .collect::<Vec<_>>();
+    step_types.append(&mut standalone_records);
     step_types.sort_by(|left, right| left.label.cmp(&right.label));
 
     Ok((
@@ -1863,6 +2097,7 @@ fn node_catalog(
 fn connector_view(
     connector: &crate::connectors::DiscoveredConnector,
     workflow_dependencies: &HashMap<String, Vec<String>>,
+    connector_records: &HashMap<String, ConnectorRecordView>,
 ) -> ConnectorView {
     let state = connector_state(connector);
     let readme_path = connector.connector_dir.join("README.md");
@@ -1886,6 +2121,7 @@ fn connector_view(
     ConnectorView {
         allowed_env: connector.manifest.allowed_env.clone(),
         allowed_hosts: connector.manifest.allowed_hosts.clone(),
+        app_record: connector_records.get(&connector.manifest.type_id).cloned(),
         connector_dir: state.install_validity.connector_dir.clone(),
         connector_state: state.clone(),
         entry: connector.manifest.entry.clone(),
@@ -1923,6 +2159,7 @@ fn connector_view(
 fn invalid_connector_view(
     connector: &crate::connectors::InvalidConnector,
     workflow_dependencies: &HashMap<String, Vec<String>>,
+    connector_records: &HashMap<String, ConnectorRecordView>,
 ) -> InvalidConnectorView {
     let state = invalid_connector_state(connector);
     let provided_step_types = connector.attempted_type_id.clone().into_iter().collect::<Vec<_>>();
@@ -1934,6 +2171,11 @@ fn invalid_connector_view(
     used_by_workflows.sort();
     used_by_workflows.dedup();
     InvalidConnectorView {
+        app_record: connector
+            .attempted_type_id
+            .as_ref()
+            .and_then(|type_name| connector_records.get(type_name))
+            .cloned(),
         connector_dir: state.install_validity.connector_dir.clone(),
         connector_state: state,
         error: connector.error.clone(),
@@ -2852,14 +3094,14 @@ mod tests {
 
     use super::{
         authenticate_webhook, build_workflow_summary, compute_signature, connector_inventory,
-        connector_view, create_workflow_document, cron_schedule, import_n8n_workflow,
-        install_starter_connector_pack_endpoint, invalid_connector_view,
+        connector_view, create_connector, create_workflow_document, cron_schedule,
+        import_n8n_workflow, install_starter_connector_pack_endpoint, invalid_connector_view,
         list_starter_connector_packs, node_catalog, parse_workflow_document_state,
         read_workflow_document, rename_workflow_document, request_has_engine_token, run_view,
         save_workflow_document, seed_workflows_from_directory_if_missing, serialize_workflow_yaml,
         slugify_workflow_name, validate_secret_value, validate_workflow_id, workflow_inventory,
-        AppState, CreateWorkflowRequest, EngineAccessControl, N8nImportRequest,
-        RenameWorkflowRequest, RunDetailResponse, RunPageResponse, TriggerError,
+        AppState, CreateConnectorRequest, CreateWorkflowRequest, EngineAccessControl,
+        N8nImportRequest, RenameWorkflowRequest, RunDetailResponse, RunPageResponse, TriggerError,
         WebhookSignatureAuth, WebhookWorkflow,
     };
     use crate::{
@@ -2874,7 +3116,7 @@ mod tests {
             WorkflowTelemetryFacts, WorkflowValidationState,
         },
         starter_connector_packs::starter_connector_pack,
-        storage::{RunRecord, RunStore},
+        storage::{NewConnectorRecord, NewNodeRecord, RunRecord, RunStore},
     };
 
     #[test]
@@ -2936,8 +3178,12 @@ mod tests {
     #[test]
     fn node_catalog_uses_product_facing_categories_and_labels_for_built_in_steps() {
         let temp_dir = write_temp_directory("node-catalog-language");
-
-        let (steps, _triggers) = node_catalog(&temp_dir).expect("catalog should load");
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let (steps, _triggers) = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            node_catalog(&store, &temp_dir).await.expect("catalog should load")
+        });
 
         let by_type_name = |type_name: &str| {
             steps.iter().find(|entry| entry.type_name == type_name).unwrap_or_else(|| {
@@ -2963,8 +3209,12 @@ mod tests {
     #[test]
     fn node_catalog_uses_outcome_language_for_built_in_triggers() {
         let temp_dir = write_temp_directory("node-catalog-trigger-language");
-
-        let (_steps, triggers) = node_catalog(&temp_dir).expect("catalog should load");
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let (_steps, triggers) = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            node_catalog(&store, &temp_dir).await.expect("catalog should load")
+        });
 
         let by_type_name = |type_name: &str| {
             triggers
@@ -2979,6 +3229,74 @@ mod tests {
         assert_eq!(
             by_type_name("webhook").description,
             "Start workflows from authenticated HTTP requests."
+        );
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn node_catalog_exposes_app_record_metadata() {
+        let temp_dir = write_temp_directory("node-catalog-app-record");
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let (steps, _triggers) = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            store
+                .upsert_node_record(NewNodeRecord {
+                    type_name: "llm_completion",
+                    label: "Write summary",
+                    description: "Generate a short summary for downstream steps.",
+                    category: "AI",
+                    source_kind: "generated",
+                    source_ref: Some("prompt:demo"),
+                })
+                .await
+                .expect("node record should persist");
+            node_catalog(&store, &temp_dir).await.expect("catalog should load")
+        });
+
+        let llm_step = steps
+            .iter()
+            .find(|entry| entry.type_name == "llm_completion")
+            .expect("llm step should exist");
+        let payload = serde_json::to_value(llm_step).expect("step should serialize");
+
+        assert_eq!(payload["app_record"]["source_kind"], json!("generated"));
+        assert_eq!(payload["app_record"]["source_ref"], json!("prompt:demo"));
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn node_catalog_includes_standalone_generated_node_records() {
+        let temp_dir = write_temp_directory("node-catalog-standalone-record");
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let (steps, _triggers) = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            store
+                .upsert_node_record(NewNodeRecord {
+                    type_name: "send_whatsapp_message",
+                    label: "Send WhatsApp message",
+                    description: "Send a WhatsApp message to a contact.",
+                    category: "Apps",
+                    source_kind: "generated",
+                    source_ref: Some("n8n:send-email"),
+                })
+                .await
+                .expect("node record should persist");
+            node_catalog(&store, &temp_dir).await.expect("catalog should load")
+        });
+
+        let generated_step = steps
+            .iter()
+            .find(|entry| entry.type_name == "send_whatsapp_message")
+            .expect("generated step should exist");
+        assert_eq!(generated_step.label, "Send WhatsApp message");
+        assert_eq!(generated_step.source, "generated");
+        assert_eq!(
+            generated_step.app_record.as_ref().map(|record| record.source_ref.as_deref()),
+            Some(Some("n8n:send-email"))
         );
 
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
@@ -3057,6 +3375,64 @@ mod tests {
             .expect("starter pack install should deserialize");
         assert_eq!(second_payload["installed"], json!(true));
         assert_eq!(second_payload["install_state"], json!("satisfied"));
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[tokio::test]
+    async fn install_starter_pack_endpoint_persists_connector_record() {
+        let temp_dir = write_temp_directory("starter-pack-record");
+        let state = starter_pack_test_state(&temp_dir).await;
+
+        let response = install_starter_connector_pack_endpoint(
+            AxumState(state.clone()),
+            AxumPath("github-issue-create".to_string()),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let record = state
+            .engine
+            .store()
+            .get_connector_record_by_type("github_issue_create")
+            .await
+            .expect("starter pack connector record should persist");
+        assert_eq!(record.name, "GitHub Issue Create");
+        assert_eq!(record.source_kind, "starter_pack");
+        assert_eq!(record.source_ref.as_deref(), Some("github-issue-create"));
+        assert!(record.connector_dir.ends_with("github-issue-create"));
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[tokio::test]
+    async fn create_connector_persists_connector_record() {
+        let temp_dir = write_temp_directory("create-connector-record");
+        let state = starter_pack_test_state(&temp_dir).await;
+
+        let response = create_connector(
+            AxumState(state.clone()),
+            Json(CreateConnectorRequest {
+                name: "Sample Echo".to_string(),
+                runtime: "process".to_string(),
+                type_id: "sample_echo".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let record = state
+            .engine
+            .store()
+            .get_connector_record_by_type("sample_echo")
+            .await
+            .expect("scaffolded connector record should persist");
+        assert_eq!(record.name, "Sample Echo");
+        assert_eq!(record.source_kind, "custom");
+        assert_eq!(record.source_ref, None);
+        assert!(record.manifest_json.contains("\"type\":\"sample_echo\""));
 
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
     }
@@ -4027,6 +4403,68 @@ steps:
     }
 
     #[test]
+    fn connector_inventory_exposes_app_record_metadata() {
+        let temp_dir = write_temp_directory("connector-inventory-app-record");
+        let connectors_dir = temp_dir.join("connectors");
+        std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
+
+        let valid_connector_dir = connectors_dir.join("report-summary");
+        std::fs::create_dir_all(&valid_connector_dir).expect("valid connector dir should exist");
+        std::fs::write(
+            valid_connector_dir.join("manifest.json"),
+            r#"{
+  "entry": "main.py",
+  "inputs": ["payload"],
+  "limits": { "timeout": 1000 },
+  "name": "Report Summary",
+  "outputs": ["summary"],
+  "runtime": "process",
+  "type": "report-summary"
+}"#,
+        )
+        .expect("valid manifest should be written");
+        std::fs::write(valid_connector_dir.join("main.py"), "print('{}')")
+            .expect("valid connector script should exist");
+
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let inventory = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            store
+                .upsert_connector_record(NewConnectorRecord {
+                    type_name: "report-summary",
+                    name: "Report Summary",
+                    runtime: "process",
+                    source_kind: "starter_pack",
+                    source_ref: Some("report-summary-pack"),
+                    connector_dir: &valid_connector_dir.display().to_string(),
+                    manifest_path: &valid_connector_dir.join("manifest.json").display().to_string(),
+                    manifest_json: r#"{"type":"report-summary"}"#,
+                })
+                .await
+                .expect("connector record should persist");
+
+            connector_inventory(&store, &connectors_dir)
+                .await
+                .expect("connector inventory should build")
+        });
+
+        let valid_payload = serde_json::to_value(
+            inventory
+                .connectors
+                .iter()
+                .find(|connector| connector.type_name == "report-summary")
+                .expect("valid connector should exist"),
+        )
+        .expect("valid connector should serialize");
+
+        assert_eq!(valid_payload["app_record"]["source_kind"], json!("starter_pack"));
+        assert_eq!(valid_payload["app_record"]["source_ref"], json!("report-summary-pack"));
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
     fn create_workflow_succeeds_when_post_write_summary_enrichment_fails() {
         let temp_dir = write_temp_directory("workflow-create-summary-fallback");
         let workflows_dir = temp_dir.join("workflows");
@@ -4398,7 +4836,7 @@ steps:
                 .expect("manifest should canonicalize"),
         };
 
-        let view = connector_view(&connector, &HashMap::new());
+        let view = connector_view(&connector, &HashMap::new(), &HashMap::new());
         let payload = serde_json::to_value(view).expect("connector view should serialize");
 
         assert_eq!(payload["connector_state"]["install_validity"]["valid"], json!(true));
@@ -4439,6 +4877,7 @@ steps:
                 attempted_type_id: None,
                 manifest_path: Some(manifest_path.clone()),
             },
+            &HashMap::new(),
             &HashMap::new(),
         );
         let invalid_payload =

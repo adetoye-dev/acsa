@@ -161,6 +161,7 @@ export function buildInstalledStarterConnectorPackRows(
         .map((stepType) => connectorsByStepType.get(stepType))
         .find(Boolean);
       const metadata = [
+        ...installedConnectorSourceMetadata(connector),
         ...installedStarterConnectorPackSecondaryMetadata(pack),
         ...installedConnectorUsageMetadata(connector)
       ];
@@ -175,6 +176,29 @@ export function buildInstalledStarterConnectorPackRows(
         statusLabel: starterConnectorPackInstallStateLabel(pack)
       };
     });
+}
+
+function installedConnectorSourceMetadata(
+  connector: ConnectorInventoryItem | InvalidConnector | undefined
+): string[] {
+  const appRecord = connector?.app_record;
+  if (!appRecord) {
+    return [];
+  }
+
+  if (appRecord.source_kind === "starter_pack") {
+    return ["Installed in app"];
+  }
+
+  if (appRecord.source_kind === "custom") {
+    return ["Created in app"];
+  }
+
+  if (appRecord.source_kind === "generated") {
+    return ["Generated in app"];
+  }
+
+  return ["Managed in app"];
 }
 
 export function isStarterConnectorPackInstalled(pack: StarterConnectorPack): boolean {

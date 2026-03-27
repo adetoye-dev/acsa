@@ -506,6 +506,290 @@ impl RunStore {
         Ok(())
     }
 
+    pub async fn list_connector_records(&self) -> Result<Vec<ConnectorRecord>, StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+              id,
+              type_name,
+              name,
+              runtime,
+              source_kind,
+              source_ref,
+              connector_dir,
+              manifest_path,
+              manifest_json,
+              created_at,
+              updated_at
+            FROM connector_records
+            ORDER BY updated_at DESC, created_at DESC, name ASC, type_name ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(map_connector_record_row).collect()
+    }
+
+    pub async fn get_connector_record_by_type(
+        &self,
+        type_name: &str,
+    ) -> Result<ConnectorRecord, StorageError> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+              id,
+              type_name,
+              name,
+              runtime,
+              source_kind,
+              source_ref,
+              connector_dir,
+              manifest_path,
+              manifest_json,
+              created_at,
+              updated_at
+            FROM connector_records
+            WHERE type_name = ?
+            "#,
+        )
+        .bind(type_name)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| StorageError::ConnectorRecordNotFound(type_name.to_string()))?;
+
+        map_connector_record_row(row)
+    }
+
+    pub async fn upsert_connector_record(
+        &self,
+        record: NewConnectorRecord<'_>,
+    ) -> Result<ConnectorRecord, StorageError> {
+        if record.type_name.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "connector type_name must not be empty".to_string(),
+            ));
+        }
+        if record.name.trim().is_empty() {
+            return Err(StorageError::InvalidInput("connector name must not be empty".to_string()));
+        }
+        if record.runtime.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "connector runtime must not be empty".to_string(),
+            ));
+        }
+        if record.source_kind.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "connector source_kind must not be empty".to_string(),
+            ));
+        }
+        if record.connector_dir.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "connector connector_dir must not be empty".to_string(),
+            ));
+        }
+        if record.manifest_path.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "connector manifest_path must not be empty".to_string(),
+            ));
+        }
+        if record.manifest_json.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "connector manifest_json must not be empty".to_string(),
+            ));
+        }
+
+        let existing = sqlx::query(
+            r#"
+            SELECT id, created_at
+            FROM connector_records
+            WHERE type_name = ?
+            "#,
+        )
+        .bind(record.type_name)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let now = current_timestamp();
+        let (id, created_at) = match existing {
+            Some(row) => (row.try_get("id")?, row.try_get("created_at")?),
+            None => (Uuid::new_v4().to_string(), now),
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO connector_records (
+              id,
+              type_name,
+              name,
+              runtime,
+              source_kind,
+              source_ref,
+              connector_dir,
+              manifest_path,
+              manifest_json,
+              created_at,
+              updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(type_name) DO UPDATE
+            SET name = excluded.name,
+                runtime = excluded.runtime,
+                source_kind = excluded.source_kind,
+                source_ref = excluded.source_ref,
+                connector_dir = excluded.connector_dir,
+                manifest_path = excluded.manifest_path,
+                manifest_json = excluded.manifest_json,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(&id)
+        .bind(record.type_name)
+        .bind(record.name)
+        .bind(record.runtime)
+        .bind(record.source_kind)
+        .bind(record.source_ref)
+        .bind(record.connector_dir)
+        .bind(record.manifest_path)
+        .bind(record.manifest_json)
+        .bind(created_at)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_connector_record_by_type(record.type_name).await
+    }
+
+    pub async fn list_node_records(&self) -> Result<Vec<NodeRecord>, StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+              id,
+              type_name,
+              label,
+              description,
+              category,
+              source_kind,
+              source_ref,
+              created_at,
+              updated_at
+            FROM node_records
+            ORDER BY updated_at DESC, created_at DESC, label ASC, type_name ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(map_node_record_row).collect()
+    }
+
+    pub async fn get_node_record_by_type(
+        &self,
+        type_name: &str,
+    ) -> Result<NodeRecord, StorageError> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+              id,
+              type_name,
+              label,
+              description,
+              category,
+              source_kind,
+              source_ref,
+              created_at,
+              updated_at
+            FROM node_records
+            WHERE type_name = ?
+            "#,
+        )
+        .bind(type_name)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| StorageError::NodeRecordNotFound(type_name.to_string()))?;
+
+        map_node_record_row(row)
+    }
+
+    pub async fn upsert_node_record(
+        &self,
+        record: NewNodeRecord<'_>,
+    ) -> Result<NodeRecord, StorageError> {
+        if record.type_name.trim().is_empty() {
+            return Err(StorageError::InvalidInput("node type_name must not be empty".to_string()));
+        }
+        if record.label.trim().is_empty() {
+            return Err(StorageError::InvalidInput("node label must not be empty".to_string()));
+        }
+        if record.description.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "node description must not be empty".to_string(),
+            ));
+        }
+        if record.category.trim().is_empty() {
+            return Err(StorageError::InvalidInput("node category must not be empty".to_string()));
+        }
+        if record.source_kind.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "node source_kind must not be empty".to_string(),
+            ));
+        }
+
+        let existing = sqlx::query(
+            r#"
+            SELECT id, created_at
+            FROM node_records
+            WHERE type_name = ?
+            "#,
+        )
+        .bind(record.type_name)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let now = current_timestamp();
+        let (id, created_at) = match existing {
+            Some(row) => (row.try_get("id")?, row.try_get("created_at")?),
+            None => (Uuid::new_v4().to_string(), now),
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO node_records (
+              id,
+              type_name,
+              label,
+              description,
+              category,
+              source_kind,
+              source_ref,
+              created_at,
+              updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(type_name) DO UPDATE
+            SET label = excluded.label,
+                description = excluded.description,
+                category = excluded.category,
+                source_kind = excluded.source_kind,
+                source_ref = excluded.source_ref,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(&id)
+        .bind(record.type_name)
+        .bind(record.label)
+        .bind(record.description)
+        .bind(record.category)
+        .bind(record.source_kind)
+        .bind(record.source_ref)
+        .bind(created_at)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_node_record_by_type(record.type_name).await
+    }
+
     pub fn queued_plaintext_credential_names(&self) -> Vec<String> {
         match plaintext_credential_migration_queue().read() {
             Ok(queue) => queue.iter().filter_map(Clone::clone).collect(),
@@ -1371,6 +1655,44 @@ impl RunStore {
 
         sqlx::query(
             r#"
+            CREATE TABLE IF NOT EXISTS connector_records (
+              id TEXT PRIMARY KEY,
+              type_name TEXT NOT NULL UNIQUE,
+              name TEXT NOT NULL,
+              runtime TEXT NOT NULL,
+              source_kind TEXT NOT NULL,
+              source_ref TEXT,
+              connector_dir TEXT NOT NULL,
+              manifest_path TEXT NOT NULL,
+              manifest_json TEXT NOT NULL,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS node_records (
+              id TEXT PRIMARY KEY,
+              type_name TEXT NOT NULL UNIQUE,
+              label TEXT NOT NULL,
+              description TEXT NOT NULL,
+              category TEXT NOT NULL,
+              source_kind TEXT NOT NULL,
+              source_ref TEXT,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
             CREATE TABLE IF NOT EXISTS step_runs (
               id TEXT PRIMARY KEY,
               run_id TEXT NOT NULL,
@@ -1446,6 +1768,16 @@ impl RunStore {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_workflows_updated_at ON workflows(updated_at)")
             .execute(&self.pool)
             .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_connector_records_updated_at ON connector_records(updated_at)",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_node_records_updated_at ON node_records(updated_at)",
+        )
+        .execute(&self.pool)
+        .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)")
             .execute(&self.pool)
             .await?;
@@ -1619,6 +1951,34 @@ pub struct WorkflowRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectorRecord {
+    pub id: String,
+    pub type_name: String,
+    pub name: String,
+    pub runtime: String,
+    pub source_kind: String,
+    pub source_ref: Option<String>,
+    pub connector_dir: String,
+    pub manifest_path: String,
+    pub manifest_json: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeRecord {
+    pub id: String,
+    pub type_name: String,
+    pub label: String,
+    pub description: String,
+    pub category: String,
+    pub source_kind: String,
+    pub source_ref: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HumanTaskRecord {
     pub id: String,
     pub run_id: String,
@@ -1643,6 +2003,28 @@ pub struct NewHumanTask<'a> {
     pub run_id: &'a str,
     pub step_id: &'a str,
     pub step_run_id: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewConnectorRecord<'a> {
+    pub type_name: &'a str,
+    pub name: &'a str,
+    pub runtime: &'a str,
+    pub source_kind: &'a str,
+    pub source_ref: Option<&'a str>,
+    pub connector_dir: &'a str,
+    pub manifest_path: &'a str,
+    pub manifest_json: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewNodeRecord<'a> {
+    pub type_name: &'a str,
+    pub label: &'a str,
+    pub description: &'a str,
+    pub category: &'a str,
+    pub source_kind: &'a str,
+    pub source_ref: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1738,6 +2120,10 @@ pub enum StorageError {
     WorkflowNotFound(String),
     #[error("workflow already exists: {0}")]
     WorkflowAlreadyExists(String),
+    #[error("connector record not found: {0}")]
+    ConnectorRecordNotFound(String),
+    #[error("node record not found: {0}")]
+    NodeRecordNotFound(String),
     #[error("human task not found: {0}")]
     HumanTaskNotFound(String),
     #[error("data integrity error: {0}")]
@@ -1953,6 +2339,36 @@ fn map_workflow_row(row: sqlx::sqlite::SqliteRow) -> Result<WorkflowRecord, Stor
         id: row.try_get("id")?,
         name: row.try_get("name")?,
         yaml: row.try_get("yaml")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn map_connector_record_row(row: sqlx::sqlite::SqliteRow) -> Result<ConnectorRecord, StorageError> {
+    Ok(ConnectorRecord {
+        id: row.try_get("id")?,
+        type_name: row.try_get("type_name")?,
+        name: row.try_get("name")?,
+        runtime: row.try_get("runtime")?,
+        source_kind: row.try_get("source_kind")?,
+        source_ref: row.try_get("source_ref")?,
+        connector_dir: row.try_get("connector_dir")?,
+        manifest_path: row.try_get("manifest_path")?,
+        manifest_json: row.try_get("manifest_json")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn map_node_record_row(row: sqlx::sqlite::SqliteRow) -> Result<NodeRecord, StorageError> {
+    Ok(NodeRecord {
+        id: row.try_get("id")?,
+        type_name: row.try_get("type_name")?,
+        label: row.try_get("label")?,
+        description: row.try_get("description")?,
+        category: row.try_get("category")?,
+        source_kind: row.try_get("source_kind")?,
+        source_ref: row.try_get("source_ref")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -2182,6 +2598,97 @@ mod tests {
 
         assert_eq!(seeded.name, "seeded workflow");
         assert!(!seeded.yaml.contains("replacement"));
+
+        tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
+    }
+
+    #[tokio::test]
+    async fn connector_record_crud_is_db_backed() {
+        let temp_dir = std::env::temp_dir().join(format!("acsa-storage-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir).await.expect("temp dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
+        let store = RunStore::connect(&db_path).await.expect("store should connect");
+
+        let created = store
+            .upsert_connector_record(NewConnectorRecord {
+                type_name: "slack_notify",
+                name: "Slack Notify",
+                runtime: "process",
+                source_kind: "starter_pack",
+                source_ref: Some("slack-notify"),
+                connector_dir: "connectors/slack-notify",
+                manifest_path: "connectors/slack-notify/manifest.json",
+                manifest_json: r#"{"name":"Slack Notify","runtime":"process","type":"slack_notify"}"#,
+            })
+            .await
+            .expect("connector record should create");
+
+        let listed = store.list_connector_records().await.expect("connector records should list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].type_name, "slack_notify");
+        assert_eq!(listed[0].source_ref.as_deref(), Some("slack-notify"));
+
+        let updated = store
+            .upsert_connector_record(NewConnectorRecord {
+                type_name: "slack_notify",
+                name: "Slack Notify",
+                runtime: "process",
+                source_kind: "generated",
+                source_ref: Some("prompt:123"),
+                connector_dir: "connectors/slack-notify",
+                manifest_path: "connectors/slack-notify/manifest.json",
+                manifest_json: r#"{"name":"Slack Notify","runtime":"process","type":"slack_notify","version":"2"}"#,
+            })
+            .await
+            .expect("connector record should update");
+
+        assert_eq!(updated.id, created.id);
+        assert_eq!(updated.source_kind, "generated");
+        assert_eq!(updated.source_ref.as_deref(), Some("prompt:123"));
+        assert!(updated.manifest_json.contains("\"version\":\"2\""));
+
+        tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
+    }
+
+    #[tokio::test]
+    async fn node_record_crud_is_db_backed() {
+        let temp_dir = std::env::temp_dir().join(format!("acsa-storage-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir).await.expect("temp dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
+        let store = RunStore::connect(&db_path).await.expect("store should connect");
+
+        let created = store
+            .upsert_node_record(NewNodeRecord {
+                type_name: "custom_summary",
+                label: "Summarize payload",
+                description: "Summarize incoming payloads for the team.",
+                category: "AI",
+                source_kind: "generated",
+                source_ref: Some("prompt:node-1"),
+            })
+            .await
+            .expect("node record should create");
+
+        let listed = store.list_node_records().await.expect("node records should list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].type_name, "custom_summary");
+
+        let updated = store
+            .upsert_node_record(NewNodeRecord {
+                type_name: "custom_summary",
+                label: "Summarize payload",
+                description: "Summarize incoming payloads in a friendlier tone.",
+                category: "AI",
+                source_kind: "custom",
+                source_ref: Some("user-edit"),
+            })
+            .await
+            .expect("node record should update");
+
+        assert_eq!(updated.id, created.id);
+        assert_eq!(updated.source_kind, "custom");
+        assert_eq!(updated.source_ref.as_deref(), Some("user-edit"));
+        assert!(updated.description.contains("friendlier tone"));
 
         tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
     }

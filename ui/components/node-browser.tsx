@@ -419,7 +419,18 @@ function NodeOption({
       />
       <div className="min-w-0 flex-1">
         <div className="min-w-0">
-          <div className="truncate text-sm font-medium text-ink">{entry.label}</div>
+          <div className="flex items-center gap-2">
+            <div className="truncate text-sm font-medium text-ink">{entry.label}</div>
+            {entry.app_record ? (
+              <span className="rounded-md bg-[#f3f0ff] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-[#6f63ff]">
+                {entry.app_record.source_kind === "generated"
+                  ? "Generated"
+                  : entry.app_record.source_kind === "custom"
+                    ? "Custom"
+                    : "Saved"}
+              </span>
+            ) : null}
+          </div>
           <div className="mt-0.5 truncate text-[12px] leading-5 text-slate">
             {entry.description}
           </div>

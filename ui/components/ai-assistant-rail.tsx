@@ -19,6 +19,10 @@
 import { useMemo, useState } from "react";
 
 import type { StepTypeEntry } from "../lib/workflow-editor";
+import {
+  deriveGeneratedNodeIdentity,
+  upsertNodeRecord
+} from "../lib/node-records";
 import { NodeGlyph } from "./node-visuals";
 
 const EXAMPLE_PROMPTS = [
@@ -29,16 +33,21 @@ const EXAMPLE_PROMPTS = [
 
 type AiAssistantRailProps = {
   onClose?: () => void;
+  onNodeRecordSaved?: () => Promise<void> | void;
   onSelectType: (typeName: string) => void;
   stepCatalog: StepTypeEntry[];
 };
 
 export function AiAssistantRail({
   onClose,
+  onNodeRecordSaved,
   onSelectType,
   stepCatalog
 }: AiAssistantRailProps) {
   const [prompt, setPrompt] = useState("");
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [savedNodeLabel, setSavedNodeLabel] = useState<string | null>(null);
+  const [isSavingNode, setIsSavingNode] = useState(false);
 
   const suggestions = useMemo(() => {
     const query = prompt.trim().toLowerCase();
@@ -61,6 +70,37 @@ export function AiAssistantRail({
       .slice(0, 6)
       .map((candidate) => candidate.entry);
   }, [prompt, stepCatalog]);
+
+  async function handleSaveGeneratedNode() {
+    const trimmedPrompt = prompt.trim();
+    if (!trimmedPrompt || isSavingNode) {
+      return;
+    }
+
+    const identity = deriveGeneratedNodeIdentity(trimmedPrompt, "Generated step");
+    setIsSavingNode(true);
+    setSaveError(null);
+    setSavedNodeLabel(null);
+
+    try {
+      const record = await upsertNodeRecord({
+        category: "Apps",
+        description: trimmedPrompt,
+        label: identity.label,
+        source_kind: "generated",
+        source_ref: trimmedPrompt,
+        type_name: identity.type_name
+      });
+      await onNodeRecordSaved?.();
+      setSavedNodeLabel(record.label);
+    } catch (nextError) {
+      setSaveError(
+        nextError instanceof Error ? nextError.message : "Failed to save generated node"
+      );
+    } finally {
+      setIsSavingNode(false);
+    }
+  }
 
   return (
     <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] border-l border-black/10 bg-[rgba(252,252,253,0.96)]">
@@ -101,10 +141,32 @@ export function AiAssistantRail({
             <textarea
               className="ui-input min-h-[118px] resize-none leading-6"
               id="workflow-assistant-prompt"
-              onChange={(event) => setPrompt(event.target.value)}
+              onChange={(event) => {
+                setPrompt(event.target.value);
+                setSaveError(null);
+                setSavedNodeLabel(null);
+              }}
               placeholder="Describe what should happen and the assistant will suggest likely steps from your installed library."
               value={prompt}
             />
+            <div className="mt-3 flex items-center gap-2">
+              <button
+                className="ui-button"
+                disabled={isSavingNode || !prompt.trim()}
+                onClick={() => void handleSaveGeneratedNode()}
+                type="button"
+              >
+                {isSavingNode ? "Saving…" : "Save generated node"}
+              </button>
+              {savedNodeLabel ? (
+                <span className="text-[12px] leading-5 text-[#4f5964]">
+                  Saved as {savedNodeLabel}.
+                </span>
+              ) : null}
+            </div>
+            {saveError ? (
+              <p className="mt-2 text-[12px] leading-5 text-[#c65a72]">{saveError}</p>
+            ) : null}
           </div>
 
           <div>
@@ -150,7 +212,18 @@ export function AiAssistantRail({
                       typeName={entry.type_name}
                     />
                     <div className="min-w-0 flex-1">
-                      <div className="text-sm font-medium text-ink">{entry.label}</div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-sm font-medium text-ink">{entry.label}</div>
+                        {entry.app_record ? (
+                          <span className="rounded-md bg-[#f3f0ff] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-[#6f63ff]">
+                            {entry.app_record.source_kind === "generated"
+                              ? "Generated"
+                              : entry.app_record.source_kind === "custom"
+                                ? "Custom"
+                                : "Saved"}
+                          </span>
+                        ) : null}
+                      </div>
                       <div className="mt-1 text-[12px] leading-5 text-slate">
                         {entry.description}
                       </div>

@@ -21,9 +21,15 @@ import type {
 
 export type ConnectorRuntime = "process" | "wasm";
 
+export type ConnectorAppRecord = {
+  source_kind: string;
+  source_ref?: string | null;
+};
+
 export type ConnectorInventoryItem = ConnectorDependencyMetadata & {
   allowed_env: string[];
   allowed_hosts: string[];
+  app_record?: ConnectorAppRecord | null;
   connector_dir: string;
   connector_state: ConnectorState;
   entry: string;
@@ -42,6 +48,7 @@ export type ConnectorInventoryItem = ConnectorDependencyMetadata & {
 };
 
 export type InvalidConnector = ConnectorDependencyMetadata & {
+  app_record?: ConnectorAppRecord | null;
   connector_dir: string;
   connector_state: ConnectorState;
   error: string;
