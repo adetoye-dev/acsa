@@ -531,6 +531,177 @@ impl RunStore {
         rows.into_iter().map(map_connector_record_row).collect()
     }
 
+    pub async fn list_asset_records(&self) -> Result<Vec<AssetRecord>, StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+              id,
+              asset_kind,
+              type_name,
+              name,
+              description,
+              category,
+              runtime,
+              source_kind,
+              source_ref,
+              definition_json,
+              installed_version,
+              available_version,
+              is_locally_modified,
+              created_at,
+              updated_at
+            FROM asset_records
+            ORDER BY asset_kind ASC, updated_at DESC, created_at DESC, name ASC, type_name ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(map_asset_record_row).collect()
+    }
+
+    pub async fn get_asset_record(
+        &self,
+        asset_kind: &str,
+        type_name: &str,
+    ) -> Result<AssetRecord, StorageError> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+              id,
+              asset_kind,
+              type_name,
+              name,
+              description,
+              category,
+              runtime,
+              source_kind,
+              source_ref,
+              definition_json,
+              installed_version,
+              available_version,
+              is_locally_modified,
+              created_at,
+              updated_at
+            FROM asset_records
+            WHERE asset_kind = ? AND type_name = ?
+            "#,
+        )
+        .bind(asset_kind)
+        .bind(type_name)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| {
+            StorageError::AssetRecordNotFound(asset_kind.to_string(), type_name.to_string())
+        })?;
+
+        map_asset_record_row(row)
+    }
+
+    pub async fn upsert_asset_record(
+        &self,
+        record: NewAssetRecord<'_>,
+    ) -> Result<AssetRecord, StorageError> {
+        if record.asset_kind.trim().is_empty() {
+            return Err(StorageError::InvalidInput("asset_kind must not be empty".to_string()));
+        }
+        if record.type_name.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "asset type_name must not be empty".to_string(),
+            ));
+        }
+        if record.name.trim().is_empty() {
+            return Err(StorageError::InvalidInput("asset name must not be empty".to_string()));
+        }
+        if record.description.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "asset description must not be empty".to_string(),
+            ));
+        }
+        if record.source_kind.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "asset source_kind must not be empty".to_string(),
+            ));
+        }
+        if record.definition_json.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "asset definition_json must not be empty".to_string(),
+            ));
+        }
+
+        let existing = sqlx::query(
+            r#"
+            SELECT id, created_at
+            FROM asset_records
+            WHERE asset_kind = ? AND type_name = ?
+            "#,
+        )
+        .bind(record.asset_kind)
+        .bind(record.type_name)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let now = current_timestamp();
+        let (id, created_at) = match existing {
+            Some(row) => (row.try_get("id")?, row.try_get("created_at")?),
+            None => (Uuid::new_v4().to_string(), now),
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO asset_records (
+              id,
+              asset_kind,
+              type_name,
+              name,
+              description,
+              category,
+              runtime,
+              source_kind,
+              source_ref,
+              definition_json,
+              installed_version,
+              available_version,
+              is_locally_modified,
+              created_at,
+              updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(asset_kind, type_name) DO UPDATE
+            SET name = excluded.name,
+                description = excluded.description,
+                category = excluded.category,
+                runtime = excluded.runtime,
+                source_kind = excluded.source_kind,
+                source_ref = excluded.source_ref,
+                definition_json = excluded.definition_json,
+                installed_version = excluded.installed_version,
+                available_version = excluded.available_version,
+                is_locally_modified = excluded.is_locally_modified,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(&id)
+        .bind(record.asset_kind)
+        .bind(record.type_name)
+        .bind(record.name)
+        .bind(record.description)
+        .bind(record.category)
+        .bind(record.runtime)
+        .bind(record.source_kind)
+        .bind(record.source_ref)
+        .bind(record.definition_json)
+        .bind(record.installed_version)
+        .bind(record.available_version)
+        .bind(record.is_locally_modified)
+        .bind(created_at)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_asset_record(record.asset_kind, record.type_name).await
+    }
+
     pub async fn get_connector_record_by_type(
         &self,
         type_name: &str,
@@ -1655,6 +1826,31 @@ impl RunStore {
 
         sqlx::query(
             r#"
+            CREATE TABLE IF NOT EXISTS asset_records (
+              id TEXT PRIMARY KEY,
+              asset_kind TEXT NOT NULL,
+              type_name TEXT NOT NULL,
+              name TEXT NOT NULL,
+              description TEXT NOT NULL,
+              category TEXT,
+              runtime TEXT,
+              source_kind TEXT NOT NULL,
+              source_ref TEXT,
+              definition_json TEXT NOT NULL,
+              installed_version TEXT,
+              available_version TEXT,
+              is_locally_modified INTEGER NOT NULL DEFAULT 0,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              UNIQUE(asset_kind, type_name)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
             CREATE TABLE IF NOT EXISTS connector_records (
               id TEXT PRIMARY KEY,
               type_name TEXT NOT NULL UNIQUE,
@@ -1768,6 +1964,12 @@ impl RunStore {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_workflows_updated_at ON workflows(updated_at)")
             .execute(&self.pool)
             .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_asset_records_updated_at ON asset_records(updated_at)",
+        )
+        .execute(&self.pool)
+        .await?;
+
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_connector_records_updated_at ON connector_records(updated_at)",
         )
@@ -1966,6 +2168,25 @@ pub struct ConnectorRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetRecord {
+    pub id: String,
+    pub asset_kind: String,
+    pub type_name: String,
+    pub name: String,
+    pub description: String,
+    pub category: Option<String>,
+    pub runtime: Option<String>,
+    pub source_kind: String,
+    pub source_ref: Option<String>,
+    pub definition_json: String,
+    pub installed_version: Option<String>,
+    pub available_version: Option<String>,
+    pub is_locally_modified: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeRecord {
     pub id: String,
     pub type_name: String,
@@ -2015,6 +2236,22 @@ pub struct NewConnectorRecord<'a> {
     pub connector_dir: &'a str,
     pub manifest_path: &'a str,
     pub manifest_json: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewAssetRecord<'a> {
+    pub asset_kind: &'a str,
+    pub type_name: &'a str,
+    pub name: &'a str,
+    pub description: &'a str,
+    pub category: Option<&'a str>,
+    pub runtime: Option<&'a str>,
+    pub source_kind: &'a str,
+    pub source_ref: Option<&'a str>,
+    pub definition_json: &'a str,
+    pub installed_version: Option<&'a str>,
+    pub available_version: Option<&'a str>,
+    pub is_locally_modified: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2122,6 +2359,8 @@ pub enum StorageError {
     WorkflowAlreadyExists(String),
     #[error("connector record not found: {0}")]
     ConnectorRecordNotFound(String),
+    #[error("asset record not found: {0}:{1}")]
+    AssetRecordNotFound(String, String),
     #[error("node record not found: {0}")]
     NodeRecordNotFound(String),
     #[error("human task not found: {0}")]
@@ -2369,6 +2608,26 @@ fn map_node_record_row(row: sqlx::sqlite::SqliteRow) -> Result<NodeRecord, Stora
         category: row.try_get("category")?,
         source_kind: row.try_get("source_kind")?,
         source_ref: row.try_get("source_ref")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn map_asset_record_row(row: sqlx::sqlite::SqliteRow) -> Result<AssetRecord, StorageError> {
+    Ok(AssetRecord {
+        id: row.try_get("id")?,
+        asset_kind: row.try_get("asset_kind")?,
+        type_name: row.try_get("type_name")?,
+        name: row.try_get("name")?,
+        description: row.try_get("description")?,
+        category: row.try_get("category")?,
+        runtime: row.try_get("runtime")?,
+        source_kind: row.try_get("source_kind")?,
+        source_ref: row.try_get("source_ref")?,
+        definition_json: row.try_get("definition_json")?,
+        installed_version: row.try_get("installed_version")?,
+        available_version: row.try_get("available_version")?,
+        is_locally_modified: row.try_get("is_locally_modified")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
     })
@@ -2646,6 +2905,62 @@ mod tests {
         assert_eq!(updated.source_kind, "generated");
         assert_eq!(updated.source_ref.as_deref(), Some("prompt:123"));
         assert!(updated.manifest_json.contains("\"version\":\"2\""));
+
+        tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
+    }
+
+    #[tokio::test]
+    async fn asset_record_crud_is_db_backed() {
+        let temp_dir = std::env::temp_dir().join(format!("acsa-storage-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir).await.expect("temp dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
+        let store = RunStore::connect(&db_path).await.expect("store should connect");
+
+        let created = store
+            .upsert_asset_record(NewAssetRecord {
+                asset_kind: "node",
+                type_name: "constant",
+                name: "Set value",
+                description: "Produce a fixed value for downstream steps.",
+                category: Some("Data"),
+                runtime: None,
+                source_kind: "shipped",
+                source_ref: Some("built_in"),
+                definition_json: r#"{"type":"constant"}"#,
+                installed_version: Some("1.0.0"),
+                available_version: Some("1.0.0"),
+                is_locally_modified: false,
+            })
+            .await
+            .expect("asset record should create");
+
+        let listed = store.list_asset_records().await.expect("asset records should list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].asset_kind, "node");
+        assert_eq!(listed[0].type_name, "constant");
+
+        let updated = store
+            .upsert_asset_record(NewAssetRecord {
+                asset_kind: "node",
+                type_name: "constant",
+                name: "Set value",
+                description: "Produce a fixed value for downstream automation steps.",
+                category: Some("Data"),
+                runtime: None,
+                source_kind: "shipped",
+                source_ref: Some("built_in"),
+                definition_json: r#"{"type":"constant","version":"2"}"#,
+                installed_version: Some("1.0.0"),
+                available_version: Some("1.1.0"),
+                is_locally_modified: true,
+            })
+            .await
+            .expect("asset record should update");
+
+        assert_eq!(updated.id, created.id);
+        assert_eq!(updated.available_version.as_deref(), Some("1.1.0"));
+        assert!(updated.is_locally_modified);
+        assert!(updated.description.contains("automation"));
 
         tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
     }

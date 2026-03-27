@@ -50,7 +50,7 @@ use crate::{
     connectors::{
         discover_connector_manifests, inspect_connectors, install_starter_connector_pack,
         run_manifest_path, scaffold_connector, wasm_connectors_enabled, ConnectorError,
-        ConnectorRuntime,
+        ConnectorManifest, ConnectorRuntime,
     },
     engine::{
         compile_workflow, load_workflows_from_dir, validate_workflow, EngineError, ExecutionStatus,
@@ -71,9 +71,9 @@ use crate::{
         WorkflowValidationState,
     },
     storage::{
-        resolve_secret_value, CredentialRecord, LogQuery, LogRecord, NewConnectorRecord,
-        NewNodeRecord, PaginatedResponse, RunQuery, RunRecord, RunStore, StepRunRecord,
-        WorkflowRecord,
+        resolve_secret_value, AssetRecord, CredentialRecord, LogQuery, LogRecord, NewAssetRecord,
+        NewConnectorRecord, NewNodeRecord, PaginatedResponse, RunQuery, RunRecord, RunStore,
+        StepRunRecord, WorkflowRecord,
     },
 };
 
@@ -469,6 +469,7 @@ pub async fn serve(
     }
 
     seed_workflows_from_directory_if_missing(engine.store(), &config.workflows_dir).await?;
+    ensure_shipped_asset_records(engine.store()).await?;
     let workflows = load_workflows_from_dir(&config.workflows_dir)?;
     let mut webhook_workflows = HashMap::new();
     let mut registered_paths = HashSet::new();
@@ -716,6 +717,10 @@ async fn list_connectors(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn list_starter_connector_packs(State(state): State<AppState>) -> impl IntoResponse {
+    if let Err(error) = ensure_shipped_asset_records(state.engine.store()).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })));
+    }
+
     match starter_connector_pack_views(state.engine.store(), &state.connectors_dir).await {
         Ok(views) => (StatusCode::OK, Json(json!(views))),
         Err(error) => {
@@ -1848,6 +1853,138 @@ fn node_record_response(record: crate::storage::NodeRecord) -> NodeRecordRespons
     }
 }
 
+fn built_in_step_specs() -> [(&'static str, &'static str, &'static str, &'static str); 17] {
+    [
+        ("constant", "Set value", "Produce a fixed value for downstream steps.", "Data"),
+        ("noop", "Pass through", "Pass inputs through without changing them.", "Flow"),
+        ("condition", "Branch", "Route execution based on a condition.", "Flow"),
+        ("switch", "Choose path", "Select one branch from named options.", "Flow"),
+        (
+            "loop",
+            "Repeat for each item",
+            "Run the inner step for each item in a collection.",
+            "Flow",
+        ),
+        (
+            "parallel",
+            "Run in parallel",
+            "Run nested steps at the same time and join their outputs.",
+            "Flow",
+        ),
+        ("http_request", "Send request", "Send an HTTP request to an app or API.", "Apps"),
+        ("database_query", "Query data", "Run a query against the configured database.", "Data"),
+        ("file_read", "Read file", "Read a file from the local data workspace.", "Data"),
+        ("file_write", "Write file", "Write a file to the local data workspace.", "Data"),
+        (
+            "llm_completion",
+            "Generate text",
+            "Generate a completion with the configured LLM provider.",
+            "AI",
+        ),
+        ("classification", "Classify", "Assign labels to a record using the AI model.", "AI"),
+        ("extraction", "Extract fields", "Pull structured fields from unstructured text.", "AI"),
+        (
+            "embedding",
+            "Store knowledge",
+            "Store text as an embedding in the in-memory vector store.",
+            "AI",
+        ),
+        (
+            "retrieval",
+            "Find related knowledge",
+            "Search stored embeddings for similar content.",
+            "AI",
+        ),
+        (
+            "approval",
+            "Request approval",
+            "Pause until a reviewer approves or rejects the task.",
+            "Human",
+        ),
+        ("manual_input", "Ask for input", "Pause until a human provides a value.", "Human"),
+    ]
+}
+
+async fn ensure_shipped_asset_records(store: &RunStore) -> Result<(), TriggerError> {
+    for (type_name, name, description, category) in built_in_step_specs() {
+        if store.get_asset_record("node", type_name).await.is_ok() {
+            continue;
+        }
+        let definition_json = serde_json::to_string(&json!({
+            "asset_kind": "node",
+            "type_name": type_name,
+            "built_in": true,
+        }))
+        .map_err(|error| TriggerError::SerializeWorkflowYaml { message: error.to_string() })?;
+        store
+            .upsert_asset_record(NewAssetRecord {
+                asset_kind: "node",
+                type_name,
+                name,
+                description,
+                category: Some(category),
+                runtime: None,
+                source_kind: "shipped",
+                source_ref: Some("built_in"),
+                definition_json: &definition_json,
+                installed_version: Some("1.0.0"),
+                available_version: Some("1.0.0"),
+                is_locally_modified: false,
+            })
+            .await?;
+    }
+
+    for pack in crate::starter_connector_packs::starter_connector_packs()? {
+        let manifest_path = pack.source_dir.join("manifest.json");
+        let raw_manifest = fs::read_to_string(&manifest_path)?;
+        let manifest =
+            serde_json::from_str::<ConnectorManifest>(&raw_manifest).map_err(|error| {
+                TriggerError::Connector(ConnectorError::InvalidManifest {
+                    message: format!(
+                        "failed to parse shipped starter pack manifest {}: {error}",
+                        manifest_path.display()
+                    ),
+                })
+            })?;
+        let type_name =
+            pack.provided_step_types.first().copied().unwrap_or(manifest.type_id.as_str());
+        if store.get_asset_record("connector", type_name).await.is_ok() {
+            continue;
+        }
+        store
+            .upsert_asset_record(NewAssetRecord {
+                asset_kind: "connector",
+                type_name,
+                name: pack.name,
+                description: pack.description,
+                category: Some("Apps"),
+                runtime: Some(connector_runtime_name(manifest.runtime)),
+                source_kind: "shipped",
+                source_ref: Some(pack.id),
+                definition_json: &raw_manifest,
+                installed_version: manifest.version.as_deref(),
+                available_version: manifest.version.as_deref(),
+                is_locally_modified: false,
+            })
+            .await?;
+    }
+
+    Ok(())
+}
+
+async fn asset_record_map(
+    store: &RunStore,
+    asset_kind: &str,
+) -> Result<HashMap<String, AssetRecord>, TriggerError> {
+    Ok(store
+        .list_asset_records()
+        .await?
+        .into_iter()
+        .filter(|record| record.asset_kind == asset_kind)
+        .map(|record| (record.type_name.clone(), record))
+        .collect())
+}
+
 async fn connector_usage_by_workflow(
     store: &RunStore,
 ) -> Result<HashMap<String, Vec<String>>, TriggerError> {
@@ -1877,6 +2014,9 @@ async fn node_catalog(
     store: &RunStore,
     connectors_dir: &Path,
 ) -> Result<(Vec<StepTypeEntry>, Vec<TriggerTypeEntry>), TriggerError> {
+    ensure_shipped_asset_records(store).await?;
+    let shipped_node_assets = asset_record_map(store, "node").await?;
+    let shipped_connector_assets = asset_record_map(store, "connector").await?;
     let node_records = node_record_map(store).await?;
     let mut step_types = vec![
         StepTypeEntry {
@@ -2049,6 +2189,24 @@ async fn node_catalog(
         })
         .collect::<Vec<_>>();
     step_types.append(&mut connectors);
+    for entry in &mut step_types {
+        let shipped_asset = match entry.source.as_str() {
+            "built_in" => shipped_node_assets.get(&entry.type_name),
+            "connector" => shipped_connector_assets.get(&entry.type_name),
+            _ => None,
+        };
+
+        if let Some(asset) = shipped_asset {
+            entry.label = asset.name.clone();
+            entry.description = asset.description.clone();
+            if let Some(category) = &asset.category {
+                entry.category = category.clone();
+            }
+            if entry.source == "connector" {
+                entry.runtime = asset.runtime.clone().or_else(|| entry.runtime.clone());
+            }
+        }
+    }
     let existing_type_names =
         step_types.iter().map(|entry| entry.type_name.clone()).collect::<HashSet<_>>();
     let mut standalone_records = store
@@ -3095,13 +3253,14 @@ mod tests {
     use super::{
         authenticate_webhook, build_workflow_summary, compute_signature, connector_inventory,
         connector_view, create_connector, create_workflow_document, cron_schedule,
-        import_n8n_workflow, install_starter_connector_pack_endpoint, invalid_connector_view,
-        list_starter_connector_packs, node_catalog, parse_workflow_document_state,
-        read_workflow_document, rename_workflow_document, request_has_engine_token, run_view,
-        save_workflow_document, seed_workflows_from_directory_if_missing, serialize_workflow_yaml,
-        slugify_workflow_name, validate_secret_value, validate_workflow_id, workflow_inventory,
-        AppState, CreateConnectorRequest, CreateWorkflowRequest, EngineAccessControl,
-        N8nImportRequest, RenameWorkflowRequest, RunDetailResponse, RunPageResponse, TriggerError,
+        ensure_shipped_asset_records, import_n8n_workflow, install_starter_connector_pack_endpoint,
+        invalid_connector_view, list_starter_connector_packs, node_catalog,
+        parse_workflow_document_state, read_workflow_document, rename_workflow_document,
+        request_has_engine_token, run_view, save_workflow_document,
+        seed_workflows_from_directory_if_missing, serialize_workflow_yaml, slugify_workflow_name,
+        validate_secret_value, validate_workflow_id, workflow_inventory, AppState,
+        CreateConnectorRequest, CreateWorkflowRequest, EngineAccessControl, N8nImportRequest,
+        RenameWorkflowRequest, RunDetailResponse, RunPageResponse, TriggerError,
         WebhookSignatureAuth, WebhookWorkflow,
     };
     use crate::{
@@ -3116,7 +3275,7 @@ mod tests {
             WorkflowTelemetryFacts, WorkflowValidationState,
         },
         starter_connector_packs::starter_connector_pack,
-        storage::{NewConnectorRecord, NewNodeRecord, RunRecord, RunStore},
+        storage::{NewAssetRecord, NewConnectorRecord, NewNodeRecord, RunRecord, RunStore},
     };
 
     #[test]
@@ -3202,6 +3361,68 @@ mod tests {
         assert_eq!(by_type_name("retrieval").label, "Find related knowledge");
         assert_eq!(by_type_name("manual_input").category, "Human");
         assert_eq!(by_type_name("http_request").category, "Apps");
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn shipped_asset_seeding_creates_built_in_and_starter_connector_assets() {
+        let temp_dir = write_temp_directory("shipped-asset-seeding");
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            ensure_shipped_asset_records(&store).await.expect("asset seeding should succeed");
+
+            let assets = store.list_asset_records().await.expect("assets should list");
+            assert!(assets.iter().any(|asset| {
+                asset.asset_kind == "node"
+                    && asset.type_name == "constant"
+                    && asset.source_kind == "shipped"
+            }));
+            assert!(assets.iter().any(|asset| {
+                asset.asset_kind == "connector"
+                    && asset.type_name == "slack_notify"
+                    && asset.source_ref.as_deref() == Some("slack-notify")
+            }));
+        });
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn node_catalog_prefers_shipped_asset_registry_metadata_for_built_ins() {
+        let temp_dir = write_temp_directory("node-catalog-shipped-asset-overrides");
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let (steps, _triggers) = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            store
+                .upsert_asset_record(NewAssetRecord {
+                    asset_kind: "node",
+                    type_name: "constant",
+                    name: "Compose value",
+                    description: "Compose a reusable value for later steps.",
+                    category: Some("Data"),
+                    runtime: None,
+                    source_kind: "shipped",
+                    source_ref: Some("built_in"),
+                    definition_json: r#"{"type":"constant"}"#,
+                    installed_version: Some("1.0.0"),
+                    available_version: Some("1.0.0"),
+                    is_locally_modified: true,
+                })
+                .await
+                .expect("asset record should persist");
+            node_catalog(&store, &temp_dir).await.expect("catalog should load")
+        });
+
+        let constant = steps
+            .iter()
+            .find(|entry| entry.type_name == "constant")
+            .expect("constant step should exist");
+        assert_eq!(constant.label, "Compose value");
+        assert_eq!(constant.description, "Compose a reusable value for later steps.");
 
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
     }
