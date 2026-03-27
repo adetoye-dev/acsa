@@ -30,49 +30,49 @@ const CodeMirror = dynamic(async () => (await import("@uiw/react-codemirror")).d
 
 const yamlEditorTheme = EditorView.theme({
   "&": {
-    backgroundColor: "#0a0d14",
-    color: "#eef4fb"
+    backgroundColor: "#f2f4f8",
+    color: "#17212b"
   },
   ".cm-content": {
-    caretColor: "#f7fbff"
+    caretColor: "#17212b"
   },
   ".cm-activeLine": {
-    backgroundColor: "rgba(255, 255, 255, 0.025)"
+    backgroundColor: "rgba(111, 99, 255, 0.05)"
   },
   ".cm-activeLineGutter": {
-    backgroundColor: "rgba(255, 255, 255, 0.025)"
+    backgroundColor: "rgba(111, 99, 255, 0.05)"
   },
   ".cm-gutters": {
-    backgroundColor: "#0d1118",
-    color: "rgba(213, 228, 248, 0.42)"
+    backgroundColor: "#eef1f6",
+    color: "rgba(91, 101, 115, 0.58)"
   }
 });
 
 const yamlHighlightStyle = HighlightStyle.define([
   {
     tag: [tags.propertyName, tags.attributeName, tags.labelName],
-    color: "#f3bc7a"
+    color: "#7a52cc"
   },
   {
     tag: [tags.string, tags.special(tags.string)],
-    color: "#bce2a8"
+    color: "#2e6f57"
   },
   {
     tag: [tags.number, tags.bool, tags.null, tags.atom],
-    color: "#7fd0f2"
+    color: "#0f6e8c"
   },
   {
     tag: [tags.keyword],
-    color: "#d2a7ff"
+    color: "#b24e86"
   },
   {
     tag: [tags.comment],
-    color: "rgba(169, 183, 205, 0.52)",
+    color: "rgba(101, 112, 126, 0.6)",
     fontStyle: "italic"
   },
   {
     tag: [tags.punctuation, tags.brace, tags.squareBracket],
-    color: "rgba(222, 233, 247, 0.8)"
+    color: "rgba(76, 86, 98, 0.86)"
   }
 ]);
 

@@ -264,6 +264,20 @@ export function EditorShell({
 
   function openRightPanel(panel: RightRailPanel) {
     setActiveRightPanels((current) => {
+      if (current.includes(panel)) {
+        return current;
+      }
+
+      if (panel === "library") {
+        const currentSecondary =
+          current.find((candidate) => candidate !== "library") ?? null;
+        return currentSecondary ? ["library", currentSecondary] : ["library"];
+      }
+
+      if (current.includes("library")) {
+        return ["library", panel];
+      }
+
       const next = [...current.filter((candidate) => candidate !== panel), panel];
       return next.length > 2 ? next.slice(next.length - 2) : next;
     });
@@ -277,6 +291,14 @@ export function EditorShell({
     setActiveRightPanels((current) => {
       if (current.includes(panel)) {
         return current.filter((candidate) => candidate !== panel);
+      }
+      if (panel === "library") {
+        const currentSecondary =
+          current.find((candidate) => candidate !== "library") ?? null;
+        return currentSecondary ? ["library", currentSecondary] : ["library"];
+      }
+      if (current.includes("library")) {
+        return ["library", panel];
       }
       const next = [...current.filter((candidate) => candidate !== panel), panel];
       return next.length > 2 ? next.slice(next.length - 2) : next;
@@ -1815,7 +1837,15 @@ export function EditorShell({
                             onClick={() => toggleRightPanel("assistant")}
                             type="button"
                           >
-                            <AssistantToggleIcon />
+                            <span
+                              className={`flex h-6 w-6 items-center justify-center rounded-[8px] ${
+                                isAssistantRailOpen
+                                  ? "bg-white/16 text-white"
+                                  : "bg-[#f3f0ff] text-[#6f63ff]"
+                              }`}
+                            >
+                              <AssistantToggleIcon />
+                            </span>
                             <span>Assistant</span>
                           </button>
                         ) : null}
@@ -1834,7 +1864,15 @@ export function EditorShell({
                           }}
                           type="button"
                         >
-                          <span className="text-lg leading-none">+</span>
+                          <span
+                            className={`flex h-6 w-6 items-center justify-center rounded-[8px] text-lg leading-none ${
+                              isAddStepMenuOpen
+                                ? "bg-white/16 text-white"
+                                : "bg-[#f3f0ff] text-[#6f63ff]"
+                            }`}
+                          >
+                            +
+                          </span>
                           <span>Add step</span>
                         </button>
                       </div>
@@ -1860,7 +1898,7 @@ export function EditorShell({
                     </span>
                   ) : null}
                 </div>
-                <div className="min-h-0 overflow-hidden px-4 py-4">
+                <div className="min-h-0 overflow-hidden">
                   <YamlEditor
                     fill
                     id="workflow-yaml"
@@ -2853,11 +2891,11 @@ function workflowLayoutStorageKey(workflowId: string) {
 
 function rightRailPanelOrder(panel: RightRailPanel) {
   switch (panel) {
-    case "library":
-      return 0;
     case "config":
-      return 1;
+      return 0;
     case "assistant":
+      return 1;
+    case "library":
       return 2;
     default:
       return 3;

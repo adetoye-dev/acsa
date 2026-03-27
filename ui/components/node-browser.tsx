@@ -418,16 +418,11 @@ function NodeOption({
         typeName={entry.type_name}
       />
       <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-medium text-ink">{entry.label}</div>
-            <div className="mt-0.5 truncate text-[12px] leading-5 text-slate">
-              {entry.description}
-            </div>
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium text-ink">{entry.label}</div>
+          <div className="mt-0.5 truncate text-[12px] leading-5 text-slate">
+            {entry.description}
           </div>
-          <span className="inline-flex shrink-0 items-center rounded-[8px] border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-[#6a717a]">
-            {entry.runtime ?? entry.source}
-          </span>
         </div>
       </div>
     </button>

@@ -194,7 +194,6 @@ export function ExecutionsPage() {
         <RunListPanel
           error={error}
           isRefreshingRuns={isRefreshingRuns}
-          onRefresh={() => void refreshRunInventory(selectedRunId)}
           onRunStatusFilterChange={setRunStatusFilter}
           onSelectRun={handleSelectRun}
           onWorkflowFilterChange={setWorkflowFilter}

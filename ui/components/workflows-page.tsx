@@ -104,6 +104,11 @@ export function WorkflowsPage() {
     () => new Map(recentEntries.map((entry) => [entry.workflowId, entry.openedAt])),
     [recentEntries]
   );
+  const showCenteredEmptyState =
+    !isLoading &&
+    orderedWorkflows.length === 0 &&
+    inventory.invalid_files.length === 0 &&
+    pendingTasks.length === 0;
 
   async function refreshLaunchpadData() {
     setIsLoading(true);
@@ -278,10 +283,6 @@ export function WorkflowsPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <span className="ui-badge">{availableWorkflows.length} workflows</span>
-          <button className="ui-button" onClick={() => void refreshLaunchpadData()} type="button">
-            Refresh
-          </button>
           <button
             className="ui-button"
             onClick={() => setIsImportPanelOpen((current) => !current)}
@@ -309,59 +310,84 @@ export function WorkflowsPage() {
           </div>
         ) : null}
 
-        <div className="grid h-full min-h-0 xl:grid-cols-[minmax(0,1fr)_372px]">
-          <section className="grid min-h-0 grid-rows-[60px_minmax(0,1fr)] border-r border-black/10 bg-white">
-            <div className="flex items-center justify-between gap-4 border-b border-black/10 px-5">
-              <div className="text-[15px] font-medium tracking-tight text-ink">
-                Your workflows
+        {showCenteredEmptyState ? (
+          <div className="flex h-full min-h-0 items-center justify-center bg-white px-6 py-10">
+            <div className="flex max-w-md flex-col items-center text-center">
+              <div className="flex h-14 w-14 items-center justify-center rounded-[18px] bg-[#f6f2ff] text-[#6f63ff]">
+                <StartAutomationIcon />
               </div>
-              <span className="ui-badge">{orderedWorkflows.length}</span>
+              <h2 className="mt-5 text-[30px] font-semibold tracking-[-0.035em] text-ink">
+                Start automating
+              </h2>
+              <p className="mt-3 text-[15px] leading-7 text-slate">
+                Create your first workflow and build powerful automations directly from the app.
+              </p>
+              <Link className="ui-button ui-button-primary mt-6" href="/workflows/new">
+                Create your first workflow
+              </Link>
             </div>
+          </div>
+        ) : (
+          <div className="grid h-full min-h-0 xl:grid-cols-[minmax(0,1fr)_372px]">
+            <section className="min-h-0 border-r border-black/10 bg-white">
+              <div className="sleek-scroll min-h-0 overflow-y-auto px-5 py-5">
+                {inventory.invalid_files.length > 0 ? (
+                  <div className="mb-4 rounded-[16px] border border-rose-400/18 bg-rose-50/70 px-4 py-3 text-sm leading-6 text-[#c65a72]">
+                    {inventory.invalid_files.length} invalid workflow file
+                    {inventory.invalid_files.length === 1 ? "" : "s"} need attention.
+                  </div>
+                ) : null}
 
-            <div className="sleek-scroll min-h-0 overflow-y-auto px-5 py-5">
-              {inventory.invalid_files.length > 0 ? (
-                <div className="mb-4 rounded-[16px] border border-rose-400/18 bg-rose-50/70 px-4 py-3 text-sm leading-6 text-[#c65a72]">
-                  {inventory.invalid_files.length} invalid workflow file
-                  {inventory.invalid_files.length === 1 ? "" : "s"} need attention.
-                </div>
-              ) : null}
+                {isLoading ? (
+                  <div className="rounded-[18px] border border-black/10 bg-white px-5 py-8 text-sm leading-6 text-slate">
+                    Loading workflows…
+                  </div>
+                ) : orderedWorkflows.length > 0 ? (
+                  <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-3">
+                    {orderedWorkflows.map((workflow) => (
+                      <WorkflowGridCard
+                        href={`/workflows/${workflow.id}`}
+                        key={workflow.id}
+                        recentOpenedAt={recentByWorkflowId.get(workflow.id) ?? null}
+                        workflow={workflow}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-[18px] border border-black/10 bg-white px-5 py-8 text-sm leading-6 text-slate">
+                    No workflows yet. Create one or import an existing n8n flow.
+                  </div>
+                )}
+              </div>
+            </section>
 
-              {isLoading ? (
-                <div className="rounded-[18px] border border-black/10 bg-white px-5 py-8 text-sm leading-6 text-slate">
-                  Loading workflows…
-                </div>
-              ) : orderedWorkflows.length > 0 ? (
-                <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-3">
-                  {orderedWorkflows.map((workflow) => (
-                    <WorkflowGridCard
-                      href={`/workflows/${workflow.id}`}
-                      key={workflow.id}
-                      recentOpenedAt={recentByWorkflowId.get(workflow.id) ?? null}
-                      workflow={workflow}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <div className="rounded-[18px] border border-black/10 bg-white px-5 py-8 text-sm leading-6 text-slate">
-                  No workflows yet. Create one or import an existing n8n flow.
-                </div>
-              )}
-            </div>
-          </section>
-
-          <PendingTasksRail
-            isRefreshing={isRefreshingTasks}
-            onApprove={(taskId, approved) => void handleResolveApproval(taskId, approved)}
-            onError={(message) => setError(message)}
-            onRefresh={() => void refreshLaunchpadData()}
-            onResolveValue={(taskId) => void handleResolveManualInput(taskId)}
-            onValueChange={(taskId, value) => setTaskValue(taskId, value)}
-            resolvingTaskIds={resolvingTaskIds}
-            taskValues={taskValues}
-            tasks={pendingTasks}
-          />
-        </div>
+            <PendingTasksRail
+              isRefreshing={isRefreshingTasks}
+              onApprove={(taskId, approved) => void handleResolveApproval(taskId, approved)}
+              onError={(message) => setError(message)}
+              onRefresh={() => void refreshLaunchpadData()}
+              onResolveValue={(taskId) => void handleResolveManualInput(taskId)}
+              onValueChange={(taskId, value) => setTaskValue(taskId, value)}
+              resolvingTaskIds={resolvingTaskIds}
+              taskValues={taskValues}
+              tasks={pendingTasks}
+            />
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+function StartAutomationIcon() {
+  return (
+    <svg aria-hidden="true" className="h-6 w-6" fill="none" viewBox="0 0 24 24">
+      <path
+        d="M12 4.5v4m0 7v4m7.5-7.5h-4m-7 0h-4M16.95 7.05l-2.82 2.82m-4.26 4.26-2.82 2.82m9.9 0-2.82-2.82m-4.26-4.26L7.05 7.05"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeWidth="1.8"
+      />
+    </svg>
   );
 }
