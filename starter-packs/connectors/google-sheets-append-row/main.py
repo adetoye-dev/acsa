@@ -77,9 +77,11 @@ def _normalize_row(row_value):
 def _quote_sheet_name(sheet_name: str) -> str:
     """Quote sheet names containing special characters or spaces for Google Sheets A1 notation."""
     if sheet_name.startswith("'") and sheet_name.endswith("'") and len(sheet_name) >= 2:
-        if sheet_name[1:-1] == "":
+        sheet_name_inner = sheet_name[1:-1]
+        if sheet_name_inner == "":
             raise ValueError("Invalid sheet name: empty after stripping quotes")
-        return sheet_name
+        escaped_inner = sheet_name_inner.replace("'", "''")
+        return f"'{escaped_inner}'"
 
     normalized_name = sheet_name
 

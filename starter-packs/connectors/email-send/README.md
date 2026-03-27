@@ -15,7 +15,8 @@ Use it as the installed, Git-visible baseline for a real delivery connector.
 
 - Access to an SMTP server or provider email API.
 - Credentials for that provider (username/password or API key).
-- Encrypted SMTP transport is required when using SMTP auth: use STARTTLS (explicit TLS) or implicit SSL/TLS.
+- Encrypted SMTP transport is strongly recommended in production: use STARTTLS (`smtp_tls: true`) or implicit SSL/TLS (`smtp_secure: true`).
+- For local testing only, unencrypted SMTP may be used if both `smtp_tls` and `smtp_secure` are unset/false.
 - Prefer TLS 1.2+ with certificate verification enabled.
 - Common secure SMTP ports: `587` for STARTTLS, `465` for implicit SSL/TLS.
 - Python 3.10+ available in the runtime where connector processes execute.
@@ -33,7 +34,9 @@ One-line pattern: `params.password: "${SMTP_PASSWORD}"` with `secure secrets` co
 - `smtp_port`: SMTP port as number, for example `587`.
 - `smtp_tls`: enables STARTTLS (explicit TLS upgrade), commonly used with port `587`.
 - `smtp_secure`: enables implicit SSL/TLS, commonly used with port `465`.
-- `smtp_tls` and `smtp_secure` are mutually exclusive; configure only one enabled mode.
+- `smtp_tls` and `smtp_secure` are mutually exclusive.
+- For encrypted mode, set exactly one to `true` and set the other to `false` or omit it.
+- For local testing only, both may be omitted/false to run plain SMTP.
 - `username`: SMTP username.
 - `password`: use for SMTP username/password authentication (common with SMTP transport).
 - `api_key`: use for provider HTTP API credential style flows (for example API-based providers).
@@ -46,6 +49,8 @@ SMTP password auth example:
 params:
   smtp_host: "smtp.example.com"
   smtp_port: 587
+  smtp_tls: true
+  smtp_secure: false
   username: "smtp-user"
   password: "${SMTP_PASSWORD}"
 ```
@@ -56,6 +61,8 @@ API-key-style auth example:
 params:
   smtp_host: "api.mail-provider.example"
   smtp_port: 465
+  smtp_tls: false
+  smtp_secure: true
   username: "apikey"
   api_key: "${MAIL_PROVIDER_API_KEY}"
 ```

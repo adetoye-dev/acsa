@@ -30,18 +30,14 @@ export async function fetchCredentials() {
   return fetchEngineJson<CredentialsResponse>("/api/credentials");
 }
 
-export async function saveCredential(name: string, value: string) {
-  try {
-    return await fetchEngineJson<CredentialItem>("/api/credentials", {
-      body: JSON.stringify({ name, value }),
-      headers: {
-        "content-type": "application/json"
-      },
-      method: "POST"
-    });
-  } catch (error) {
-    throw error;
-  }
+export async function saveCredential(name: string, value: string): Promise<CredentialItem> {
+  return await fetchEngineJson<CredentialItem>("/api/credentials", {
+    body: JSON.stringify({ name, value }),
+    headers: {
+      "Content-Type": "application/json"
+    },
+    method: "POST"
+  });
 }
 
 export async function removeCredential(name: string) {

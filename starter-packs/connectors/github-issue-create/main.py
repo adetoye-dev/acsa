@@ -9,6 +9,7 @@ from urllib import request as urllib_request
 
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GITHUB_API_VERSION = "2026-03-10"
+DEFAULT_USER_AGENT = "acsa-github-issue-create/0.1.0"
 
 
 def main() -> None:
@@ -92,6 +93,11 @@ def main() -> None:
 
     owner, repo = str(repository).strip().split("/", 1)
     endpoint = f"https://api.github.com/repos/{owner}/{repo}/issues"
+    user_agent = (
+        inputs.get("user_agent")
+        or params.get("user_agent")
+        or DEFAULT_USER_AGENT
+    )
 
     body = {
         "title": str(title).strip(),
@@ -114,6 +120,7 @@ def main() -> None:
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": GITHUB_API_VERSION,
             "Content-Type": "application/json",
+            "User-Agent": str(user_agent).strip(),
         },
     )
 

@@ -16,7 +16,7 @@ connector scaffold you can edit and commit.
 
 ## Installation
 
-1. Open Connectors in the ACSA UI (the ACSA web application).
+1. Open Connectors in the Autonomous Cloud Service Assistant (ACSA) UI.
 2. Install the Slack Notify starter pack.
 3. Confirm it appears in installed packs and connector inventory.
 4. Add the required Slack secret(s) in the project-root `credentials` directory or via environment variables (`SLACK_WEBHOOK_URL`, `SLACK_BOT_TOKEN`).
@@ -45,6 +45,8 @@ Security Note: plaintext `.env` secrets are not recommended for production. Pref
 }
 ```
 
+Security Note: never commit credential files (`.env` or `.json`) to version control. Add the `credentials/` directory to `.gitignore`, and prefer managed secret stores (for example AWS Secrets Manager, HashiCorp Vault, or Kubernetes Secrets).
+
 - As an alternative to credentials files, environment variables `SLACK_WEBHOOK_URL` and `SLACK_BOT_TOKEN` are supported directly.
 
 Credential precedence: if both are configured, `SLACK_WEBHOOK_URL` takes precedence and the connector sends through the incoming webhook path; `SLACK_BOT_TOKEN` is used only when `SLACK_WEBHOOK_URL` is not set. Example: with both values present, the connector posts via webhook and does not call `chat.postMessage`.
@@ -52,7 +54,10 @@ Credential precedence: if both are configured, `SLACK_WEBHOOK_URL` takes precede
 Step fields:
 
 - `inputs.message`: text to send.
-- `params.channel`: channel name or ID (required for token mode; in webhook mode, if `params.channel` is omitted the message is posted to the incoming webhook default channel and cannot be overridden by the connector).
+- `params.channel`: channel name or ID (required for token mode).
+- In webhook mode, `inputs.message` is always the message body.
+- In webhook mode, `params.channel` is honored only if the incoming webhook itself allows channel overrides.
+- If webhook overrides are not supported (or `params.channel` is omitted), delivery goes to the webhook's configured default channel and the connector cannot change it.
 
 ## Usage
 

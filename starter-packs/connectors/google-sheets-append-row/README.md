@@ -69,6 +69,8 @@ Workflow contract mapping:
 
 Run with a minimal payload using an array row:
 
+Note: `${VARIABLE_NAME}` in examples is a placeholder, not literal JSON syntax. Replace it with your actual token value, for example `"credentials": "ya29.a0AfH6SMB..."`.
+
 ```json
 {
   "inputs": {
@@ -109,7 +111,7 @@ Or provide a row as an object mapping column header names to values:
 }
 ```
 
-Then execute via connector test or workflow run in Acsa (the Acsa web application/dashboard).
+Then execute via connector test or workflow run in Autonomous Cloud Service Assistant (Acsa).
 
 If you omit `inputs.credentials` in payload examples, the connector will use `GOOGLE_SHEETS_CREDENTIALS` or `GOOGLE_SHEETS_CREDENTIALS_PATH` when available.
 

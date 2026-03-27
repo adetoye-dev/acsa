@@ -53,16 +53,20 @@ def _validate_smtp_host(smtp_host: str | None) -> str | None:
     if not HOSTNAME_PATTERN.match(host):
         raise ValueError("smtp_host must be a valid public DNS hostname")
 
+    executor = ThreadPoolExecutor(max_workers=1)
+    lookup = executor.submit(socket.getaddrinfo, host, None, 0, socket.SOCK_STREAM)
     try:
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            lookup = executor.submit(socket.getaddrinfo, host, None, 0, socket.SOCK_STREAM)
-            resolved = lookup.result(timeout=DNS_LOOKUP_TIMEOUT_SECONDS)
+        resolved = lookup.result(timeout=DNS_LOOKUP_TIMEOUT_SECONDS)
     except TimeoutError as error:
+        lookup.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
         raise ValueError(
             f"smtp_host could not be resolved: DNS lookup timed out after {DNS_LOOKUP_TIMEOUT_SECONDS}s"
         ) from error
     except OSError as error:
         raise ValueError(f"smtp_host could not be resolved: {error}") from error
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
     for entry in resolved:
         ip_text = entry[4][0]
@@ -147,7 +151,7 @@ def main() -> None:
         print("invalid connector payload: params must be a JSON object", file=sys.stderr)
         sys.exit(1)
 
-    smtp_host = inputs.get("smtp_host") or params.get("smtp_host")
+    smtp_host = inputs["smtp_host"] if "smtp_host" in inputs else params.get("smtp_host")
     try:
         smtp_host = _validate_smtp_host(smtp_host)
     except ValueError as error:
@@ -213,9 +217,11 @@ def main() -> None:
         )
         sys.exit(1)
 
-    if _non_empty_input(inputs.get("smtp_password") or params.get("smtp_password")) and _non_empty_input(
-        inputs.get("api_key") or params.get("api_key")
-    ):
+    smtp_password = (
+        inputs["smtp_password"] if "smtp_password" in inputs else params.get("smtp_password")
+    )
+    api_key = inputs["api_key"] if "api_key" in inputs else params.get("api_key")
+    if _non_empty_input(smtp_password) and _non_empty_input(api_key):
         correlation_id = uuid.uuid4().hex
         print(
             f"invalid SMTP configuration: ambiguous_auth_config; correlation_id={correlation_id}",

@@ -53,7 +53,12 @@ export function PendingTasksRail({
     try {
       await Promise.resolve(onApprove(taskId, approved));
     } catch (error) {
-      onError?.(error instanceof Error ? error.message : "Failed to resolve approval task");
+      const errorMessage = error instanceof Error ? error.message : "Failed to resolve approval task";
+      if (onError) {
+        onError(errorMessage);
+      } else {
+        console.error(errorMessage);
+      }
     } finally {
       setProcessingTaskIds((current) => {
         const next = { ...current };
@@ -71,7 +76,12 @@ export function PendingTasksRail({
     try {
       await Promise.resolve(onResolveValue(taskId));
     } catch (error) {
-      onError?.(error instanceof Error ? error.message : "Failed to resolve manual input task");
+      const errorMessage = error instanceof Error ? error.message : "Failed to resolve manual input task";
+      if (onError) {
+        onError(errorMessage);
+      } else {
+        console.error(errorMessage);
+      }
     } finally {
       setProcessingTaskIds((current) => {
         const next = { ...current };

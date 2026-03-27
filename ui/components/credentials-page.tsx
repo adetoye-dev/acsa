@@ -153,7 +153,7 @@ export function CredentialsPage() {
     }
 
     const normalizedName = name.trim().toUpperCase();
-    const normalizedValue = value.trim();
+    const normalizedValue = value;
 
     setIsSaving(true);
     try {
@@ -244,7 +244,7 @@ export function CredentialsPage() {
       <div className="grid min-h-0 flex-1 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="sleek-scroll min-h-0 overflow-y-auto border-r border-black/10">
           {error ? (
-            <div className="border-b border-rose-400/18 bg-rose-50 px-5 py-3 text-sm leading-6 text-[#c65a72]">
+            <div className="border-b border-rose-400/18 bg-rose-50 px-5 py-3 text-sm leading-6 text-[#c65a72]" role="alert">
               {error}
             </div>
           ) : null}
@@ -399,10 +399,10 @@ function formatRelativeDate(timestamp: number) {
   if (deltaMinutes < 60) {
     return `${deltaMinutes}m ago`;
   }
-  const deltaHours = Math.round(deltaMinutes / 60);
+  const deltaHours = Math.max(1, Math.floor(deltaMinutes / 60));
   if (deltaHours < 24) {
     return `${deltaHours}h ago`;
   }
-  const deltaDays = Math.round(deltaHours / 24);
+  const deltaDays = Math.max(1, Math.floor(deltaHours / 24));
   return `${deltaDays}d ago`;
 }

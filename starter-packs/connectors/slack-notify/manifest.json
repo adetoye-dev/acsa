@@ -154,21 +154,25 @@
     {
       "name": "channel",
       "type": "string",
+      "required": false,
       "description": "Optional and typically present on successful sends (`sent=true`). Resolved Slack channel identifier or name used for delivery."
     },
     {
       "name": "message",
       "type": "string",
+      "required": false,
       "description": "Optional and typically present on successful sends (`sent=true`). Posted message text content returned/echoed by the connector."
     },
     {
       "name": "error",
       "type": "string",
+      "required": false,
       "description": "Optional and typically present on failed sends (`sent=false`). Sanitized error summary when delivery fails; empty or omitted on success."
     },
     {
       "name": "error_code",
       "type": "string",
+      "required": false,
       "description": "Optional and typically present on failed sends (`sent=false`). Machine-readable error code when Slack delivery fails."
     }
   ],
