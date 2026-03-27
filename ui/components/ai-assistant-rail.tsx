@@ -33,7 +33,7 @@ const EXAMPLE_PROMPTS = [
 
 type AiAssistantRailProps = {
   onClose?: () => void;
-  onNodeRecordSaved?: () => Promise<void> | void;
+  onNodeRecordSaved?: (typeName: string) => Promise<void> | void;
   onSelectType: (typeName: string) => void;
   stepCatalog: StepTypeEntry[];
 };
@@ -91,7 +91,8 @@ export function AiAssistantRail({
         source_ref: trimmedPrompt,
         type_name: identity.type_name
       });
-      await onNodeRecordSaved?.();
+      await onNodeRecordSaved?.(record.type_name);
+      onSelectType(record.type_name);
       setSavedNodeLabel(record.label);
     } catch (nextError) {
       setSaveError(
@@ -156,11 +157,11 @@ export function AiAssistantRail({
                 onClick={() => void handleSaveGeneratedNode()}
                 type="button"
               >
-                {isSavingNode ? "Saving…" : "Save generated node"}
+                {isSavingNode ? "Saving…" : "Save and add node"}
               </button>
               {savedNodeLabel ? (
                 <span className="text-[12px] leading-5 text-[#4f5964]">
-                  Saved as {savedNodeLabel}.
+                  Added {savedNodeLabel}.
                 </span>
               ) : null}
             </div>
