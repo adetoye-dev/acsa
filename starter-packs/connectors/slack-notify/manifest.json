@@ -4,15 +4,176 @@
   "runtime": "process",
   "entry": "python3 main.py",
   "inputs": [
-    "message"
+    {
+      "name": "message",
+      "type": "string",
+      "description": "Message text to post to Slack. Authentication is provided via environment/credential injection (`SLACK_WEBHOOK_URL` or `SLACK_BOT_TOKEN`).",
+      "required": true
+    },
+    {
+      "name": "channel",
+      "type": "string",
+      "description": "Target channel or user ID. If omitted, connector defaults are used.",
+      "required": false
+    },
+    {
+      "name": "username",
+      "type": "string",
+      "description": "Optional display username override for webhook mode.",
+      "required": false
+    },
+    {
+      "name": "icon_emoji",
+      "type": "string",
+      "description": "Optional emoji icon override for webhook mode.",
+      "required": false
+    },
+    {
+      "name": "attachments",
+      "type": "array",
+      "description": "Optional legacy Slack attachments payload (deprecated). Prefer blocks for new integrations.",
+      "required": false,
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string" },
+          "text": { "type": "string" },
+          "fallback": { "type": "string" },
+          "color": { "type": "string" },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": { "type": "string" },
+                "value": { "type": "string" },
+                "short": { "type": "boolean" }
+              },
+              "required": ["title", "value"]
+            }
+          }
+        },
+        "anyOf": [
+          { "required": ["title"] },
+          { "required": ["text"] },
+          { "required": ["fallback"] }
+        ]
+      }
+    },
+    {
+      "name": "blocks",
+      "type": "array",
+      "description": "Optional Slack Block Kit payload for modern message layouts. Recommended for new integrations.",
+      "required": false,
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "section",
+              "divider",
+              "actions",
+              "image",
+              "header",
+              "context"
+            ]
+          },
+          "text": {
+            "oneOf": [
+              { "type": "string" },
+              { "type": "object" }
+            ]
+          },
+          "fields": {
+            "type": "array",
+            "items": { "type": "object" }
+          },
+          "elements": {
+            "type": "array",
+            "items": { "type": "object" }
+          },
+          "image_url": {
+            "type": "string"
+          },
+          "alt_text": {
+            "type": "string"
+          }
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "type": { "enum": ["section"] }
+            },
+            "anyOf": [
+              { "required": ["text"] },
+              { "required": ["fields"] }
+            ]
+          },
+          {
+            "properties": {
+              "type": { "enum": ["divider"] }
+            }
+          },
+          {
+            "properties": {
+              "type": { "enum": ["actions"] }
+            },
+            "required": ["elements"]
+          },
+          {
+            "properties": {
+              "type": { "enum": ["image"] }
+            },
+            "required": ["image_url", "alt_text"]
+          },
+          {
+            "properties": {
+              "type": { "enum": ["header"] }
+            },
+            "required": ["text"]
+          },
+          {
+            "properties": {
+              "type": { "enum": ["context"] }
+            },
+            "required": ["elements"]
+          }
+        ]
+      }
+    }
   ],
   "outputs": [
-    "sent",
-    "channel",
-    "message"
+    {
+      "name": "sent",
+      "type": "boolean",
+      "required": true,
+      "description": "Always present. True when Slack accepted the message send request; false otherwise."
+    },
+    {
+      "name": "channel",
+      "type": "string",
+      "description": "Optional and typically present on successful sends (`sent=true`). Resolved Slack channel identifier or name used for delivery."
+    },
+    {
+      "name": "message",
+      "type": "string",
+      "description": "Optional and typically present on successful sends (`sent=true`). Posted message text content returned/echoed by the connector."
+    },
+    {
+      "name": "error",
+      "type": "string",
+      "description": "Optional and typically present on failed sends (`sent=false`). Sanitized error summary when delivery fails; empty or omitted on success."
+    },
+    {
+      "name": "error_code",
+      "type": "string",
+      "description": "Optional and typically present on failed sends (`sent=false`). Machine-readable error code when Slack delivery fails."
+    }
   ],
   "limits": {
-    "timeout": 3000
+    "timeout": 30000
   },
   "version": "0.1.0"
 }

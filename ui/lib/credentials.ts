@@ -31,13 +31,17 @@ export async function fetchCredentials() {
 }
 
 export async function saveCredential(name: string, value: string) {
-  return fetchEngineJson<CredentialItem>("/api/credentials", {
-    body: JSON.stringify({ name, value }),
-    headers: {
-      "content-type": "application/json"
-    },
-    method: "POST"
-  });
+  try {
+    return await fetchEngineJson<CredentialItem>("/api/credentials", {
+      body: JSON.stringify({ name, value }),
+      headers: {
+        "content-type": "application/json"
+      },
+      method: "POST"
+    });
+  } catch (error) {
+    throw error;
+  }
 }
 
 export async function removeCredential(name: string) {

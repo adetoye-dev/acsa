@@ -77,7 +77,7 @@ export function CredentialsPage() {
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
   const [editingName, setEditingName] = useState<string | null>(null);
-  const [removingName, setRemovingName] = useState<string | null>(null);
+  const [deletingNames, setDeletingNames] = useState<Set<string>>(() => new Set());
 
   useEffect(function loadCredentialsPageOnMountEffect() {
     void refresh();
@@ -125,15 +125,19 @@ export function CredentialsPage() {
     }));
   }, [configuredNames, connectorReferences, starterReferenceSet, starterReferences]);
 
+  async function loadPageData() {
+    const [credentialResponse, connectorResponse] = await Promise.all([
+      fetchCredentials(),
+      fetchEngineJson<ConnectorInventoryResponse>("/api/connectors")
+    ]);
+    setCredentials(credentialResponse.credentials);
+    setConnectorInventory(connectorResponse);
+  }
+
   async function refresh() {
     setIsLoading(true);
     try {
-      const [credentialResponse, connectorResponse] = await Promise.all([
-        fetchCredentials(),
-        fetchEngineJson<ConnectorInventoryResponse>("/api/connectors")
-      ]);
-      setCredentials(credentialResponse.credentials);
-      setConnectorInventory(connectorResponse);
+      await loadPageData();
       setError(null);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Failed to load credentials");
@@ -149,31 +153,69 @@ export function CredentialsPage() {
     }
 
     const normalizedName = name.trim().toUpperCase();
-    const preservedValue = value;
+    const normalizedValue = value.trim();
 
     setIsSaving(true);
     try {
-      await saveCredential(normalizedName, preservedValue);
+      try {
+        await saveCredential(normalizedName, normalizedValue);
+      } catch (nextError) {
+        setError(nextError instanceof Error ? nextError.message : "Failed to save credential");
+        return;
+      }
+
       setName("");
       setValue("");
       setEditingName(null);
-      await refresh();
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Failed to save credential");
+      try {
+        await loadPageData();
+        setError(null);
+      } catch (nextError) {
+        setError(
+          nextError instanceof Error
+            ? `Credential saved but refresh failed: ${nextError.message}`
+            : "Credential saved but failed to refresh credentials"
+        );
+      }
     } finally {
       setIsSaving(false);
     }
   }
 
   async function handleDelete(credentialName: string) {
-    setRemovingName(credentialName);
+    if (isSaving) {
+      return;
+    }
+
+    setDeletingNames((current) => {
+      const next = new Set(current);
+      next.add(credentialName);
+      return next;
+    });
     try {
-      await removeCredential(credentialName);
-      await refresh();
-    } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "Failed to delete credential");
+      try {
+        await removeCredential(credentialName);
+      } catch (nextError) {
+        setError(nextError instanceof Error ? nextError.message : "Failed to delete credential");
+        return;
+      }
+
+      try {
+        await loadPageData();
+        setError(null);
+      } catch (nextError) {
+        setError(
+          nextError instanceof Error
+            ? `Credential deleted but refresh failed: ${nextError.message}`
+            : "Credential deleted but failed to refresh credentials"
+        );
+      }
     } finally {
-      setRemovingName(null);
+      setDeletingNames((current) => {
+        const next = new Set(current);
+        next.delete(credentialName);
+        return next;
+      });
     }
   }
 
@@ -288,7 +330,7 @@ export function CredentialsPage() {
                       <div className="flex shrink-0 items-center gap-2">
                         <button
                           className="ui-button"
-                          disabled={isSaving}
+                          disabled={isSaving || deletingNames.has(credential.name)}
                           onClick={() => startReplace(credential.name)}
                           type="button"
                         >
@@ -296,11 +338,11 @@ export function CredentialsPage() {
                         </button>
                         <button
                           className="ui-button ui-button-danger"
-                          disabled={removingName === credential.name}
+                          disabled={isSaving || deletingNames.has(credential.name)}
                           onClick={() => void handleDelete(credential.name)}
                           type="button"
                         >
-                          {removingName === credential.name ? "Deleting..." : "Delete"}
+                          {deletingNames.has(credential.name) ? "Deleting..." : "Delete"}
                         </button>
                       </div>
                     </div>

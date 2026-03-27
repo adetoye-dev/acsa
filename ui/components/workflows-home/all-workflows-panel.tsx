@@ -60,7 +60,7 @@ export function AllWorkflowsPanel({
           </PanelEmptyState>
         )}
 
-        <div className="mt-4 border-t border-black/10 px-1 pt-4">
+        <div className="mt-4 border-t border-black/10 px-0 pt-4">
           <div className="flex items-center justify-between gap-4">
             <h3 className="text-sm font-medium tracking-tight text-ink">Invalid YAML files</h3>
             <span className="ui-badge">{invalidFiles.length}</span>

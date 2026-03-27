@@ -37,6 +37,9 @@ export async function fetchStarterConnectorPacks(): Promise<
 export async function installStarterConnectorPack(
   packId: string
 ): Promise<StarterConnectorPack> {
+  if (!packId || !packId.trim()) {
+    throw new Error("packId must be provided and non-empty");
+  }
   return fetchEngineJson<StarterConnectorPack>(
     `/api/connectors/starter-packs/${encodeURIComponent(packId)}/install`,
     {

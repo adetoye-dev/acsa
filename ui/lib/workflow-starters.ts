@@ -26,7 +26,7 @@ export const WORKFLOW_STARTERS: WorkflowStarter[] = [
   {
     description: "Collect AI news, draft a concise brief, and deliver it by email.",
     id: "ai-news-intelligence-demo",
-    name: "Send a daily AI news brief",
+    name: "Send an AI news brief",
     requiredStepTypes: [
       "ai_news_collector",
       "ai_news_brief_renderer",

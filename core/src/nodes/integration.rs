@@ -439,7 +439,7 @@ fn build_headers(
             let env_value =
                 resolve_secret_value(env_name).ok_or_else(|| NodeError::InvalidParameter {
                     parameter: "headers_env".to_string(),
-                    message: format!("environment variable {env_name} is not set"),
+                    message: format!("secret '{env_name}' could not be resolved (missing or unset)"),
                 })?;
             let header_value =
                 HeaderValue::from_str(&env_value).map_err(|error| NodeError::InvalidParameter {
@@ -477,7 +477,7 @@ fn resolve_connection_string(params: &Value) -> Result<String, NodeError> {
         let connection =
             resolve_secret_value(env_name).ok_or_else(|| NodeError::InvalidParameter {
                 parameter: "connection_env".to_string(),
-                message: format!("environment variable {env_name} is not set"),
+                message: format!("secret '{env_name}' could not be resolved (missing or unset)"),
             })?;
         if !(connection.starts_with("postgres://") || connection.starts_with("postgresql://")) {
             return Err(NodeError::InvalidParameter {

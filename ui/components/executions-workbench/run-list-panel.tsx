@@ -116,10 +116,10 @@ export function RunListPanel({
               return (
                 <button
                   key={run.id}
-                  className={`w-full border-b border-black/8 px-4 py-3 text-left transition ${
+                  className={`w-full border-b border-black/10 px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/30 ${
                     active
-                      ? "bg-[#f6f5ff] text-ink"
-                      : "bg-white text-ink hover:bg-[#fafafd]"
+                      ? "bg-ink/6 text-ink"
+                      : "bg-white text-ink hover:bg-slate/10"
                   }`}
                   onClick={() => onSelectRun(run.id)}
                   type="button"

@@ -68,16 +68,27 @@ export function N8nImportPanel({
   }
 
   async function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
+    const inputEl = event.currentTarget;
+    const file = inputEl.files?.[0];
     if (!file) {
       return;
     }
 
-    const nextText = await file.text();
-    setJsonInput(nextText);
-    setError(null);
-    setResult(null);
-    event.currentTarget.value = "";
+    try {
+      const nextText = await file.text();
+      setJsonInput(nextText);
+      setError(null);
+      setResult(null);
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error
+          ? `Failed to read selected file: ${nextError.message}`
+          : "Failed to read selected file"
+      );
+      setResult(null);
+    } finally {
+      inputEl.value = "";
+    }
   }
 
   return (

@@ -84,6 +84,7 @@ export function WorkflowsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isImportPanelOpen, setIsImportPanelOpen] = useState(false);
+  const [resolvingTaskIds, setResolvingTaskIds] = useState<Record<string, boolean>>({});
 
   useEffect(function loadLaunchpadDataOnMountEffect() {
     void refreshLaunchpadData();
@@ -109,18 +110,40 @@ export function WorkflowsPage() {
     patch({ isRefreshingTasks: true });
     try {
       setRecentEntries(readRecentWorkflows(window.localStorage));
-      const [workflowResponse, taskResponse] = await Promise.all([
+      const [workflowResult, taskResult] = await Promise.allSettled([
         fetchEngineJson<WorkflowInventoryResponse>("/api/workflows"),
         fetchEngineJson<HumanTaskResponse>("/human-tasks")
       ]);
-      setInventory(workflowResponse);
-      const pendingTasks = Array.isArray(taskResponse?.tasks) ? taskResponse.tasks : [];
-      patch({ pendingTasks });
-      setError(null);
-    } catch (nextError) {
-      setError(
-        nextError instanceof Error ? nextError.message : "Failed to load workflows"
-      );
+      let workflowsError: string | null = null;
+      let tasksError: string | null = null;
+
+      if (workflowResult.status === "fulfilled") {
+        setInventory(workflowResult.value);
+      } else {
+        workflowsError =
+          workflowResult.reason instanceof Error
+            ? workflowResult.reason.message
+            : "Failed to load workflows";
+      }
+
+      if (taskResult.status === "fulfilled") {
+        const fetchedPendingTasks = Array.isArray(taskResult.value?.tasks)
+          ? taskResult.value.tasks
+          : [];
+        patch({ pendingTasks: fetchedPendingTasks });
+      } else {
+        patch({ pendingTasks: [] });
+        tasksError =
+          taskResult.reason instanceof Error
+            ? taskResult.reason.message
+            : "Failed to load human tasks";
+      }
+
+      if (workflowsError || tasksError) {
+        setError([workflowsError, tasksError].filter(Boolean).join("; "));
+      } else {
+        setError(null);
+      }
     } finally {
       patch({ isRefreshingTasks: false });
       setIsLoading(false);
@@ -193,6 +216,10 @@ export function WorkflowsPage() {
   }
 
   async function handleResolveApproval(taskId: string, approved: boolean) {
+    if (resolvingTaskIds[taskId]) {
+      return;
+    }
+    setResolvingTaskIds((current) => ({ ...current, [taskId]: true }));
     try {
       await fetchEngineJson<RunSummary>(`/human-tasks/${taskId}/resolve`, {
         body: JSON.stringify({ approved }),
@@ -203,15 +230,26 @@ export function WorkflowsPage() {
       await refreshLaunchpadData();
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Failed to resolve task");
+    } finally {
+      setResolvingTaskIds((current) => {
+        const next = { ...current };
+        delete next[taskId];
+        return next;
+      });
     }
   }
 
   async function handleResolveManualInput(taskId: string) {
+    if (resolvingTaskIds[taskId]) {
+      return;
+    }
     const value = taskValues[taskId] ?? "";
     if (!value.trim()) {
       setError("Enter a value before resolving this task.");
       return;
     }
+
+    setResolvingTaskIds((current) => ({ ...current, [taskId]: true }));
 
     try {
       await fetchEngineJson<RunSummary>(`/human-tasks/${taskId}/resolve`, {
@@ -223,6 +261,12 @@ export function WorkflowsPage() {
       await refreshLaunchpadData();
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "Failed to resolve task");
+    } finally {
+      setResolvingTaskIds((current) => {
+        const next = { ...current };
+        delete next[taskId];
+        return next;
+      });
     }
   }
 
@@ -308,9 +352,11 @@ export function WorkflowsPage() {
           <PendingTasksRail
             isRefreshing={isRefreshingTasks}
             onApprove={(taskId, approved) => void handleResolveApproval(taskId, approved)}
+            onError={(message) => setError(message)}
             onRefresh={() => void refreshLaunchpadData()}
             onResolveValue={(taskId) => void handleResolveManualInput(taskId)}
             onValueChange={(taskId, value) => setTaskValue(taskId, value)}
+            resolvingTaskIds={resolvingTaskIds}
             taskValues={taskValues}
             tasks={pendingTasks}
           />

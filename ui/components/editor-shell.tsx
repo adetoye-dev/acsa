@@ -188,6 +188,8 @@ export function EditorShell({
   const [activeRightPanels, setActiveRightPanels] = useState<RightRailPanel[]>([]);
   const [workflowYamlDraft, setWorkflowYamlDraft] = useState("");
   const [workflowYamlError, setWorkflowYamlError] = useState<string | null>(null);
+  const workflowYamlDraftRef = useRef("");
+  const workflowYamlErrorRef = useRef<string | null>(null);
   const [liveRunId, setLiveRunId] = useState<string | null>(null);
   const [liveRunDetail, setLiveRunDetail] = useState<RunDetailResponse | null>(null);
   const hasCreatedDraftOnBoot = useRef(false);
@@ -301,8 +303,28 @@ export function EditorShell({
       return;
     }
 
+    if (
+      activeWorkflowId &&
+      activeWorkflowId !== requestedWorkflowId &&
+      activeWorkflow?.localDraft &&
+      !window.confirm(
+        "You have an unsaved draft workflow. Open the requested workflow and discard draft changes?"
+      )
+    ) {
+      navigateToWorkflowRoute(activeWorkflowId);
+      return;
+    }
+
     void handleSelectWorkflow(requestedWorkflowId);
-  }, [activeWorkflowId, createDraftOnBoot, isBooting, requestedWorkflowId, syncRoute, workflows]);
+  }, [
+    activeWorkflow?.localDraft,
+    activeWorkflowId,
+    createDraftOnBoot,
+    isBooting,
+    requestedWorkflowId,
+    syncRoute,
+    workflows
+  ]);
 
   useEffect(function clearLiveRunForWorkflowSwitchEffect() {
     if (!activeWorkflow) {
@@ -363,9 +385,18 @@ export function EditorShell({
     if (centerView !== "yaml") {
       return;
     }
+
     setWorkflowYamlDraft(activeWorkflow?.yaml ?? "");
     setWorkflowYamlError(null);
   }, [activeWorkflow?.id, centerView]);
+
+  useEffect(function updateWorkflowYamlDraftRefEffect() {
+    workflowYamlDraftRef.current = workflowYamlDraft;
+  }, [workflowYamlDraft]);
+
+  useEffect(function updateWorkflowYamlErrorRefEffect() {
+    workflowYamlErrorRef.current = workflowYamlError;
+  }, [workflowYamlError]);
 
   useEffect(function pollLiveRunDetailEffect() {
     if (!liveRunId || !isRunning) {
@@ -1233,6 +1264,22 @@ export function EditorShell({
   }
 
   async function handleSelectWorkflow(workflowId: string) {
+    const currentWorkflowYaml = activeWorkflow?.yaml;
+
+    if (
+      centerView === "yaml" &&
+      workflowYamlErrorRef.current &&
+      (currentWorkflowYaml === undefined || workflowYamlDraftRef.current !== currentWorkflowYaml) &&
+      !window.confirm(
+        "You have YAML validation errors and unsaved edits. Switch workflows and discard current YAML draft changes?"
+      )
+    ) {
+      if (activeWorkflowId) {
+        navigateToWorkflowRoute(activeWorkflowId);
+      }
+      return;
+    }
+
     patchWorkflowState({
       activeWorkflowId: workflowId,
       globalError: null,
@@ -1854,86 +1901,29 @@ export function EditorShell({
                       stepCatalog={stepCatalog}
                     />
                   ) : (
-                    <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
-                      <div className="border-b border-black/10 px-3 py-2.5">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/60">
-                              {selectedNode ? "Selected node" : "Configuration"}
-                            </div>
-                            {selectedStep ? (
-                              <div className="mt-1.5 space-y-1">
-                                <input
-                                  aria-label="Step id"
-                                  className="w-full rounded-[10px] border border-black/10 bg-white px-2.5 py-1.5 font-mono text-[14px] font-medium tracking-tight text-ink outline-none transition focus:border-[#6f63ff]/45 focus:bg-white focus:ring-1 focus:ring-[#6f63ff]/12 placeholder:text-slate/45"
-                                  id="selected-step-name"
-                                  onChange={(event) => handleSelectedNodeIdChange(event.target.value)}
-                                  placeholder="rename-step"
-                                  spellCheck={false}
-                                  type="text"
-                                  value={selectedStep.id}
-                                />
-                              </div>
-                            ) : selectedNode?.data.kind === "trigger" ? (
-                              <div className="mt-0.5 text-[15px] font-medium tracking-tight text-ink">
-                                Trigger
-                              </div>
-                            ) : (
-                              <div className="mt-0.5 text-[14px] text-slate">
-                                Select a node to edit its settings here.
-                              </div>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {selectedStep ? (
-                              <button
-                                aria-label={`Delete ${selectedStep.id}`}
-                                className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-black/10 bg-white text-slate/70 transition hover:border-ember/25 hover:bg-ember/10 hover:text-ember"
-                                onClick={() => handleDeleteSelectedNode(selectedStep.id)}
-                                type="button"
-                              >
-                                <TrashIcon />
-                              </button>
-                            ) : selectedNode?.data.kind === "trigger" ? (
-                              <ShellBadge
-                                label={activeWorkflow?.workflow.trigger.type ?? "manual"}
-                                tone="info"
-                              />
-                            ) : null}
-                            <button
-                              aria-label="Close configuration"
-                              className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-black/10 bg-white text-slate/70 transition hover:border-black/16 hover:bg-[#fafafb] hover:text-ink"
-                              onClick={() => {
-                                closeRightPanel("config");
-                                patchWorkflowState({ selectedNodeId: null });
-                              }}
-                              type="button"
-                            >
-                              <ClosePanelIcon />
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="sleek-scroll min-h-0 overflow-y-auto">
-                        <NodeInspector
-                          activeWorkflow={activeWorkflow}
-                          inspectorError={inspectorError}
-                          onSelectedNodeParamsChange={handleSelectedNodeParamsChange}
-                          onSelectedNodeRetryAttemptsChange={handleSelectedNodeRetryAttemptsChange}
-                          onSelectedNodeRetryBackoffChange={handleSelectedNodeRetryBackoffChange}
-                          onSelectedNodeTimeoutChange={handleSelectedNodeTimeoutChange}
-                          onSelectedNodeTypeChange={handleSelectedNodeTypeChange}
-                          onTriggerDetailsChange={handleTriggerDetailsChange}
-                          onTriggerTypeChange={handleTriggerTypeChange}
-                          selectedNode={selectedNode}
-                          stepCatalog={stepCatalog}
-                          stepParamsDraft={stepParamsDraft}
-                          triggerCatalog={triggerCatalog}
-                          triggerDetailsDraft={triggerDetailsDraft}
-                        />
-                      </div>
-                    </div>
+                    <ConfigRail
+                      activeWorkflow={activeWorkflow}
+                      inspectorError={inspectorError}
+                      onClose={() => {
+                        closeRightPanel("config");
+                        patchWorkflowState({ selectedNodeId: null });
+                      }}
+                      onDeleteSelectedNode={handleDeleteSelectedNode}
+                      onSelectedNodeIdChange={handleSelectedNodeIdChange}
+                      onSelectedNodeParamsChange={handleSelectedNodeParamsChange}
+                      onSelectedNodeRetryAttemptsChange={handleSelectedNodeRetryAttemptsChange}
+                      onSelectedNodeRetryBackoffChange={handleSelectedNodeRetryBackoffChange}
+                      onSelectedNodeTimeoutChange={handleSelectedNodeTimeoutChange}
+                      onSelectedNodeTypeChange={handleSelectedNodeTypeChange}
+                      onTriggerDetailsChange={handleTriggerDetailsChange}
+                      onTriggerTypeChange={handleTriggerTypeChange}
+                      selectedNode={selectedNode}
+                      selectedStep={selectedStep}
+                      stepCatalog={stepCatalog}
+                      stepParamsDraft={stepParamsDraft}
+                      triggerCatalog={triggerCatalog}
+                      triggerDetailsDraft={triggerDetailsDraft}
+                    />
                   )}
                 </aside>
               ))
@@ -1950,81 +1940,148 @@ export function EditorShell({
                       stepCatalog={stepCatalog}
                     />
                   ) : (
-                    <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
-                      <div className="border-b border-black/10 px-3 py-2.5">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/60">
-                              {selectedNode ? "Selected node" : "Configuration"}
-                            </div>
-                            {selectedStep ? (
-                              <div className="mt-1.5 space-y-1">
-                                <input
-                                  aria-label="Step id"
-                                  className="w-full rounded-[10px] border border-black/10 bg-white px-2.5 py-1.5 font-mono text-[14px] font-medium tracking-tight text-ink outline-none transition focus:border-[#6f63ff]/45 focus:bg-white focus:ring-1 focus:ring-[#6f63ff]/12 placeholder:text-slate/45"
-                                  id="selected-step-name"
-                                  onChange={(event) => handleSelectedNodeIdChange(event.target.value)}
-                                  placeholder="rename-step"
-                                  spellCheck={false}
-                                  type="text"
-                                  value={selectedStep.id}
-                                />
-                              </div>
-                            ) : selectedNode?.data.kind === "trigger" ? (
-                              <div className="mt-0.5 text-[15px] font-medium tracking-tight text-ink">
-                                Trigger
-                              </div>
-                            ) : (
-                              <div className="mt-0.5 text-[14px] text-slate">
-                                Select a node to edit its settings here.
-                              </div>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {selectedStep ? (
-                              <button
-                                aria-label={`Delete ${selectedStep.id}`}
-                                className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-black/10 bg-white text-slate/70 transition hover:border-ember/25 hover:bg-ember/10 hover:text-ember"
-                                onClick={() => handleDeleteSelectedNode(selectedStep.id)}
-                                type="button"
-                              >
-                                <TrashIcon />
-                              </button>
-                            ) : selectedNode?.data.kind === "trigger" ? (
-                              <ShellBadge
-                                label={activeWorkflow?.workflow.trigger.type ?? "manual"}
-                                tone="info"
-                              />
-                            ) : null}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="sleek-scroll min-h-0 overflow-y-auto">
-                        <NodeInspector
-                          activeWorkflow={activeWorkflow}
-                          inspectorError={inspectorError}
-                          onSelectedNodeParamsChange={handleSelectedNodeParamsChange}
-                          onSelectedNodeRetryAttemptsChange={handleSelectedNodeRetryAttemptsChange}
-                          onSelectedNodeRetryBackoffChange={handleSelectedNodeRetryBackoffChange}
-                          onSelectedNodeTimeoutChange={handleSelectedNodeTimeoutChange}
-                          onSelectedNodeTypeChange={handleSelectedNodeTypeChange}
-                          onTriggerDetailsChange={handleTriggerDetailsChange}
-                          onTriggerTypeChange={handleTriggerTypeChange}
-                          selectedNode={selectedNode}
-                          stepCatalog={stepCatalog}
-                          stepParamsDraft={stepParamsDraft}
-                          triggerCatalog={triggerCatalog}
-                          triggerDetailsDraft={triggerDetailsDraft}
-                        />
-                      </div>
-                    </div>
+                    <ConfigRail
+                      activeWorkflow={activeWorkflow}
+                      inspectorError={inspectorError}
+                      onDeleteSelectedNode={handleDeleteSelectedNode}
+                      onSelectedNodeIdChange={handleSelectedNodeIdChange}
+                      onSelectedNodeParamsChange={handleSelectedNodeParamsChange}
+                      onSelectedNodeRetryAttemptsChange={handleSelectedNodeRetryAttemptsChange}
+                      onSelectedNodeRetryBackoffChange={handleSelectedNodeRetryBackoffChange}
+                      onSelectedNodeTimeoutChange={handleSelectedNodeTimeoutChange}
+                      onSelectedNodeTypeChange={handleSelectedNodeTypeChange}
+                      onTriggerDetailsChange={handleTriggerDetailsChange}
+                      onTriggerTypeChange={handleTriggerTypeChange}
+                      selectedNode={selectedNode}
+                      selectedStep={selectedStep}
+                      stepCatalog={stepCatalog}
+                      stepParamsDraft={stepParamsDraft}
+                      triggerCatalog={triggerCatalog}
+                      triggerDetailsDraft={triggerDetailsDraft}
+                    />
                   )}
                 </aside>
               ) : null}
         </section>
       </div>
     </main>
+  );
+}
+
+function ConfigRail({
+  activeWorkflow,
+  inspectorError,
+  onClose,
+  onDeleteSelectedNode,
+  onSelectedNodeIdChange,
+  onSelectedNodeParamsChange,
+  onSelectedNodeRetryAttemptsChange,
+  onSelectedNodeRetryBackoffChange,
+  onSelectedNodeTimeoutChange,
+  onSelectedNodeTypeChange,
+  onTriggerDetailsChange,
+  onTriggerTypeChange,
+  selectedNode,
+  selectedStep,
+  stepCatalog,
+  stepParamsDraft,
+  triggerCatalog,
+  triggerDetailsDraft
+}: {
+  activeWorkflow: WorkflowDocument | null;
+  inspectorError: string | null;
+  onClose?: () => void;
+  onDeleteSelectedNode: (stepId: string) => void;
+  onSelectedNodeIdChange: (value: string) => void;
+  onSelectedNodeParamsChange: (text: string) => void;
+  onSelectedNodeRetryAttemptsChange: (value: string) => void;
+  onSelectedNodeRetryBackoffChange: (value: string) => void;
+  onSelectedNodeTimeoutChange: (value: string) => void;
+  onSelectedNodeTypeChange: (nextType: string) => void;
+  onTriggerDetailsChange: (text: string) => void;
+  onTriggerTypeChange: (triggerType: string) => void;
+  selectedNode: CanvasNode | null;
+  selectedStep: { id: string } | null;
+  stepCatalog: StepTypeEntry[];
+  stepParamsDraft: string;
+  triggerCatalog: TriggerTypeEntry[];
+  triggerDetailsDraft: string;
+}) {
+  return (
+    <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+      <div className="border-b border-black/10 px-3 py-2.5">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/60">
+              {selectedNode ? "Selected node" : "Configuration"}
+            </div>
+            {selectedStep ? (
+              <div className="mt-1.5 space-y-1">
+                <input
+                  aria-label="Step id"
+                  className="w-full rounded-[10px] border border-black/10 bg-white px-2.5 py-1.5 font-mono text-[14px] font-medium tracking-tight text-ink outline-none transition focus:border-[#6f63ff]/45 focus:bg-white focus:ring-1 focus:ring-[#6f63ff]/12 placeholder:text-slate/45"
+                  id="selected-step-name"
+                  onChange={(event) => onSelectedNodeIdChange(event.target.value)}
+                  placeholder="rename-step"
+                  spellCheck={false}
+                  type="text"
+                  value={selectedStep.id}
+                />
+              </div>
+            ) : selectedNode?.data.kind === "trigger" ? (
+              <div className="mt-0.5 text-[15px] font-medium tracking-tight text-ink">Trigger</div>
+            ) : (
+              <div className="mt-0.5 text-[14px] text-slate">
+                Select a node to edit its settings here.
+              </div>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {selectedStep ? (
+              <button
+                aria-label={`Delete ${selectedStep.id}`}
+                className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-black/10 bg-white text-slate/70 transition hover:border-ember/25 hover:bg-ember/10 hover:text-ember"
+                onClick={() => onDeleteSelectedNode(selectedStep.id)}
+                type="button"
+              >
+                <TrashIcon />
+              </button>
+            ) : selectedNode?.data.kind === "trigger" ? (
+              <ShellBadge label={activeWorkflow?.workflow.trigger.type ?? "manual"} tone="info" />
+            ) : null}
+            {onClose ? (
+              <button
+                aria-label="Close configuration"
+                className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-black/10 bg-white text-slate/70 transition hover:border-black/16 hover:bg-[#fafafb] hover:text-ink"
+                onClick={onClose}
+                type="button"
+              >
+                <ClosePanelIcon />
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      <div className="sleek-scroll min-h-0 overflow-y-auto">
+        <NodeInspector
+          activeWorkflow={activeWorkflow}
+          inspectorError={inspectorError}
+          onSelectedNodeParamsChange={onSelectedNodeParamsChange}
+          onSelectedNodeRetryAttemptsChange={onSelectedNodeRetryAttemptsChange}
+          onSelectedNodeRetryBackoffChange={onSelectedNodeRetryBackoffChange}
+          onSelectedNodeTimeoutChange={onSelectedNodeTimeoutChange}
+          onSelectedNodeTypeChange={onSelectedNodeTypeChange}
+          onTriggerDetailsChange={onTriggerDetailsChange}
+          onTriggerTypeChange={onTriggerTypeChange}
+          selectedNode={selectedNode}
+          stepCatalog={stepCatalog}
+          stepParamsDraft={stepParamsDraft}
+          triggerCatalog={triggerCatalog}
+          triggerDetailsDraft={triggerDetailsDraft}
+        />
+      </div>
+    </div>
   );
 }
 

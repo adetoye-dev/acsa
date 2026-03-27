@@ -64,5 +64,5 @@ export function nextImportedWorkflowId(
 }
 
 export function importHasOpenableDraft(result: N8nImportResponse | null) {
-  return Boolean(result?.yaml.trim());
+  return Boolean(result?.yaml?.trim());
 }

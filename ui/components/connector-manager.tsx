@@ -347,7 +347,7 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
                     {connector.notes.length > 0 ? (
                       <div className="mt-3 rounded-xl border border-ember/15 bg-ember/5 px-3 py-3 text-sm leading-6 text-ember">
                         {connector.notes.map((note, index) => (
-                          <p key={`${note}-${index}`}>{note}</p>
+                          <p key={index}>{note}</p>
                         ))}
                       </div>
                     ) : null}

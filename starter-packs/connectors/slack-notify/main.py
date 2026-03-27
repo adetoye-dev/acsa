@@ -7,7 +7,7 @@ from urllib import error as urllib_error
 from urllib import request
 
 
-def _post_json(url: str, body: dict, headers: dict | None = None) -> dict | str:
+def _post_json(url: str, body: dict, headers: dict | None = None) -> dict:
     payload = json.dumps(body).encode("utf-8")
     merged_headers = {"content-type": "application/json"}
     if headers:
@@ -23,7 +23,7 @@ def _post_json(url: str, body: dict, headers: dict | None = None) -> dict | str:
         except json.JSONDecodeError:
             if response_body.lower() == "ok":
                 return {"ok": True}
-            return response_body
+            return {"ok": False, "error": "non_json_response", "text": response_body}
 
 
 def main() -> None:
@@ -36,14 +36,19 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
-    except ValueError as error:
-        print(f"invalid connector payload: {error}", file=sys.stderr)
-        sys.exit(1)
 
     inputs = payload.get("inputs", {})
     params = payload.get("params", {})
-    message = str(inputs.get("message", "")).strip()
-    channel = params.get("channel", "#general")
+
+    raw_message = inputs.get("message", "")
+    message = "" if raw_message is None else str(raw_message).strip()
+
+    raw_channel = inputs.get("channel", params.get("channel", "#general"))
+    channel = "#general" if raw_channel is None else str(raw_channel).strip() or "#general"
+
+    username = inputs.get("username")
+    icon_emoji = inputs.get("icon_emoji")
+    attachments = inputs.get("attachments")
 
     if not message:
         print(
@@ -58,8 +63,8 @@ def main() -> None:
         )
         sys.exit(1)
 
-    webhook_url = os.getenv("SLACK_WEBHOOK_URL")
-    bot_token = os.getenv("SLACK_BOT_TOKEN")
+    webhook_url = (os.getenv("SLACK_WEBHOOK_URL") or "").strip()
+    bot_token = (os.getenv("SLACK_BOT_TOKEN") or "").strip()
 
     if not webhook_url and not bot_token:
         print(
@@ -76,13 +81,30 @@ def main() -> None:
 
     try:
         if webhook_url:
-            response = _post_json(webhook_url, {"text": message, "channel": channel})
+            webhook_payload = {"text": message}
+            if isinstance(username, str) and username.strip():
+                webhook_payload["username"] = username.strip()
+            if isinstance(icon_emoji, str) and icon_emoji.strip():
+                webhook_payload["icon_emoji"] = icon_emoji.strip()
+            if isinstance(attachments, list):
+                webhook_payload["attachments"] = attachments
+
+            # Incoming webhooks can ignore channel overrides depending on workspace policy.
+            response = _post_json(webhook_url, webhook_payload)
             if not response.get("ok", True):
                 raise RuntimeError(response.get("error", "webhook request failed"))
         else:
+            bot_payload = {"channel": channel, "text": message}
+            if isinstance(username, str) and username.strip():
+                bot_payload["username"] = username.strip()
+            if isinstance(icon_emoji, str) and icon_emoji.strip():
+                bot_payload["icon_emoji"] = icon_emoji.strip()
+            if isinstance(attachments, list):
+                bot_payload["attachments"] = attachments
+
             response = _post_json(
                 "https://slack.com/api/chat.postMessage",
-                {"channel": channel, "text": message},
+                bot_payload,
                 headers={"Authorization": f"Bearer {bot_token}"},
             )
             if not response.get("ok", False):

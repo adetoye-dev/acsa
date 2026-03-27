@@ -16,10 +16,10 @@ connector scaffold you can edit and commit.
 
 ## Installation
 
-1. Open Connectors in the ACSA UI.
+1. Open Connectors in the ACSA UI (the ACSA web application).
 2. Install the Slack Notify starter pack.
 3. Confirm it appears in installed packs and connector inventory.
-4. Add the required Slack secret(s) in `/credentials` or env vars.
+4. Add the required Slack secret(s) in the project-root `credentials` directory or via environment variables (`SLACK_WEBHOOK_URL`, `SLACK_BOT_TOKEN`).
 
 ## Configuration
 
@@ -27,11 +27,32 @@ Set secrets in credentials or environment variables:
 
 - `SLACK_WEBHOOK_URL`: Incoming webhook endpoint.
 - `SLACK_BOT_TOKEN`: Bot token used by Slack Web API.
+- In `credentials/.env` (plaintext), use exact key names:
+
+```env
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/T000/B000/XXXX
+SLACK_BOT_TOKEN=xoxb-1234567890-abcdefghijklmnop
+```
+
+Security Note: plaintext `.env` secrets are not recommended for production. Prefer managed secret stores (for example AWS Secrets Manager, HashiCorp Vault, or Kubernetes Secrets), and never commit `.env` files to version control.
+
+- Or in `credentials/slack.json` (JSON), use the same exact key names:
+
+```json
+{
+  "SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/T000/B000/XXXX",
+  "SLACK_BOT_TOKEN": "xoxb-1234567890-abcdefghijklmnop"
+}
+```
+
+- As an alternative to credentials files, environment variables `SLACK_WEBHOOK_URL` and `SLACK_BOT_TOKEN` are supported directly.
+
+Credential precedence: if both are configured, `SLACK_WEBHOOK_URL` takes precedence and the connector sends through the incoming webhook path; `SLACK_BOT_TOKEN` is used only when `SLACK_WEBHOOK_URL` is not set. Example: with both values present, the connector posts via webhook and does not call `chat.postMessage`.
 
 Step fields:
 
 - `inputs.message`: text to send.
-- `params.channel`: channel name or ID (required for token mode; optional for webhook mode).
+- `params.channel`: channel name or ID (required for token mode; in webhook mode, if `params.channel` is omitted the message is posted to the incoming webhook default channel and cannot be overridden by the connector).
 
 ## Usage
 
@@ -48,7 +69,7 @@ steps:
 ## Parameters
 
 - `inputs.message` (string): message body sent to Slack.
-- `params.channel` (string): destination channel name or ID.
+- `params.channel` (string): destination channel name or ID (required for token mode; optional for webhook mode).
 - Optional: expand this connector to support `params.blocks`, `params.thread_ts`, and `params.username`.
 
 ## Troubleshooting

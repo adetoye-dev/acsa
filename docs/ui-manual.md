@@ -25,7 +25,7 @@ The studio provides:
 
 - top-bar actions for refresh, save, and manual run
 - the workflow canvas for trigger and step layout
-- the capability library for adding new steps
+- the step library for adding new steps
 - the inspector for editing trigger and selected-step details
 - preview of the generated workflow YAML
 - the human-task inbox for paused approvals and manual input
@@ -51,7 +51,7 @@ Use it to:
 
 - install a small curated first-party set of capability packs (bundles of integration capabilities)
 - see which installed capability packs are ready, blocked, or still need setup
-- access developer-focused scaffold/test tooling in the Developer section
+- access developer-focused scaffold and test tooling via the Connectors > Developer tab
 - inspect low-level manifest and runtime details only when you need them
 
 ## Typical workflow

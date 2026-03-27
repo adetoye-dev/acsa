@@ -124,8 +124,8 @@ export function buildRecentFirstWorkflowInventory(
       return rightOpenedAt - leftOpenedAt;
     }
 
-    const leftLastRun = left.workflow_state.telemetry.last_run_at ?? 0;
-    const rightLastRun = right.workflow_state.telemetry.last_run_at ?? 0;
+    const leftLastRun = left.workflow_state?.telemetry?.last_run_at ?? 0;
+    const rightLastRun = right.workflow_state?.telemetry?.last_run_at ?? 0;
     if (leftLastRun !== rightLastRun) {
       return rightLastRun - leftLastRun;
     }

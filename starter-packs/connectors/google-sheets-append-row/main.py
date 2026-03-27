@@ -5,18 +5,61 @@ import os
 import sys
 
 
-def _load_service_account_info() -> dict:
+def _load_credential_source(input_credentials):
+    if isinstance(input_credentials, dict):
+        return input_credentials
+
+    if isinstance(input_credentials, str):
+        stripped = input_credentials.strip()
+        if stripped:
+            if stripped.startswith("{"):
+                try:
+                    parsed = json.loads(stripped)
+                except json.JSONDecodeError as error:
+                    raise ValueError("credentials JSON is invalid") from error
+                if not isinstance(parsed, dict):
+                    raise ValueError("credentials JSON must decode to an object")
+                return parsed
+            return stripped
+
     raw_json = os.getenv("GOOGLE_SHEETS_CREDENTIALS")
     credentials_path = os.getenv("GOOGLE_SHEETS_CREDENTIALS_PATH")
 
     if raw_json:
-        return json.loads(raw_json)
+        try:
+            parsed = json.loads(raw_json)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(
+                "invalid GOOGLE_SHEETS_CREDENTIALS JSON in raw_json"
+            ) from error
+        if not isinstance(parsed, dict):
+            raise RuntimeError("GOOGLE_SHEETS_CREDENTIALS must decode to a JSON object/dict")
+        return parsed
+
     if credentials_path:
-        with open(credentials_path, "r", encoding="utf-8") as handle:
-            return json.load(handle)
+        try:
+            with open(credentials_path, "r", encoding="utf-8") as handle:
+                parsed = json.load(handle)
+        except FileNotFoundError as error:
+            raise RuntimeError(
+                "GOOGLE_SHEETS_CREDENTIALS_PATH file not found for credentials_path"
+            ) from error
+        except OSError as error:
+            raise RuntimeError(
+                "failed reading GOOGLE_SHEETS_CREDENTIALS_PATH file for credentials_path"
+            ) from error
+        except json.JSONDecodeError as error:
+            raise RuntimeError(
+                "invalid JSON in GOOGLE_SHEETS_CREDENTIALS_PATH file for credentials_path"
+            ) from error
+        if not isinstance(parsed, dict):
+            raise RuntimeError(
+                "GOOGLE_SHEETS_CREDENTIALS_PATH must contain a JSON object/dict"
+            )
+        return parsed
 
     raise RuntimeError(
-        "missing Google credentials: set GOOGLE_SHEETS_CREDENTIALS or GOOGLE_SHEETS_CREDENTIALS_PATH"
+        "missing Google credentials: provide inputs.credentials or set GOOGLE_SHEETS_CREDENTIALS / GOOGLE_SHEETS_CREDENTIALS_PATH"
     )
 
 
@@ -33,15 +76,44 @@ def _normalize_row(row_value):
 
 def _quote_sheet_name(sheet_name: str) -> str:
     """Quote sheet names containing special characters or spaces for Google Sheets A1 notation."""
-    # Check if name contains non-alphanumeric characters or spaces
-    if any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_" for c in sheet_name):
-        # If already quoted, don't double-quote
-        if sheet_name.startswith("'") and sheet_name.endswith("'"):
-            return sheet_name
+    if sheet_name.startswith("'") and sheet_name.endswith("'") and len(sheet_name) >= 2:
+        if sheet_name[1:-1] == "":
+            raise ValueError("Invalid sheet name: empty after stripping quotes")
+        return sheet_name
+
+    normalized_name = sheet_name
+
+    if normalized_name == "":
+        raise ValueError("Invalid sheet name: empty")
+
+    # Check if name contains non-alphanumeric characters or spaces.
+    if any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_" for c in normalized_name):
         # Escape any single quotes by doubling them per Google Sheets convention
-        escaped_name = sheet_name.replace("'", "''")
+        escaped_name = normalized_name.replace("'", "''")
         return f"'{escaped_name}'"
-    return sheet_name
+    return normalized_name
+
+
+def _safe_row_echo(row_value):
+    try:
+        return _normalize_row(row_value)
+    except ValueError:
+        return []
+
+
+def _first_sheet_title(service, spreadsheet_id: str) -> str:
+    metadata = (
+        service.spreadsheets()
+        .get(spreadsheetId=spreadsheet_id, fields="sheets.properties.title")
+        .execute()
+    )
+    sheets = metadata.get("sheets", [])
+    if not sheets:
+        raise RuntimeError("spreadsheet has no sheets")
+    title = sheets[0].get("properties", {}).get("title")
+    if not isinstance(title, str) or not title.strip():
+        raise RuntimeError("could not resolve first sheet title")
+    return title
 
 
 def main() -> None:
@@ -57,16 +129,18 @@ def main() -> None:
 
     inputs = payload.get("inputs", {})
     params = payload.get("params", {})
+    credentials_input = inputs.get("credentials", params.get("credentials"))
 
     sheet_id = inputs.get("sheet_id")
     row_input = inputs.get("row")
     if not isinstance(sheet_id, str) or not sheet_id.strip():
+        print("google sheets append validation failed: missing required input sheet_id", file=sys.stderr)
         print(
             json.dumps(
                 {
                     "appended": False,
                     "sheet_id": "",
-                    "row": row_input,
+                    "row": _safe_row_echo(row_input),
                     "error": "missing required input: sheet_id",
                 }
             )
@@ -76,12 +150,19 @@ def main() -> None:
     try:
         row_values = _normalize_row(row_input)
     except ValueError as error:
+        row_preview = f"type={type(row_input).__name__}" + (
+            f" len={len(row_input)}" if hasattr(row_input, "__len__") else ""
+        )
+        print(
+            f"google sheets append validation failed for sheet_id={sheet_id!r} row=[{row_preview}]: {error}",
+            file=sys.stderr,
+        )
         print(
             json.dumps(
                 {
                     "appended": False,
                     "sheet_id": sheet_id,
-                    "row": row_input,
+                    "row": _safe_row_echo(row_input),
                     "error": str(error),
                 }
             )
@@ -89,19 +170,56 @@ def main() -> None:
         sys.exit(1)
 
     try:
+        from google.oauth2 import credentials as oauth_credentials
         from google.oauth2 import service_account
         from googleapiclient.discovery import build
-
-        credentials_info = _load_service_account_info()
-        credentials = service_account.Credentials.from_service_account_info(
-            credentials_info,
-            scopes=["https://www.googleapis.com/auth/spreadsheets"],
+    except ImportError:
+        print(
+            "google sheets append dependency error: missing google-api-client dependencies",
+            file=sys.stderr,
         )
+        print(
+            json.dumps(
+                {
+                    "appended": False,
+                    "sheet_id": sheet_id,
+                    "row": row_values,
+                    "error": "missing dependency: install google-api-python-client and google-auth",
+                    "error_code": "missing_google_dependencies",
+                }
+            )
+        )
+        sys.exit(1)
+
+    try:
+
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        credential_source = _load_credential_source(credentials_input)
+        if isinstance(credential_source, dict):
+            credentials = service_account.Credentials.from_service_account_info(
+                credential_source,
+                scopes=scopes,
+            )
+        elif isinstance(credential_source, str):
+            credentials = oauth_credentials.Credentials(
+                token=credential_source,
+                scopes=scopes,
+            )
+        else:
+            raise RuntimeError("unsupported credentials format")
+
         service = build("sheets", "v4", credentials=credentials, cache_discovery=False)
 
-        sheet_name = params.get("sheet_name") or "Sheet1"
-        quoted_sheet_name = _quote_sheet_name(sheet_name)
-        target_range = params.get("sheet_range") or f"{quoted_sheet_name}!A:Z"
+        sheet_name = params.get("sheet_name")
+        explicit_range = params.get("sheet_range")
+        if explicit_range:
+            target_range = explicit_range
+        elif isinstance(sheet_name, str) and sheet_name.strip():
+            target_range = f"{_quote_sheet_name(sheet_name.strip())}!A:ZZ"
+        else:
+            first_sheet = _first_sheet_title(service, sheet_id)
+            target_range = f"{_quote_sheet_name(first_sheet)}!A:ZZ"
+
         response = (
             service.spreadsheets()
             .values()
@@ -133,7 +251,7 @@ def main() -> None:
                 {
                     "appended": False,
                     "sheet_id": sheet_id,
-                    "row": row_input,
+                    "row": row_values,
                     "error": str(error),
                 }
             )

@@ -4,19 +4,81 @@
   "runtime": "process",
   "entry": "python3 main.py",
   "inputs": [
-    "repository",
-    "title",
-    "body",
-    "labels",
-    "assignees",
-    "milestone"
+    {
+      "name": "github_token",
+      "type": "string",
+      "description": "GitHub personal access token used to authenticate API requests.",
+      "required": true,
+      "sensitive": true
+    },
+    {
+      "name": "repository",
+      "type": "string",
+      "description": "Repository identifier in owner/repo format.",
+      "required": true,
+      "minLength": 3,
+      "maxLength": 140,
+      "pattern": "^(?=.{1,39}/)[A-Za-z0-9]+(?:-(?!-)[A-Za-z0-9]+)*/[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$"
+    },
+    {
+      "name": "title",
+      "type": "string",
+      "description": "Issue title shown in GitHub.",
+      "maxLength": 256,
+      "required": true
+    },
+    {
+      "name": "body",
+      "type": "string",
+      "description": "Issue body/description markdown.",
+      "required": false
+    },
+    {
+      "name": "labels",
+      "type": "array",
+      "description": "List of label names to apply to the issue.",
+      "required": false,
+      "items": {
+        "type": "string"
+      }
+    },
+    {
+      "name": "assignees",
+      "type": "array",
+      "description": "List of GitHub usernames to assign to the issue.",
+      "required": false,
+      "items": {
+        "type": "string"
+      }
+    },
+    {
+      "name": "milestone",
+      "type": "integer",
+      "description": "Milestone number (numeric ID) to attach to the issue. GitHub Issues API requires an integer milestone ID.",
+      "required": false
+    }
   ],
   "outputs": [
-    "issue_created",
-    "mock",
-    "issue_number",
-    "issue_url",
-    "issue_id"
+    {
+      "name": "issue_created",
+      "type": "boolean",
+      "description": "True when an issue is successfully created in GitHub."
+    },
+    {
+      "name": "issue_number",
+      "type": ["integer", "null"],
+      "description": "Numeric issue number returned by GitHub; null if creation failed or mock mode is used."
+    },
+    {
+      "name": "issue_url",
+      "type": ["string", "null"],
+      "description": "URL to the created issue in GitHub; null when unavailable or if creation failed."
+    },
+    {
+      "name": "issue_id",
+      "type": ["string", "null"],
+      "description": "Provider issue identifier normalized to string for cross-provider consistency, even when GitHub returns a numeric id; null when unavailable or if creation fails."
+    }
   ],
   "limits": {
     "timeout_ms": 30000

@@ -68,7 +68,7 @@ export function RecentWorkflowsPanel({
 
 function PanelEmptyState({ children }: { children: string }) {
   return (
-    <div className="flex min-h-[220px] items-center justify-center px-6 text-center text-sm leading-6 text-slate">
+    <div className="flex min-h-[220px] items-center justify-center px-6 text-center text-sm leading-6 text-slate-700">
       {children}
     </div>
   );

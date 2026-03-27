@@ -54,13 +54,18 @@ export function ConnectorsPage() {
     [inventory, starterPacks]
   );
 
+  async function fetchConnectorLibraryOrThrow() {
+    const [starterPackResponse, connectorResponse] = await Promise.all([
+      fetchStarterConnectorPacks(),
+      fetchEngineJson<ConnectorInventoryResponse>("/api/connectors")
+    ]);
+    return { connectorResponse, starterPackResponse };
+  }
+
   async function refreshConnectorLibrary() {
     setIsRefreshing(true);
     try {
-      const [starterPackResponse, connectorResponse] = await Promise.all([
-        fetchStarterConnectorPacks(),
-        fetchEngineJson<ConnectorInventoryResponse>("/api/connectors")
-      ]);
+      const { connectorResponse, starterPackResponse } = await fetchConnectorLibraryOrThrow();
       setStarterPacks(starterPackResponse);
       setInventory(connectorResponse);
       setError(null);
@@ -75,10 +80,26 @@ export function ConnectorsPage() {
 
   async function handleInstallPack(packId: string) {
     setInstallingPackId(packId);
+    let didInstall = false;
+
     try {
       await installStarterConnectorPack(packId);
-      await refreshConnectorLibrary();
+      didInstall = true;
+
+      const { connectorResponse, starterPackResponse } = await fetchConnectorLibraryOrThrow();
+      setStarterPacks(starterPackResponse);
+      setInventory(connectorResponse);
+      setError(null);
     } catch (nextError) {
+      if (didInstall) {
+        setError(
+          nextError instanceof Error
+            ? `Installed capability pack but failed to refresh library: ${nextError.message}`
+            : "Installed capability pack but failed to refresh connector library"
+        );
+        return;
+      }
+
       setError(
         nextError instanceof Error
           ? nextError.message
@@ -134,7 +155,7 @@ export function ConnectorsPage() {
         <div className="border-t border-black/10">
           <DeveloperToolsSection>
             <ConnectorManager
-              onCatalogInvalidated={() => refreshConnectorLibrary()}
+              onCatalogInvalidated={() => void refreshConnectorLibrary()}
             />
           </DeveloperToolsSection>
         </div>

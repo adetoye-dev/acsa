@@ -16,10 +16,15 @@
 
 import { ENGINE_PROXY_BASE } from "./workflow-editor";
 
+function isSensitiveCredentialPath(path: string): boolean {
+  return path.startsWith("/api/credentials");
+}
+
 export async function fetchEngineJson<T>(
   path: string,
   init?: RequestInit
 ): Promise<T> {
+  const sensitivePath = isSensitiveCredentialPath(path);
   const response = await fetch(`${ENGINE_PROXY_BASE}${path}`, {
     cache: "no-store",
     ...init
@@ -37,11 +42,16 @@ export async function fetchEngineJson<T>(
     parsed = JSON.parse(body) as { error?: string } & T;
   } catch {
     throw new Error(
-      `Failed to parse JSON response (status ${response.status}): ${body}`
+      sensitivePath
+        ? `Failed to parse JSON response (status ${response.status})`
+        : `Failed to parse JSON response (status ${response.status}): ${body}`
     );
   }
 
   if (!response.ok) {
+    if (sensitivePath) {
+      throw new Error(`Credential request failed with status ${response.status}`);
+    }
     throw new Error(
       parsed && typeof parsed === "object" && typeof parsed.error === "string"
         ? parsed.error
@@ -71,6 +81,7 @@ export async function fetchEngineNoContent(
   path: string,
   init?: RequestInit
 ): Promise<void> {
+  const sensitivePath = isSensitiveCredentialPath(path);
   const response = await fetch(`${ENGINE_PROXY_BASE}${path}`, {
     cache: "no-store",
     ...init
@@ -87,7 +98,9 @@ export async function fetchEngineNoContent(
       }
     }
     throw new Error(
-      parsed && typeof parsed.error === "string"
+      sensitivePath
+        ? `Credential request failed with status ${response.status}`
+        : parsed && typeof parsed.error === "string"
         ? parsed.error
         : body.trim() || `Request failed with status ${response.status}`
     );

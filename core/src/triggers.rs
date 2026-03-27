@@ -687,12 +687,16 @@ async fn install_starter_connector_pack_endpoint(
     State(state): State<AppState>,
     AxumPath(pack_id): AxumPath<String>,
 ) -> Response {
-    let Some(pack) = crate::starter_connector_packs::starter_connector_pack(&pack_id) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": format!("starter pack {} not found", pack_id) })),
-        )
-            .into_response();
+    let pack = match crate::starter_connector_packs::starter_connector_pack(&pack_id) {
+        Ok(Some(pack)) => pack,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": format!("starter pack {} not found", pack_id) })),
+            )
+                .into_response();
+        }
+        Err(error) => return connector_error_response(TriggerError::StarterPack(error)),
     };
 
     match install_starter_connector_pack(&state.connectors_dir, &pack) {
@@ -1535,7 +1539,9 @@ fn starter_connector_pack_views(
     workflows_dir: &Path,
 ) -> Result<Vec<StarterConnectorPackView>, TriggerError> {
     let pack_states = starter_pack_install_state_map(connectors_dir, workflows_dir)?;
-    Ok(crate::starter_connector_packs::starter_connector_packs()
+    let packs = crate::starter_connector_packs::starter_connector_packs()
+        .map_err(TriggerError::StarterPack)?;
+    Ok(packs
         .iter()
         .map(|pack| starter_connector_pack_view(pack, pack_states.get(pack.install_dir_name)))
         .collect())
@@ -2591,17 +2597,20 @@ async fn upsert_credential(
     State(state): State<AppState>,
     Json(request): Json<UpsertCredentialRequest>,
 ) -> Response {
+    let trimmed_name = request.name.trim();
+    let trimmed_value = request.value.trim();
+
     if let Err(error) = validate_credential_name(&request.name) {
         return credential_validation_error_response(error);
     }
-    if request.value.trim().is_empty() {
-        return credential_validation_error_response(TriggerError::InvalidCredentialName {
-            name: request.name,
+    if trimmed_value.is_empty() {
+        return credential_validation_error_response(TriggerError::InvalidCredentialValue {
+            name: trimmed_name.to_string(),
             message: "credential value must not be empty".to_string(),
         });
     }
 
-    match state.engine.store().upsert_credential(request.name.trim(), request.value.trim()).await {
+    match state.engine.store().upsert_credential(trimmed_name, trimmed_value).await {
         Ok(record) => (StatusCode::OK, Json(json!(credential_view(record)))).into_response(),
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
@@ -2658,7 +2667,8 @@ fn validate_credential_name(name: &str) -> Result<(), TriggerError> {
 
 fn credential_validation_error_response(error: TriggerError) -> Response {
     match error {
-        TriggerError::InvalidCredentialName { name, message } => (
+        TriggerError::InvalidCredentialName { name, message }
+        | TriggerError::InvalidCredentialValue { name, message } => (
             StatusCode::BAD_REQUEST,
             Json(json!({
                 "error": message,
@@ -2721,6 +2731,8 @@ fn slugify_workflow_name(name: &str) -> String {
 pub enum TriggerError {
     #[error("connector error: {0}")]
     Connector(#[from] ConnectorError),
+    #[error("starter pack error: {0}")]
+    StarterPack(#[from] crate::starter_connector_packs::StarterPackError),
     #[error("workflow engine error: {0}")]
     Engine(#[from] EngineError),
     #[error("storage error: {0}")]
@@ -2757,6 +2769,8 @@ pub enum TriggerError {
     WorkflowNotFound { workflow_id: String },
     #[error("invalid credential name {name}: {message}")]
     InvalidCredentialName { name: String, message: String },
+    #[error("invalid credential value for {name}: {message}")]
+    InvalidCredentialValue { name: String, message: String },
     #[error("binding the engine to {bind_addr} requires ACSA_ALLOW_REMOTE_ENGINE=1")]
     RemoteBindingRequiresExplicitOptIn { bind_addr: SocketAddr },
 }
@@ -2913,7 +2927,9 @@ mod tests {
     async fn starter_pack_inventory_exposes_curated_pack_install_state() {
         let temp_dir = write_temp_directory("starter-pack-inventory");
         let state = starter_pack_test_state(&temp_dir).await;
-        let pack = starter_connector_pack("slack-notify").expect("starter pack should exist");
+        let pack = starter_connector_pack("slack-notify")
+            .expect("starter pack lookup should succeed")
+            .expect("starter pack should exist");
         install_starter_connector_pack(&state.connectors_dir, &pack)
             .expect("starter pack should install");
 

@@ -36,14 +36,36 @@ export function InstalledPacksPanel({
       </div>
 
       <div className="space-y-3 px-4 py-4">
+        {isLoading && rows.length > 0 ? (
+          <div
+            aria-atomic="true"
+            aria-live="polite"
+            className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-[0.12em] text-[#6b7380]"
+            role="status"
+          >
+            <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-[#6b7380]" />
+            Refreshing installed packs
+          </div>
+        ) : null}
+
         {isLoading && rows.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm leading-6 text-[#6b7380]">
+          <div
+            aria-atomic="true"
+            aria-live="polite"
+            className="px-4 py-8 text-center text-sm leading-6 text-[#6b7380]"
+            role="status"
+          >
             Loading installed packs…
           </div>
         ) : null}
 
         {!isLoading && rows.length === 0 ? (
-          <div className="px-4 py-8 text-center text-sm leading-6 text-[#6b7380]">
+          <div
+            aria-atomic="true"
+            aria-live="polite"
+            className="px-4 py-8 text-center text-sm leading-6 text-[#6b7380]"
+            role="status"
+          >
             No packs are installed yet.
           </div>
         ) : null}

@@ -156,6 +156,7 @@ export function AiAssistantRail({
                       </div>
                     </div>
                     <button
+                      aria-label={`Add ${entry.type_name}`}
                       className="ui-button !px-2.5 !py-1.5"
                       onClick={() => onSelectType(entry.type_name)}
                       type="button"

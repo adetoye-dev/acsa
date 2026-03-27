@@ -43,7 +43,9 @@ export function WorkflowGridCard({
   useEffect(() => {
     if (recentOpenedAt) {
       setLastOpened(formatRelativeOpenedAt(recentOpenedAt));
+      return;
     }
+    setLastOpened(null);
   }, [recentOpenedAt]);
 
   const lastRun = workflowLastRunLabel(workflow.workflow_state);
@@ -103,12 +105,12 @@ function formatRelativeOpenedAt(openedAt: number): string {
     return "just now";
   }
   if (elapsed < 3_600_000) {
-    return `${Math.max(1, Math.round(elapsed / 60_000))}m ago`;
+    return `${Math.max(1, Math.floor(elapsed / 60_000))}m ago`;
   }
   if (elapsed < 86_400_000) {
-    return `${Math.max(1, Math.round(elapsed / 3_600_000))}h ago`;
+    return `${Math.max(1, Math.floor(elapsed / 3_600_000))}h ago`;
   }
-  return `${Math.max(1, Math.round(elapsed / 86_400_000))}d ago`;
+  return `${Math.max(1, Math.floor(elapsed / 86_400_000))}d ago`;
 }
 
 function WorkflowBoltIcon() {

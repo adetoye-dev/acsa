@@ -15,13 +15,22 @@
 #![deny(warnings)]
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    env,
     path::Path,
     str::FromStr,
-    sync::{OnceLock, RwLock},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        OnceLock, RwLock,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use aes_gcm::{
+    aead::{rand_core::RngCore, Aead, KeyInit, OsRng},
+    Aes256Gcm, Nonce,
+};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{
@@ -38,14 +47,43 @@ use crate::observability::{HistogramBucket, HistogramSnapshot, MetricsSnapshot};
 // This implies a single-process, single-active-store expectation: initialize one RunStore per
 // process and avoid running multiple database-backed RunStore instances concurrently.
 static MANAGED_CREDENTIALS: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
+static PLAINTEXT_CREDENTIAL_MIGRATION_QUEUE: OnceLock<RwLock<HashSet<Option<String>>>> =
+    OnceLock::new();
+static PLAINTEXT_CREDENTIALS_SEEN_TOTAL: AtomicU64 = AtomicU64::new(0);
+const CREDENTIAL_CIPHER_VERSION: &str = "enc:v1";
+const CREDENTIAL_MASTER_KEY_ENV: &str = "ACSA_CREDENTIAL_MASTER_KEY";
+const CREDENTIAL_STRICT_ENCRYPTION_ENV: &str = "ACSA_STRICT_CREDENTIAL_ENCRYPTION";
 
 fn managed_credentials() -> &'static RwLock<HashMap<String, String>> {
     MANAGED_CREDENTIALS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
+fn plaintext_credential_migration_queue() -> &'static RwLock<HashSet<Option<String>>> {
+    PLAINTEXT_CREDENTIAL_MIGRATION_QUEUE.get_or_init(|| RwLock::new(HashSet::new()))
+}
+
+fn strict_credential_encryption_enabled() -> bool {
+    matches!(
+        env::var(CREDENTIAL_STRICT_ENCRYPTION_ENV)
+            .ok()
+            .as_deref()
+            .map(str::trim),
+        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
+    )
+}
+
 pub fn resolve_secret_value(name: &str) -> Option<String> {
-    std::env::var(name).ok().or_else(|| {
-        managed_credentials().read().ok().and_then(|credentials| credentials.get(name).cloned())
+    std::env::var(name).ok().or_else(|| match managed_credentials().read() {
+        Ok(credentials) => credentials.get(name).cloned(),
+        Err(poisoned) => {
+            tracing::warn!(
+                credential = %name,
+                error = %poisoned,
+                "managed_credentials read lock poisoned during resolve_secret_value; recovering lock"
+            );
+            let credentials = poisoned.into_inner();
+            credentials.get(name).cloned()
+        }
     })
 }
 
@@ -187,7 +225,16 @@ impl RunStore {
         name: &str,
         value: &str,
     ) -> Result<CredentialRecord, StorageError> {
+        let name = name.trim();
+
+        if name.is_empty() {
+            return Err(StorageError::InvalidInput(
+                "credential name must not be empty".to_string(),
+            ));
+        }
+
         let updated_at = current_timestamp();
+        let encrypted_value = encrypt_value(value)?;
         sqlx::query(
             r#"
             INSERT INTO credentials (name, value, updated_at)
@@ -198,7 +245,7 @@ impl RunStore {
             "#,
         )
         .bind(name)
-        .bind(value)
+        .bind(encrypted_value)
         .bind(updated_at)
         .execute(&self.pool)
         .await?;
@@ -215,6 +262,21 @@ impl RunStore {
                 );
                 let mut credentials = poisoned.into_inner();
                 credentials.insert(name.to_string(), value.to_string());
+            }
+        }
+
+        match plaintext_credential_migration_queue().write() {
+            Ok(mut queue) => {
+                queue.remove(&Some(name.to_string()));
+            }
+            Err(poisoned) => {
+                tracing::warn!(
+                    credential = %name,
+                    error = %poisoned,
+                    "plaintext credential migration queue lock poisoned during upsert; recovering lock"
+                );
+                let mut queue = poisoned.into_inner();
+                queue.remove(&Some(name.to_string()));
             }
         }
 
@@ -247,7 +309,67 @@ impl RunStore {
             }
         }
 
+        match plaintext_credential_migration_queue().write() {
+            Ok(mut queue) => {
+                queue.remove(&Some(name.to_string()));
+            }
+            Err(poisoned) => {
+                tracing::warn!(
+                    credential = %name,
+                    error = %poisoned,
+                    "plaintext credential migration queue lock poisoned during delete; recovering lock"
+                );
+                let mut queue = poisoned.into_inner();
+                queue.remove(&Some(name.to_string()));
+            }
+        }
+
         Ok(())
+    }
+
+    pub fn queued_plaintext_credential_names(&self) -> Vec<String> {
+        match plaintext_credential_migration_queue().read() {
+            Ok(queue) => queue.iter().filter_map(Clone::clone).collect(),
+            Err(poisoned) => {
+                tracing::warn!(
+                    error = %poisoned,
+                    "plaintext credential migration queue lock poisoned during read; recovering lock"
+                );
+                poisoned.into_inner().iter().filter_map(Clone::clone).collect()
+            }
+        }
+    }
+
+    pub fn plaintext_credential_hits_total(&self) -> u64 {
+        PLAINTEXT_CREDENTIALS_SEEN_TOTAL.load(Ordering::Relaxed)
+    }
+
+    pub async fn migrate_queued_plaintext_credentials(&self) -> Result<usize, StorageError> {
+        let queued_names = self.queued_plaintext_credential_names();
+        let mut migrated = 0usize;
+
+        for name in queued_names {
+            let value = match managed_credentials().read() {
+                Ok(credentials) => credentials.get(&name).cloned(),
+                Err(poisoned) => {
+                    tracing::warn!(
+                        credential = %name,
+                        error = %poisoned,
+                        "managed_credentials lock poisoned during plaintext credential migration read; recovering lock"
+                    );
+                    poisoned.into_inner().get(&name).cloned()
+                }
+            };
+
+            let Some(value) = value else {
+                continue;
+            };
+
+            self.upsert_credential(&name, &value).await?;
+            migrated += 1;
+        }
+
+        Ok(migrated)
     }
 
     pub async fn complete_run_success(&self, run_id: &str) -> Result<(), StorageError> {
@@ -1221,7 +1343,8 @@ impl RunStore {
         let mut next_credentials = HashMap::new();
         for row in rows {
             let name: String = row.try_get("name")?;
-            let value: String = row.try_get("value")?;
+            let encrypted_value: String = row.try_get("value")?;
+            let value = decrypt_value(&encrypted_value, Some(&name))?;
             next_credentials.insert(name, value);
         }
 
@@ -1410,6 +1533,132 @@ pub enum StorageError {
     HumanTaskNotFound(String),
     #[error("data integrity error: {0}")]
     DataIntegrity(String),
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+    #[error("credential encryption failed: {0}")]
+    CredentialEncryption(String),
+    #[error("credential decryption failed: {0}")]
+    CredentialDecryption(String),
+}
+
+fn credential_master_key() -> Result<[u8; 32], StorageError> {
+    let encoded = env::var(CREDENTIAL_MASTER_KEY_ENV).map_err(|_| {
+        StorageError::CredentialEncryption(format!(
+            "missing master key env var {CREDENTIAL_MASTER_KEY_ENV}"
+        ))
+    })?;
+
+    let bytes = BASE64.decode(encoded).map_err(|error| {
+        StorageError::CredentialEncryption(format!("invalid base64 master key: {error}"))
+    })?;
+
+    if bytes.len() != 32 {
+        return Err(StorageError::CredentialEncryption(format!(
+            "master key in {CREDENTIAL_MASTER_KEY_ENV} must decode to 32 bytes"
+        )));
+    }
+
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&bytes);
+    Ok(key)
+}
+
+fn encrypt_value(value: &str) -> Result<String, StorageError> {
+    let key = credential_master_key()?;
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|error| StorageError::CredentialEncryption(format!("invalid cipher key: {error}")))?;
+
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, value.as_bytes())
+        .map_err(|error| StorageError::CredentialEncryption(format!("encrypt failed: {error}")))?;
+
+    Ok(format!(
+        "{CREDENTIAL_CIPHER_VERSION}:{}:{}",
+        BASE64.encode(nonce_bytes),
+        BASE64.encode(ciphertext)
+    ))
+}
+
+fn encrypted_credential_segments(stored: &str) -> Option<(&str, &str)> {
+    let payload = stored
+        .strip_prefix(CREDENTIAL_CIPHER_VERSION)
+        .and_then(|value| value.strip_prefix(':'))?;
+    let (nonce_b64, cipher_b64) = payload.split_once(':')?;
+    if nonce_b64.is_empty() || cipher_b64.is_empty() {
+        return None;
+    }
+
+    Some((nonce_b64, cipher_b64))
+}
+
+fn decrypt_value(stored: &str, credential_name: Option<&str>) -> Result<String, StorageError> {
+    let Some((nonce_b64, cipher_b64)) = encrypted_credential_segments(stored) else {
+        PLAINTEXT_CREDENTIALS_SEEN_TOTAL.fetch_add(1, Ordering::Relaxed);
+        let queued_credential_name = credential_name.map(str::to_string);
+        let credential = credential_name.unwrap_or("<unknown>");
+
+        match plaintext_credential_migration_queue().write() {
+            Ok(mut queue) => {
+                queue.insert(queued_credential_name.clone());
+            }
+            Err(poisoned) => {
+                tracing::warn!(
+                    credential = %credential,
+                    error = %poisoned,
+                    "plaintext credential migration queue lock poisoned while enqueueing; recovering lock"
+                );
+                let mut queue = poisoned.into_inner();
+                queue.insert(queued_credential_name);
+            }
+        }
+
+        tracing::warn!(
+            credential = %credential,
+            expected_prefix = CREDENTIAL_CIPHER_VERSION,
+            strict_mode = strict_credential_encryption_enabled(),
+            plaintext_hits_total = PLAINTEXT_CREDENTIALS_SEEN_TOTAL.load(Ordering::Relaxed),
+            "plaintext credential encountered in storage; queued for re-encryption migration"
+        );
+
+        if strict_credential_encryption_enabled() {
+            return Err(StorageError::CredentialDecryption(format!(
+                "plaintext credential encountered for {credential}; strict mode requires {CREDENTIAL_CIPHER_VERSION}"
+            )));
+        }
+
+        return Ok(stored.to_string());
+    };
+
+    let key = credential_master_key()
+        .map_err(|error| StorageError::CredentialDecryption(error.to_string()))?;
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|error| StorageError::CredentialDecryption(format!("invalid cipher key: {error}")))?;
+
+    let nonce_bytes = BASE64.decode(nonce_b64).map_err(|error| {
+        StorageError::CredentialDecryption(format!("invalid nonce encoding: {error}"))
+    })?;
+    if nonce_bytes.len() != 12 {
+        return Err(StorageError::CredentialDecryption(
+            "invalid nonce length for encrypted credential".to_string(),
+        ));
+    }
+
+    let ciphertext = BASE64.decode(cipher_b64).map_err(|error| {
+        StorageError::CredentialDecryption(format!("invalid ciphertext encoding: {error}"))
+    })?;
+
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let plaintext = cipher.decrypt(nonce, ciphertext.as_ref()).map_err(|error| {
+        StorageError::CredentialDecryption(format!("decrypt failed: {error}"))
+    })?;
+
+    String::from_utf8(plaintext).map_err(|error| {
+        StorageError::CredentialDecryption(format!("decrypted value is not valid utf-8: {error}"))
+    })
 }
 
 fn current_timestamp() -> i64 {
@@ -1542,6 +1791,97 @@ fn map_human_task_row(row: sqlx::sqlite::SqliteRow) -> Result<HumanTaskRecord, S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+
+    struct ScopedEnvVarRestore {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl ScopedEnvVarRestore {
+        fn new_cleared(key: &'static str) -> Self {
+            let original = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, original }
+        }
+
+        fn new_set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for ScopedEnvVarRestore {
+        fn drop(&mut self) {
+            if let Some(value) = &self.original {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    #[test]
+    fn encrypted_credential_segments_require_full_delimited_format() {
+        assert_eq!(
+            encrypted_credential_segments("enc:v1:bm9uY2U=:Y2lwaGVydGV4dA=="),
+            Some(("bm9uY2U=", "Y2lwaGVydGV4dA=="))
+        );
+        assert_eq!(encrypted_credential_segments("enc:v1-some-api-key"), None);
+        assert_eq!(encrypted_credential_segments("enc:v1"), None);
+        assert_eq!(encrypted_credential_segments("enc:v1:"), None);
+        assert_eq!(encrypted_credential_segments("enc:v1:nonce"), None);
+        assert_eq!(encrypted_credential_segments("enc:v1::cipher"), None);
+    }
+
+    #[test]
+    fn decrypt_value_preserves_prefix_lookalike_plaintext_values() {
+        let _strict_env = ScopedEnvVarRestore::new_cleared("ACSA_STRICT_CREDENTIAL_ENCRYPTION");
+        let stored = "enc:v1-some-api-key";
+        let decrypted = decrypt_value(stored, Some("api_key"))
+            .expect("prefix lookalike value should be treated as plaintext");
+        assert_eq!(decrypted, stored);
+    }
+
+    #[test]
+    fn decrypt_value_without_name_queues_none_sentinel() {
+        let _strict_env = ScopedEnvVarRestore::new_cleared("ACSA_STRICT_CREDENTIAL_ENCRYPTION");
+        {
+            let mut queue = plaintext_credential_migration_queue()
+                .write()
+                .expect("queue lock should be acquired");
+            queue.clear();
+        }
+
+        let _ = decrypt_value("plain-secret", None);
+
+        let queue = plaintext_credential_migration_queue()
+            .read()
+            .expect("queue lock should be acquired");
+        assert!(queue.contains(&None));
+        assert!(!queue.contains(&Some("<unknown>".to_string())));
+    }
+
+    #[tokio::test]
+    async fn upsert_credential_rejects_blank_names() {
+        let _master_key_env = ScopedEnvVarRestore::new_set(
+            "ACSA_CREDENTIAL_MASTER_KEY",
+            "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+        );
+        let temp_dir = std::env::temp_dir().join(format!("acsa-storage-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir).await.expect("temp dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
+        let store = RunStore::connect(&db_path).await.expect("store should connect");
+
+        let error = store
+            .upsert_credential("   ", "secret")
+            .await
+            .expect_err("blank credential name should be rejected");
+        assert!(matches!(error, StorageError::InvalidInput(_)));
+
+        tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
+    }
 
     struct InsertRunArgs<'a> {
         editor_snapshot: Option<&'a str>,

@@ -409,11 +409,25 @@ pub fn install_starter_connector_pack(
 ) -> Result<StarterConnectorPackInstallResult, ConnectorError> {
     fs::create_dir_all(connectors_dir)?;
     let connector_dir = connectors_dir.join(pack.install_dir_name);
-    if connector_dir.exists() {
-        return Ok(StarterConnectorPackInstallResult::AlreadyInstalled { connector_dir });
+    match fs::create_dir(&connector_dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Ok(StarterConnectorPackInstallResult::AlreadyInstalled { connector_dir });
+        }
+        Err(error) => return Err(error.into()),
     }
 
-    copy_dir_all(&pack.source_dir, &connector_dir)?;
+    if let Err(error) = copy_dir_all(&pack.source_dir, &connector_dir) {
+        if let Err(cleanup_error) = fs::remove_dir_all(&connector_dir) {
+            tracing::warn!(
+                connector_dir = %connector_dir.display(),
+                error = %cleanup_error,
+                "failed to clean up starter connector install directory after copy failure"
+            );
+        }
+        return Err(error);
+    }
+
     Ok(StarterConnectorPackInstallResult::Installed { connector_dir })
 }
 
@@ -1079,7 +1093,8 @@ mod tests {
 
     #[test]
     fn starter_pack_catalog_lists_curated_first_party_packs() {
-        let catalog = super::starter_connector_packs::starter_connector_packs();
+        let catalog = super::starter_connector_packs::starter_connector_packs()
+            .expect("starter pack catalog should resolve");
         let ids = catalog.iter().map(|pack| pack.id).collect::<Vec<_>>();
 
         assert_eq!(
@@ -1097,6 +1112,7 @@ mod tests {
         fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
 
         let pack = super::starter_connector_packs::starter_connector_pack("slack-notify")
+            .expect("starter pack lookup should succeed")
             .expect("starter pack should exist");
         let result = super::install_starter_connector_pack(&connectors_dir, &pack)
             .expect("starter pack should install");
@@ -1156,6 +1172,7 @@ mod tests {
         .expect("manifest should write");
 
         let pack = super::starter_connector_packs::starter_connector_pack("slack-notify")
+            .expect("starter pack lookup should succeed")
             .expect("starter pack should exist");
         let result = super::install_starter_connector_pack(&connectors_dir, &pack)
             .expect("starter pack install should succeed");

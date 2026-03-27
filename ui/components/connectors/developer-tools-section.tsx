@@ -17,7 +17,7 @@
  */
 
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 type DeveloperToolsSectionProps = {
   children: ReactNode;
@@ -27,26 +27,33 @@ export function DeveloperToolsSection({
   children
 }: DeveloperToolsSectionProps) {
   const [isOpen, setIsOpen] = useState(false);
+  const panelId = useId();
+  const buttonId = useId();
 
   return (
     <section className="overflow-hidden bg-white">
+      <div className="px-5 pt-4">
+        <h2 className="section-title mt-2">Local connector development</h2>
+      </div>
       <button
+        aria-controls={panelId}
         aria-expanded={isOpen}
+        aria-labelledby={buttonId}
         className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
         onClick={() => setIsOpen((current) => !current)}
         type="button"
       >
-        <div>
-          <p className="section-kicker">Developer tools</p>
-          <h2 className="section-title mt-2">Local connector development</h2>
-        </div>
+        <span className="section-kicker" id={buttonId}>Developer tools</span>
         <span className="ui-badge">{isOpen ? "Hide" : "Open"}</span>
       </button>
 
       {isOpen ? (
-        <div className="border-t border-black/10 px-5 py-4">{children}</div>
+        <div className="border-t border-black/10 px-5 py-4" id={panelId}>{children}</div>
       ) : (
-        <div className="border-t border-black/10 px-5 py-4 text-sm leading-6 text-[#6b7380]">
+        <div
+          className="border-t border-black/10 px-5 py-4 text-sm leading-6 text-[#6b7380]"
+          id={panelId}
+        >
           Scaffold connectors, refresh inventory, and run sample payloads when you need low-level local tooling.
         </div>
       )}

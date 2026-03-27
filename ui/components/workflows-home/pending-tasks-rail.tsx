@@ -21,9 +21,11 @@ import type { HumanTask } from "../../lib/workflow-editor";
 type PendingTasksRailProps = {
   isRefreshing: boolean;
   onApprove: (taskId: string, approved: boolean) => Promise<void> | void;
+  onError?: (message: string) => void;
   onRefresh: () => void;
   onResolveValue: (taskId: string) => Promise<void> | void;
   onValueChange: (taskId: string, value: string) => void;
+  resolvingTaskIds?: Record<string, boolean>;
   taskValues: Record<string, string>;
   tasks: HumanTask[];
 };
@@ -31,21 +33,27 @@ type PendingTasksRailProps = {
 export function PendingTasksRail({
   isRefreshing,
   onApprove,
+  onError,
   onRefresh,
   onResolveValue,
   onValueChange,
+  resolvingTaskIds = {},
   taskValues,
   tasks
 }: PendingTasksRailProps) {
-  const [processingTaskIds, setProcessingTaskIds] = useState<Record<string, boolean>>({});
+  const [processingTaskIds, setProcessingTaskIds] = useState<
+    Record<string, "approve" | "reject" | "resolve">
+  >({});
 
   async function handleApprove(taskId: string, approved: boolean) {
     if (processingTaskIds[taskId]) {
       return;
     }
-    setProcessingTaskIds((current) => ({ ...current, [taskId]: true }));
+    setProcessingTaskIds((current) => ({ ...current, [taskId]: approved ? "approve" : "reject" }));
     try {
       await Promise.resolve(onApprove(taskId, approved));
+    } catch (error) {
+      onError?.(error instanceof Error ? error.message : "Failed to resolve approval task");
     } finally {
       setProcessingTaskIds((current) => {
         const next = { ...current };
@@ -59,9 +67,11 @@ export function PendingTasksRail({
     if (processingTaskIds[taskId]) {
       return;
     }
-    setProcessingTaskIds((current) => ({ ...current, [taskId]: true }));
+    setProcessingTaskIds((current) => ({ ...current, [taskId]: "resolve" }));
     try {
       await Promise.resolve(onResolveValue(taskId));
+    } catch (error) {
+      onError?.(error instanceof Error ? error.message : "Failed to resolve manual input task");
     } finally {
       setProcessingTaskIds((current) => {
         const next = { ...current };
@@ -94,7 +104,9 @@ export function PendingTasksRail({
         ) : (
           <div className="space-y-3">
             {tasks.map((task) => {
-              const isProcessing = Boolean(processingTaskIds[task.id]);
+              const activeAction = processingTaskIds[task.id];
+              const isProcessing =
+                Boolean(activeAction) || Boolean(resolvingTaskIds[task.id]);
               const manualValue = taskValues[task.id] ?? "";
 
               return (
@@ -114,9 +126,11 @@ export function PendingTasksRail({
                   </span>
                 </div>
 
-                <div className="mt-3 text-[12px] leading-5 text-slate/72">
-                  Run {task.run_id?.slice(0, 8) || task.id.slice(0, 8)}
-                </div>
+                {task.run_id ? (
+                  <div className="mt-3 text-[12px] leading-5 text-slate/72">
+                    Run {task.run_id.slice(0, 8)}
+                  </div>
+                ) : null}
 
                 {task.kind === "approval" ? (
                   <div className="mt-4 flex gap-2">
@@ -126,7 +140,7 @@ export function PendingTasksRail({
                       onClick={() => void handleApprove(task.id, true)}
                       type="button"
                     >
-                      {isProcessing ? "Processing..." : "Approve"}
+                      {activeAction === "approve" ? "Approving..." : "Approve"}
                     </button>
                     <button
                       className="ui-button ui-button-danger !px-3 !py-2"
@@ -134,7 +148,7 @@ export function PendingTasksRail({
                       onClick={() => void handleApprove(task.id, false)}
                       type="button"
                     >
-                      {isProcessing ? "Processing..." : "Reject"}
+                      {activeAction === "reject" ? "Rejecting..." : "Reject"}
                     </button>
                   </div>
                 ) : (
@@ -142,10 +156,16 @@ export function PendingTasksRail({
                     <input
                       aria-label={task.field ?? "value"}
                       className="ui-input"
-                      onChange={(event) => onValueChange(task.id, event.target.value)}
+                      disabled={isProcessing}
+                      onChange={(event) => {
+                        if (isProcessing) {
+                          return;
+                        }
+                        onValueChange(task.id, event.target.value);
+                      }}
                       placeholder={task.field ?? "Enter a value"}
                       type="text"
-                      value={taskValues[task.id] ?? ""}
+                      value={manualValue}
                     />
                     <button
                       className="ui-button ui-button-primary !px-3 !py-2"
@@ -153,7 +173,7 @@ export function PendingTasksRail({
                       onClick={() => void handleResolveValue(task.id)}
                       type="button"
                     >
-                      {isProcessing ? "Sending..." : "Send value"}
+                      {activeAction === "resolve" ? "Sending..." : "Send value"}
                     </button>
                   </div>
                 )}

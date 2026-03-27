@@ -86,6 +86,15 @@ pub fn translate_n8n_workflow(workflow_json: Value) -> Result<N8nImportResponse,
             continue;
         };
         let parameters = node_object.get("parameters").cloned().unwrap_or(Value::Null);
+        
+        if nodes_by_name.contains_key(&name.to_string()) {
+            tracing::warn!(
+                name = %name,
+                "skipping duplicate n8n node name; will use first occurrence"
+            );
+            continue;
+        }
+        
         nodes_by_name.insert(
             name.to_string(),
             N8nNode { name: name.to_string(), node_type: node_type.to_string(), parameters },
@@ -185,7 +194,7 @@ pub fn translate_n8n_workflow(workflow_json: Value) -> Result<N8nImportResponse,
         }
         let step_id = unique_step_id(&node.name, &mut used_ids);
         step_ids.insert(node.name.clone(), step_id.clone());
-        let (params, degradations, requirements) = map_http_request_params(&node);
+        let (params, degradations, requirements) = map_http_request_params(&node)?;
         for degradation in degradations {
             report.degraded.push(ReportItem {
                 item_type: "node".to_string(),
@@ -599,7 +608,7 @@ fn follow_chain(
 
 fn map_http_request_params(
     node: &N8nNode,
-) -> (Option<serde_yaml::Value>, Vec<String>, Vec<RequirementItem>) {
+) -> Result<(Option<serde_yaml::Value>, Vec<String>, Vec<RequirementItem>), String> {
     let mut degradations = Vec::new();
     let mut requirements = Vec::new();
     let params = node.parameters.as_object().cloned().unwrap_or_default();
@@ -621,7 +630,7 @@ fn map_http_request_params(
             requirement_type: "http_request".to_string(),
             message: format!("httpRequest node {} requires method and url parameters", node.name),
         });
-        return (None, degradations, requirements);
+        return Ok((None, degradations, requirements));
     }
 
     let mut params_map = Map::new();
@@ -680,10 +689,14 @@ fn map_http_request_params(
         ));
     }
 
-    let yaml_params =
-        serde_yaml::to_value(Value::Object(params_map)).unwrap_or(serde_yaml::Value::Null);
+    let yaml_params = serde_yaml::to_value(Value::Object(params_map)).map_err(|error| {
+        format!(
+            "failed to serialize httpRequest params for node {}: {error}",
+            node.name
+        )
+    })?;
 
-    (Some(yaml_params), degradations, requirements)
+    Ok((Some(yaml_params), degradations, requirements))
 }
 
 fn unique_step_id(name: &str, used_ids: &mut HashSet<String>) -> String {
