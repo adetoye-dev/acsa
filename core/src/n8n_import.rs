@@ -86,7 +86,7 @@ pub fn translate_n8n_workflow(workflow_json: Value) -> Result<N8nImportResponse,
             continue;
         };
         let parameters = node_object.get("parameters").cloned().unwrap_or(Value::Null);
-        
+
         if nodes_by_name.contains_key(&name.to_string()) {
             tracing::warn!(
                 name = %name,
@@ -94,7 +94,7 @@ pub fn translate_n8n_workflow(workflow_json: Value) -> Result<N8nImportResponse,
             );
             continue;
         }
-        
+
         nodes_by_name.insert(
             name.to_string(),
             N8nNode { name: name.to_string(), node_type: node_type.to_string(), parameters },
@@ -690,10 +690,7 @@ fn map_http_request_params(
     }
 
     let yaml_params = serde_yaml::to_value(Value::Object(params_map)).map_err(|error| {
-        format!(
-            "failed to serialize httpRequest params for node {}: {error}",
-            node.name
-        )
+        format!("failed to serialize httpRequest params for node {}: {error}", node.name)
     })?;
 
     Ok((Some(yaml_params), degradations, requirements))

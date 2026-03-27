@@ -376,9 +376,9 @@ fn resolve_api_key(params: &Value) -> Result<String, NodeError> {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| NodeError::InvalidParameter {
-        parameter: "api_key_env".to_string(),
-        message: format!("secret or key {env_name} not found or empty"),
-    })
+            parameter: "api_key_env".to_string(),
+            message: format!("secret or key {env_name} not found or empty"),
+        })
 }
 
 fn resolve_openai_endpoint(params: &Value) -> Result<String, NodeError> {

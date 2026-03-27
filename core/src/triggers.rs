@@ -72,7 +72,7 @@ use crate::{
     },
     storage::{
         resolve_secret_value, CredentialRecord, LogQuery, LogRecord, PaginatedResponse, RunQuery,
-        RunRecord, RunStore, StepRunRecord,
+        RunRecord, RunStore, StepRunRecord, WorkflowRecord,
     },
 };
 
@@ -429,6 +429,7 @@ pub async fn serve(
         );
     }
 
+    seed_workflows_from_directory_if_missing(engine.store(), &config.workflows_dir).await?;
     let workflows = load_workflows_from_dir(&config.workflows_dir)?;
     let mut webhook_workflows = HashMap::new();
     let mut registered_paths = HashSet::new();
@@ -666,7 +667,7 @@ async fn list_node_catalog(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn list_connectors(State(state): State<AppState>) -> impl IntoResponse {
-    match connector_inventory(&state.connectors_dir, &state.workflows_dir) {
+    match connector_inventory(state.engine.store(), &state.connectors_dir).await {
         Ok(inventory) => (StatusCode::OK, Json(json!(inventory))),
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
@@ -675,7 +676,7 @@ async fn list_connectors(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn list_starter_connector_packs(State(state): State<AppState>) -> impl IntoResponse {
-    match starter_connector_pack_views(&state.connectors_dir, &state.workflows_dir) {
+    match starter_connector_pack_views(state.engine.store(), &state.connectors_dir).await {
         Ok(views) => (StatusCode::OK, Json(json!(views))),
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
@@ -702,7 +703,9 @@ async fn install_starter_connector_pack_endpoint(
     match install_starter_connector_pack(&state.connectors_dir, &pack) {
         Ok(_) => {
             let pack_states =
-                match starter_pack_install_state_map(&state.connectors_dir, &state.workflows_dir) {
+                match starter_pack_install_state_map(state.engine.store(), &state.connectors_dir)
+                    .await
+                {
                     Ok(states) => states,
                     Err(error) => {
                         return (
@@ -734,44 +737,48 @@ async fn create_connector(
         request.type_id.trim(),
         runtime,
     ) {
-        Ok(connector_dir) => match connector_inventory(&state.connectors_dir, &state.workflows_dir)
-        {
-            Ok(inventory) => match inventory
-                .connectors
-                .into_iter()
-                .find(|connector| connector.type_name == request.type_id.trim())
-            {
-                Some(connector) => (
-                    StatusCode::CREATED,
-                    Json(json!(ConnectorScaffoldResponse {
-                        connector: connector.clone(),
-                        next_steps: vec![
-                            format!(
-                                "Review {}",
-                                connector.readme_path.clone().unwrap_or_else(|| connector_dir
-                                    .join("README.md")
-                                    .display()
-                                    .to_string())
-                            ),
-                            format!(
-                                "Run sample test with {}",
-                                connector.sample_input_path.clone().unwrap_or_else(|| {
-                                    connector_dir.join("sample-input.json").display().to_string()
-                                })
-                            ),
-                        ],
-                    })),
-                )
-                    .into_response(),
-                None => connector_error_response(TriggerError::Connector(
-                    ConnectorError::InvalidManifest {
-                        message: "scaffolded connector could not be reloaded from inventory"
-                            .to_string(),
-                    },
-                )),
-            },
-            Err(error) => connector_error_response(error),
-        },
+        Ok(connector_dir) => {
+            match connector_inventory(state.engine.store(), &state.connectors_dir).await {
+                Ok(inventory) => match inventory
+                    .connectors
+                    .into_iter()
+                    .find(|connector| connector.type_name == request.type_id.trim())
+                {
+                    Some(connector) => (
+                        StatusCode::CREATED,
+                        Json(json!(ConnectorScaffoldResponse {
+                            connector: connector.clone(),
+                            next_steps: vec![
+                                format!(
+                                    "Review {}",
+                                    connector.readme_path.clone().unwrap_or_else(|| connector_dir
+                                        .join("README.md")
+                                        .display()
+                                        .to_string())
+                                ),
+                                format!(
+                                    "Run sample test with {}",
+                                    connector.sample_input_path.clone().unwrap_or_else(|| {
+                                        connector_dir
+                                            .join("sample-input.json")
+                                            .display()
+                                            .to_string()
+                                    })
+                                ),
+                            ],
+                        })),
+                    )
+                        .into_response(),
+                    None => connector_error_response(TriggerError::Connector(
+                        ConnectorError::InvalidManifest {
+                            message: "scaffolded connector could not be reloaded from inventory"
+                                .to_string(),
+                        },
+                    )),
+                },
+                Err(error) => connector_error_response(error),
+            }
+        }
         Err(error) => connector_error_response(TriggerError::Connector(error)),
     }
 }
@@ -976,7 +983,7 @@ async fn delete_workflow(
     State(state): State<AppState>,
     AxumPath(workflow_id): AxumPath<String>,
 ) -> axum::response::Response {
-    match delete_workflow_document(&state.workflows_dir, &workflow_id) {
+    match delete_workflow_document(state.engine.store(), &workflow_id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => workflow_error_response(error),
     }
@@ -1025,13 +1032,21 @@ async fn run_workflow(
     AxumPath(workflow_id): AxumPath<String>,
     Json(request): Json<RunWorkflowRequest>,
 ) -> axum::response::Response {
-    let workflow_path = match workflow_file_path(&state.workflows_dir, &workflow_id) {
-        Ok(path) => path,
+    let record = match load_persisted_workflow_record(state.engine.store(), &workflow_id).await {
+        Ok(record) => record,
         Err(error) => return workflow_error_response(error),
     };
-    if !workflow_path.exists() {
-        return workflow_error_response(TriggerError::WorkflowNotFound { workflow_id });
-    }
+    let document_state = match parse_workflow_document_state(&record.yaml) {
+        Ok(document_state) => document_state,
+        Err(error) => return workflow_error_response(error),
+    };
+    let plan = match compile_workflow(document_state.workflow.clone()) {
+        Ok(plan) => plan,
+        Err(error) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": error.to_string() })))
+                .into_response();
+        }
+    };
 
     let initial_payload = json!({
         "payload": request.payload.unwrap_or_else(|| json!({})),
@@ -1039,7 +1054,11 @@ async fn run_workflow(
         "source": "ui",
         "workflow_id": workflow_id
     });
-    match state.engine.execute_workflow_path(&workflow_path, initial_payload).await {
+    match state
+        .engine
+        .execute_plan_with_editor_snapshot(&plan, initial_payload, record.yaml.clone())
+        .await
+    {
         Ok(summary) => (
             StatusCode::ACCEPTED,
             Json(json!({
@@ -1065,13 +1084,21 @@ async fn run_workflow_async(
     AxumPath(workflow_id): AxumPath<String>,
     Json(request): Json<RunWorkflowRequest>,
 ) -> axum::response::Response {
-    let workflow_path = match workflow_file_path(&state.workflows_dir, &workflow_id) {
-        Ok(path) => path,
+    let record = match load_persisted_workflow_record(state.engine.store(), &workflow_id).await {
+        Ok(record) => record,
         Err(error) => return workflow_error_response(error),
     };
-    if !workflow_path.exists() {
-        return workflow_error_response(TriggerError::WorkflowNotFound { workflow_id });
-    }
+    let document_state = match parse_workflow_document_state(&record.yaml) {
+        Ok(document_state) => document_state,
+        Err(error) => return workflow_error_response(error),
+    };
+    let plan = match compile_workflow(document_state.workflow.clone()) {
+        Ok(plan) => plan,
+        Err(error) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": error.to_string() })))
+                .into_response();
+        }
+    };
 
     let initial_payload = json!({
         "payload": request.payload.unwrap_or_else(|| json!({})),
@@ -1079,7 +1106,11 @@ async fn run_workflow_async(
         "source": "ui",
         "workflow_id": workflow_id
     });
-    match state.engine.start_workflow_path(&workflow_path, initial_payload).await {
+    match state
+        .engine
+        .start_plan_with_editor_snapshot(plan, initial_payload, record.yaml.clone())
+        .await
+    {
         Ok(started) => (
             StatusCode::ACCEPTED,
             Json(json!({
@@ -1270,7 +1301,7 @@ struct WorkflowSummaryContext {
 async fn workflow_summary_context(
     store: &RunStore,
     connectors_dir: &Path,
-    workflows_dir: &Path,
+    _workflows_dir: &Path,
 ) -> Result<WorkflowSummaryContext, TriggerError> {
     let connector_inspection = inspect_connectors(connectors_dir)?;
     let mut connector_states = connector_inspection
@@ -1288,18 +1319,8 @@ async fn workflow_summary_context(
     }
 
     let mut workflow_name_counts = BTreeMap::<String, usize>::new();
-    for entry in fs::read_dir(workflows_dir)?.collect::<Result<Vec<_>, _>>()? {
-        let path = entry.path();
-        if !matches!(
-            path.extension().and_then(|extension| extension.to_str()),
-            Some("yaml" | "yml")
-        ) {
-            continue;
-        }
-        let Ok(yaml) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(workflow) = parse_workflow_yaml(&yaml) else {
+    for record in store.list_workflows().await? {
+        let Ok(workflow) = parse_workflow_yaml(&record.yaml) else {
             continue;
         };
         *workflow_name_counts.entry(workflow.name).or_insert(0) += 1;
@@ -1397,12 +1418,22 @@ async fn create_workflow_document(
         .id
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| slugify_workflow_name(&document_state.workflow.name));
-    let workflow_path = workflow_file_path(workflows_dir, &workflow_id)?;
-    if workflow_path.exists() {
-        return Err(TriggerError::WorkflowAlreadyExists { workflow_id });
-    }
-
-    let response = write_workflow_file(&workflow_path, &document_state).await?;
+    validate_workflow_id(&workflow_id)?;
+    let response_yaml = serialize_workflow_yaml(
+        &document_state.workflow,
+        &document_state.ui_positions,
+        &document_state.ui_detached_steps,
+    )?;
+    let response = match store
+        .create_workflow(&workflow_id, &document_state.workflow.name, &response_yaml)
+        .await
+    {
+        Ok(record) => WorkflowWriteResult { id: record.id, yaml: record.yaml },
+        Err(crate::storage::StorageError::WorkflowAlreadyExists(_)) => {
+            return Err(TriggerError::WorkflowAlreadyExists { workflow_id });
+        }
+        Err(error) => return Err(error.into()),
+    };
     Ok(WorkflowDocumentResponse {
         id: response.id,
         summary: workflow_summary_after_write(
@@ -1417,13 +1448,15 @@ async fn create_workflow_document(
     })
 }
 
-fn delete_workflow_document(workflows_dir: &Path, workflow_id: &str) -> Result<(), TriggerError> {
-    let workflow_path = workflow_file_path(workflows_dir, workflow_id)?;
-    if !workflow_path.exists() {
-        return Err(TriggerError::WorkflowNotFound { workflow_id: workflow_id.to_string() });
+async fn delete_workflow_document(store: &RunStore, workflow_id: &str) -> Result<(), TriggerError> {
+    validate_workflow_id(workflow_id)?;
+    match store.delete_workflow(workflow_id).await {
+        Ok(()) => Ok(()),
+        Err(crate::storage::StorageError::WorkflowNotFound(_)) => {
+            Err(TriggerError::WorkflowNotFound { workflow_id: workflow_id.to_string() })
+        }
+        Err(error) => Err(error.into()),
     }
-    fs::remove_file(workflow_path)?;
-    Ok(())
 }
 
 async fn duplicate_workflow_document(
@@ -1437,13 +1470,22 @@ async fn duplicate_workflow_document(
         read_workflow_document(store, connectors_dir, workflows_dir, workflow_id).await?;
     let mut document_state = parse_workflow_document_state(&source_document.yaml)?;
     document_state.workflow.name = format!("{} copy", document_state.workflow.name);
-
-    let target_path = workflow_file_path(workflows_dir, target_id)?;
-    if target_path.exists() {
-        return Err(TriggerError::WorkflowAlreadyExists { workflow_id: target_id.to_string() });
-    }
-
-    let response = write_workflow_file(&target_path, &document_state).await?;
+    validate_workflow_id(target_id)?;
+    let response_yaml = serialize_workflow_yaml(
+        &document_state.workflow,
+        &document_state.ui_positions,
+        &document_state.ui_detached_steps,
+    )?;
+    let response = match store
+        .create_workflow(target_id, &document_state.workflow.name, &response_yaml)
+        .await
+    {
+        Ok(record) => WorkflowWriteResult { id: record.id, yaml: record.yaml },
+        Err(crate::storage::StorageError::WorkflowAlreadyExists(_)) => {
+            return Err(TriggerError::WorkflowAlreadyExists { workflow_id: target_id.to_string() });
+        }
+        Err(error) => return Err(error.into()),
+    };
     Ok(WorkflowDocumentResponse {
         id: response.id,
         summary: workflow_summary_after_write(
@@ -1481,30 +1523,39 @@ async fn rename_workflow_document(
         }
     };
     document_state.workflow.name = next_name.to_string();
-
-    let source_path = workflow_file_path(workflows_dir, workflow_id)?;
-    if !source_path.exists() {
-        return Err(TriggerError::WorkflowNotFound { workflow_id: workflow_id.to_string() });
-    }
-
-    let target_path = workflow_file_path(workflows_dir, &request.target_id)?;
-    if request.target_id != workflow_id && target_path.exists() {
-        return Err(TriggerError::WorkflowAlreadyExists { workflow_id: request.target_id });
-    }
-
-    let response = write_workflow_file(&target_path, &document_state).await?;
-    let response_id = response.id.clone();
-    if source_path != target_path {
-        fs::remove_file(source_path)?;
-    }
+    validate_workflow_id(workflow_id)?;
+    validate_workflow_id(&request.target_id)?;
+    let response_yaml = serialize_workflow_yaml(
+        &document_state.workflow,
+        &document_state.ui_positions,
+        &document_state.ui_detached_steps,
+    )?;
+    let response = match store
+        .rename_workflow(
+            workflow_id,
+            &request.target_id,
+            &document_state.workflow.name,
+            &response_yaml,
+        )
+        .await
+    {
+        Ok(record) => WorkflowWriteResult { id: record.id, yaml: record.yaml },
+        Err(crate::storage::StorageError::WorkflowNotFound(_)) => {
+            return Err(TriggerError::WorkflowNotFound { workflow_id: workflow_id.to_string() });
+        }
+        Err(crate::storage::StorageError::WorkflowAlreadyExists(_)) => {
+            return Err(TriggerError::WorkflowAlreadyExists { workflow_id: request.target_id });
+        }
+        Err(error) => return Err(error.into()),
+    };
 
     Ok(WorkflowDocumentResponse {
-        id: response_id.clone(),
+        id: response.id.clone(),
         summary: workflow_summary_after_write(
             store,
             connectors_dir,
             workflows_dir,
-            response_id,
+            response.id,
             &document_state.workflow,
         )
         .await,
@@ -1512,12 +1563,12 @@ async fn rename_workflow_document(
     })
 }
 
-fn connector_inventory(
+async fn connector_inventory(
+    store: &RunStore,
     connectors_dir: &Path,
-    workflows_dir: &Path,
 ) -> Result<ConnectorInventoryResponse, TriggerError> {
     let inspection = inspect_connectors(connectors_dir)?;
-    let workflow_dependencies = connector_usage_by_workflow(workflows_dir)?;
+    let workflow_dependencies = connector_usage_by_workflow(store).await?;
     Ok(ConnectorInventoryResponse {
         connectors: inspection
             .connectors
@@ -1534,11 +1585,11 @@ fn connector_inventory(
     })
 }
 
-fn starter_connector_pack_views(
+async fn starter_connector_pack_views(
+    store: &RunStore,
     connectors_dir: &Path,
-    workflows_dir: &Path,
 ) -> Result<Vec<StarterConnectorPackView>, TriggerError> {
-    let pack_states = starter_pack_install_state_map(connectors_dir, workflows_dir)?;
+    let pack_states = starter_pack_install_state_map(store, connectors_dir).await?;
     let packs = crate::starter_connector_packs::starter_connector_packs()
         .map_err(TriggerError::StarterPack)?;
     Ok(packs
@@ -1547,11 +1598,11 @@ fn starter_connector_pack_views(
         .collect())
 }
 
-fn starter_pack_install_state_map(
+async fn starter_pack_install_state_map(
+    store: &RunStore,
     connectors_dir: &Path,
-    workflows_dir: &Path,
 ) -> Result<HashMap<String, ProductConnectorState>, TriggerError> {
-    let inventory = connector_inventory(connectors_dir, workflows_dir)?;
+    let inventory = connector_inventory(store, connectors_dir).await?;
     let mut states = HashMap::new();
 
     for connector in inventory.connectors {
@@ -1604,24 +1655,13 @@ fn starter_connector_pack_install_state(
     }
 }
 
-fn connector_usage_by_workflow(
-    workflows_dir: &Path,
+async fn connector_usage_by_workflow(
+    store: &RunStore,
 ) -> Result<HashMap<String, Vec<String>>, TriggerError> {
     let mut usage = HashMap::<String, HashSet<String>>::new();
 
-    for entry in fs::read_dir(workflows_dir)?.collect::<Result<Vec<_>, _>>()? {
-        let path = entry.path();
-        if !matches!(
-            path.extension().and_then(|extension| extension.to_str()),
-            Some("yaml" | "yml")
-        ) {
-            continue;
-        }
-
-        let Ok(yaml) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(workflow) = parse_workflow_yaml(&yaml) else {
+    for record in store.list_workflows().await? {
+        let Ok(workflow) = parse_workflow_yaml(&record.yaml) else {
             continue;
         };
         let requirements = workflow_connector_requirements(&workflow);
@@ -1932,18 +1972,73 @@ fn parse_workflow_document_state(yaml: &str) -> Result<WorkflowDocumentState, Tr
     })
 }
 
+async fn load_persisted_workflow_record(
+    store: &RunStore,
+    workflow_id: &str,
+) -> Result<WorkflowRecord, TriggerError> {
+    validate_workflow_id(workflow_id)?;
+    match store.get_workflow(workflow_id).await {
+        Ok(record) => Ok(record),
+        Err(crate::storage::StorageError::WorkflowNotFound(_)) => {
+            Err(TriggerError::WorkflowNotFound { workflow_id: workflow_id.to_string() })
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+async fn seed_workflows_from_directory_if_missing(
+    store: &RunStore,
+    workflows_dir: &Path,
+) -> Result<(), TriggerError> {
+    let entries = match fs::read_dir(workflows_dir) {
+        Ok(entries) => entries.collect::<Result<Vec<_>, _>>()?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+
+    for entry in entries {
+        let path = entry.path();
+        if !matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("yaml" | "yml")
+        ) {
+            continue;
+        }
+
+        let Some(workflow_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        if validate_workflow_id(workflow_id).is_err() {
+            continue;
+        }
+
+        let Ok(yaml) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(document_state) = parse_workflow_document_state(&yaml) else {
+            continue;
+        };
+        let persisted_yaml = serialize_workflow_yaml(
+            &document_state.workflow,
+            &document_state.ui_positions,
+            &document_state.ui_detached_steps,
+        )?;
+        store
+            .create_workflow_if_missing(workflow_id, &document_state.workflow.name, &persisted_yaml)
+            .await?;
+    }
+
+    Ok(())
+}
+
 async fn read_workflow_document(
     store: &RunStore,
     connectors_dir: &Path,
     workflows_dir: &Path,
     workflow_id: &str,
 ) -> Result<WorkflowDocumentResponse, TriggerError> {
-    let workflow_path = workflow_file_path(workflows_dir, workflow_id)?;
-    if !workflow_path.exists() {
-        return Err(TriggerError::WorkflowNotFound { workflow_id: workflow_id.to_string() });
-    }
-    let yaml = fs::read_to_string(&workflow_path)?;
-    let document_state = parse_workflow_document_state(&yaml)?;
+    let record = load_persisted_workflow_record(store, workflow_id).await?;
+    let document_state = parse_workflow_document_state(&record.yaml)?;
     let context = workflow_summary_context(store, connectors_dir, workflows_dir).await?;
 
     Ok(WorkflowDocumentResponse {
@@ -1968,9 +2063,23 @@ async fn save_workflow_document(
     workflow_id: &str,
     yaml: &str,
 ) -> Result<WorkflowDocumentResponse, TriggerError> {
-    let workflow_path = workflow_file_path(workflows_dir, workflow_id)?;
+    validate_workflow_id(workflow_id)?;
     let document_state = parse_workflow_document_state(yaml)?;
-    let response = write_workflow_file(&workflow_path, &document_state).await?;
+    let response_yaml = serialize_workflow_yaml(
+        &document_state.workflow,
+        &document_state.ui_positions,
+        &document_state.ui_detached_steps,
+    )?;
+    let response = match store
+        .update_workflow(workflow_id, &document_state.workflow.name, &response_yaml)
+        .await
+    {
+        Ok(record) => WorkflowWriteResult { id: record.id, yaml: record.yaml },
+        Err(crate::storage::StorageError::WorkflowNotFound(_)) => {
+            return Err(TriggerError::WorkflowNotFound { workflow_id: workflow_id.to_string() });
+        }
+        Err(error) => return Err(error.into()),
+    };
     Ok(WorkflowDocumentResponse {
         id: response.id,
         summary: workflow_summary_after_write(
@@ -2271,7 +2380,7 @@ fn connector_error_response(error: TriggerError) -> axum::response::Response {
     (status, Json(json!({ "error": error.to_string() }))).into_response()
 }
 
-fn workflow_file_path(workflows_dir: &Path, workflow_id: &str) -> Result<PathBuf, TriggerError> {
+fn validate_workflow_id(workflow_id: &str) -> Result<(), TriggerError> {
     if workflow_id.trim().is_empty()
         || workflow_id.chars().any(|character| {
             !(character.is_ascii_alphanumeric() || character == '-' || character == '_')
@@ -2279,8 +2388,7 @@ fn workflow_file_path(workflows_dir: &Path, workflow_id: &str) -> Result<PathBuf
     {
         return Err(TriggerError::InvalidWorkflowId { workflow_id: workflow_id.to_string() });
     }
-
-    Ok(workflows_dir.join(format!("{workflow_id}.yaml")))
+    Ok(())
 }
 
 async fn workflow_inventory(
@@ -2288,39 +2396,17 @@ async fn workflow_inventory(
     connectors_dir: &Path,
     workflows_dir: &Path,
 ) -> Result<WorkflowInventoryResponse, TriggerError> {
-    let mut entries = fs::read_dir(workflows_dir)?.collect::<Result<Vec<_>, _>>()?;
-    entries.sort_by_key(|entry| entry.path());
-
     let mut invalid_files = Vec::new();
     let mut parsed_workflows = Vec::new();
-    for entry in entries {
-        let path = entry.path();
-        if !matches!(
-            path.extension().and_then(|extension| extension.to_str()),
-            Some("yaml" | "yml")
-        ) {
-            continue;
-        }
-        let Some(workflow_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
-        };
-        match fs::read_to_string(&path)
-            .map_err(TriggerError::from)
-            .and_then(|yaml| parse_workflow_yaml(&yaml))
-        {
-            Ok(workflow) => {
-                parsed_workflows.push((workflow_id.to_string(), workflow));
-            }
+    for record in store.list_workflows().await? {
+        match parse_workflow_yaml(&record.yaml) {
+            Ok(workflow) => parsed_workflows.push((record.id, workflow)),
             Err(error) => invalid_files.push(InvalidWorkflowFile {
                 error: error.to_string(),
-                file_name: path
-                    .file_name()
-                    .and_then(|file_name| file_name.to_str())
-                    .unwrap_or_default()
-                    .to_string(),
-                id: workflow_id.to_string(),
+                file_name: format!("{}.yaml", record.id),
+                id: record.id,
             }),
-        }
+        };
     }
 
     let context = workflow_summary_context(store, connectors_dir, workflows_dir).await?;
@@ -2368,32 +2454,6 @@ fn workflow_connector_block_facts(
 
     (requirements_unmet, runtime_blocked, setup_blocked)
 }
-
-async fn write_workflow_file(
-    workflow_path: &Path,
-    document_state: &WorkflowDocumentState,
-) -> Result<WorkflowWriteResult, TriggerError> {
-    let yaml = serialize_workflow_yaml(
-        &document_state.workflow,
-        &document_state.ui_positions,
-        &document_state.ui_detached_steps,
-    )?;
-    fs::create_dir_all(workflow_path.parent().ok_or_else(|| {
-        TriggerError::InvalidWorkflowYaml {
-            message: format!("workflow path {} has no parent directory", workflow_path.display()),
-        }
-    })?)?;
-    fs::write(workflow_path, &yaml)?;
-    let workflow_id = workflow_path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .ok_or_else(|| TriggerError::InvalidWorkflowYaml {
-            message: format!("workflow path {} has an invalid file name", workflow_path.display()),
-        })?
-        .to_string();
-    Ok(WorkflowWriteResult { id: workflow_id, yaml })
-}
-
 fn human_task_view(task: crate::storage::HumanTaskRecord) -> HumanTaskView {
     HumanTaskView {
         completed_at: task.completed_at,
@@ -2796,10 +2856,11 @@ mod tests {
         install_starter_connector_pack_endpoint, invalid_connector_view,
         list_starter_connector_packs, node_catalog, parse_workflow_document_state,
         read_workflow_document, rename_workflow_document, request_has_engine_token, run_view,
-        save_workflow_document, serialize_workflow_yaml, slugify_workflow_name,
-        validate_secret_value, workflow_file_path, workflow_inventory, AppState,
-        CreateWorkflowRequest, EngineAccessControl, N8nImportRequest, RenameWorkflowRequest,
-        RunDetailResponse, RunPageResponse, TriggerError, WebhookSignatureAuth, WebhookWorkflow,
+        save_workflow_document, seed_workflows_from_directory_if_missing, serialize_workflow_yaml,
+        slugify_workflow_name, validate_secret_value, validate_workflow_id, workflow_inventory,
+        AppState, CreateWorkflowRequest, EngineAccessControl, N8nImportRequest,
+        RenameWorkflowRequest, RunDetailResponse, RunPageResponse, TriggerError,
+        WebhookSignatureAuth, WebhookWorkflow,
     };
     use crate::{
         connectors::install_starter_connector_pack,
@@ -3118,8 +3179,7 @@ mod tests {
 
     #[test]
     fn rejects_workflow_ids_with_path_traversal_characters() {
-        let error = workflow_file_path(std::path::Path::new("workflows"), "../bad-id")
-            .expect_err("workflow id should be rejected");
+        let error = validate_workflow_id("../bad-id").expect_err("workflow id should be rejected");
 
         assert!(matches!(error, TriggerError::InvalidWorkflowId { .. }));
     }
@@ -3336,6 +3396,9 @@ steps:
         let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
         let inventory = runtime.block_on(async {
             let store = RunStore::connect(&db_path).await.expect("store should connect");
+            seed_workflows_from_directory_if_missing(&store, &workflows_dir)
+                .await
+                .expect("workflows should seed");
             let run = store
                 .start_run(
                     "customer intake",
@@ -3398,6 +3461,9 @@ steps:
         let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
         let inventory = runtime.block_on(async {
             let store = RunStore::connect(&db_path).await.expect("store should connect");
+            seed_workflows_from_directory_if_missing(&store, &workflows_dir)
+                .await
+                .expect("workflows should seed");
             let run = store
                 .start_run(
                     "customer intake",
@@ -3542,6 +3608,9 @@ steps:
         let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
         let inventory = runtime.block_on(async {
             let store = RunStore::connect(&db_path).await.expect("store should connect");
+            seed_workflows_from_directory_if_missing(&store, &workflows_dir)
+                .await
+                .expect("workflows should seed");
             workflow_inventory(&store, &connectors_dir, &workflows_dir)
                 .await
                 .expect("inventory should build")
@@ -3631,6 +3700,9 @@ steps:
         let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
         let inventory = runtime.block_on(async {
             let store = RunStore::connect(&db_path).await.expect("store should connect");
+            seed_workflows_from_directory_if_missing(&store, &workflows_dir)
+                .await
+                .expect("workflows should seed");
             workflow_inventory(&store, &connectors_dir, &workflows_dir)
                 .await
                 .expect("inventory should build")
@@ -3699,6 +3771,9 @@ steps:
         let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
         let (inventory, saved_document, renamed_document) = runtime.block_on(async {
             let store = RunStore::connect(&db_path).await.expect("store should connect");
+            seed_workflows_from_directory_if_missing(&store, &workflows_dir)
+                .await
+                .expect("workflows should seed");
             let run = store
                 .start_run(
                     "customer intake",
@@ -3870,8 +3945,17 @@ steps:
         std::fs::write(invalid_connector_dir.join("main.py"), "print('{}')")
             .expect("invalid connector script should exist");
 
-        let inventory = connector_inventory(&connectors_dir, &workflows_dir)
-            .expect("connector inventory should build");
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let inventory = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            seed_workflows_from_directory_if_missing(&store, &workflows_dir)
+                .await
+                .expect("workflows should seed");
+            connector_inventory(&store, &connectors_dir)
+                .await
+                .expect("connector inventory should build")
+        });
         let valid_payload = serde_json::to_value(
             inventory
                 .connectors
@@ -3941,7 +4025,11 @@ steps:
         });
 
         assert_eq!(response.id, "customer-intake");
-        assert!(workflows_dir.join("customer-intake.yaml").exists());
+        let persisted = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should reconnect");
+            store.get_workflow("customer-intake").await.expect("workflow should persist in db")
+        });
+        assert_eq!(persisted.name, "customer intake");
         let payload = serde_json::to_value(response).expect("response should serialize");
         assert_eq!(
             payload["summary"]["workflow_state"]["readiness"]["readiness_state"],
@@ -3982,6 +4070,9 @@ steps:
         let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
         let inventory = runtime.block_on(async {
             let store = RunStore::connect(&db_path).await.expect("store should connect");
+            seed_workflows_from_directory_if_missing(&store, &workflows_dir)
+                .await
+                .expect("workflows should seed");
             let run = store
                 .start_run(
                     "duplicate workflow",
@@ -4137,6 +4228,9 @@ steps:
         let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
         let inventory = runtime.block_on(async {
             let store = RunStore::connect(&db_path).await.expect("store should connect");
+            seed_workflows_from_directory_if_missing(&store, &workflows_dir)
+                .await
+                .expect("workflows should seed");
 
             for index in 0..10_000 {
                 sqlx::query(
@@ -4505,10 +4599,17 @@ ui:
         let connectors_dir = temp_dir.join("connectors");
         std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
         let db_path = temp_dir.join("runs.sqlite");
-        let workflow_path = temp_dir.join("draft.yaml");
-        std::fs::write(
-            &workflow_path,
-            r#"
+
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let response = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            create_workflow_document(
+                &store,
+                &connectors_dir,
+                &temp_dir,
+                CreateWorkflowRequest {
+                    id: Some("draft".to_string()),
+                    yaml: r#"
 version: v1
 name: draft
 trigger:
@@ -4519,13 +4620,12 @@ steps:
     params:
       value: 1
     next: []
-"#,
-        )
-        .expect("workflow should be written");
-
-        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
-        let response = runtime.block_on(async {
-            let store = RunStore::connect(&db_path).await.expect("store should connect");
+"#
+                    .to_string(),
+                },
+            )
+            .await
+            .expect("workflow should be created");
             rename_workflow_document(
                 &store,
                 &connectors_dir,
@@ -4544,9 +4644,10 @@ steps:
         assert_eq!(response.id, "customer-intake");
         assert_eq!(response.summary.file_name, "customer-intake.yaml");
         assert_eq!(response.summary.name, "Customer intake");
-        assert!(!workflow_path.exists());
-        let renamed_yaml = std::fs::read_to_string(temp_dir.join("customer-intake.yaml"))
-            .expect("renamed workflow should exist");
+        let renamed_yaml = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should reconnect");
+            store.get_workflow("customer-intake").await.expect("renamed workflow should exist").yaml
+        });
         assert!(renamed_yaml.contains("name: Customer intake"));
 
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
@@ -4558,10 +4659,17 @@ steps:
         let connectors_dir = temp_dir.join("connectors");
         std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
         let db_path = temp_dir.join("runs.sqlite");
-        let workflow_path = temp_dir.join("draft.yaml");
-        std::fs::write(
-            &workflow_path,
-            r#"
+
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let response = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            create_workflow_document(
+                &store,
+                &connectors_dir,
+                &temp_dir,
+                CreateWorkflowRequest {
+                    id: Some("draft".to_string()),
+                    yaml: r#"
 version: v1
 name: original
 trigger:
@@ -4572,13 +4680,12 @@ steps:
     params:
       value: 1
     next: []
-"#,
-        )
-        .expect("workflow should be written");
-
-        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
-        let response = runtime.block_on(async {
-            let store = RunStore::connect(&db_path).await.expect("store should connect");
+"#
+                    .to_string(),
+                },
+            )
+            .await
+            .expect("workflow should be created");
             rename_workflow_document(
                 &store,
                 &connectors_dir,
@@ -4642,6 +4749,9 @@ steps:
         let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
         let response = runtime.block_on(async {
             let store = RunStore::connect(&db_path).await.expect("store should connect");
+            seed_workflows_from_directory_if_missing(&store, &workflows_dir)
+                .await
+                .expect("workflows should seed");
             let run = store
                 .start_run(
                     "customer intake",

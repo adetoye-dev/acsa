@@ -181,6 +181,21 @@ impl WorkflowEngine {
         self.execute_plan_with_snapshots(plan, initial_payload, workflow_snapshot, None).await
     }
 
+    pub async fn execute_plan_with_editor_snapshot(
+        &self,
+        plan: &WorkflowPlan,
+        initial_payload: Value,
+        editor_snapshot: String,
+    ) -> Result<ExecutionSummary, EngineError> {
+        self.execute_plan_with_snapshots(
+            plan,
+            initial_payload,
+            editor_snapshot.clone(),
+            Some(editor_snapshot),
+        )
+        .await
+    }
+
     async fn execute_plan_with_snapshots(
         &self,
         plan: &WorkflowPlan,
@@ -218,6 +233,21 @@ impl WorkflowEngine {
     ) -> Result<StartedExecution, EngineError> {
         let workflow_snapshot = canonical_workflow_snapshot(&plan.workflow)?;
         self.start_plan_with_snapshots(plan, initial_payload, workflow_snapshot, None).await
+    }
+
+    pub async fn start_plan_with_editor_snapshot(
+        &self,
+        plan: WorkflowPlan,
+        initial_payload: Value,
+        editor_snapshot: String,
+    ) -> Result<StartedExecution, EngineError> {
+        self.start_plan_with_snapshots(
+            plan,
+            initial_payload,
+            editor_snapshot.clone(),
+            Some(editor_snapshot),
+        )
+        .await
     }
 
     async fn start_plan_with_snapshots(

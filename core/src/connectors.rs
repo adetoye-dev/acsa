@@ -713,11 +713,7 @@ fn scaffold_wasm_connector(
         entry: "dist/connector.wasm".to_string(),
         enable_wasi: false,
         inputs: vec!["message".to_string()],
-        limits: ConnectorLimits {
-            memory: Some(64),
-            timeout: Some(10_000),
-            timeout_ms: None,
-        },
+        limits: ConnectorLimits { memory: Some(64), timeout: Some(10_000), timeout_ms: None },
         name: name.to_string(),
         outputs: vec!["echoed".to_string()],
         runtime: ConnectorRuntime::Wasm,
@@ -832,11 +828,7 @@ fn resolve_secrets(params: &Value) -> Result<Value, NodeError> {
 }
 
 fn timeout_ms(manifest: &ConnectorManifest) -> u64 {
-    manifest
-        .limits
-        .timeout_ms
-        .or(manifest.limits.timeout)
-        .unwrap_or(DEFAULT_CONNECTOR_TIMEOUT_MS)
+    manifest.limits.timeout_ms.or(manifest.limits.timeout).unwrap_or(DEFAULT_CONNECTOR_TIMEOUT_MS)
 }
 
 fn validate_manifest(
@@ -853,14 +845,12 @@ fn validate_manifest(
             message: "connector manifest entry must be non-empty".to_string(),
         });
     }
-    let timeout_ms = manifest
-        .limits
-        .timeout_ms
-        .or(manifest.limits.timeout)
-        .ok_or_else(|| ConnectorError::InvalidManifest {
+    let timeout_ms = manifest.limits.timeout_ms.or(manifest.limits.timeout).ok_or_else(|| {
+        ConnectorError::InvalidManifest {
             message: "connector manifest must define limits.timeout_ms (or legacy limits.timeout)"
                 .to_string(),
-        })?;
+        }
+    })?;
     if timeout_ms == 0 || timeout_ms > MAX_CONNECTOR_TIMEOUT_MS {
         return Err(ConnectorError::InvalidManifest {
             message: format!(

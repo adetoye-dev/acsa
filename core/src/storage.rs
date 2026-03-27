@@ -64,10 +64,7 @@ fn plaintext_credential_migration_queue() -> &'static RwLock<HashSet<Option<Stri
 
 fn strict_credential_encryption_enabled() -> bool {
     matches!(
-        env::var(CREDENTIAL_STRICT_ENCRYPTION_ENV)
-            .ok()
-            .as_deref()
-            .map(str::trim),
+        env::var(CREDENTIAL_STRICT_ENCRYPTION_ENV).ok().as_deref().map(str::trim),
         Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
     )
 }
@@ -322,6 +319,188 @@ impl RunStore {
                 let mut queue = poisoned.into_inner();
                 queue.remove(&Some(name.to_string()));
             }
+        }
+
+        Ok(())
+    }
+
+    pub async fn list_workflows(&self) -> Result<Vec<WorkflowRecord>, StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, name, yaml, created_at, updated_at
+            FROM workflows
+            ORDER BY updated_at DESC, created_at DESC, name ASC, id ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(map_workflow_row).collect()
+    }
+
+    pub async fn get_workflow(&self, workflow_id: &str) -> Result<WorkflowRecord, StorageError> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, name, yaml, created_at, updated_at
+            FROM workflows
+            WHERE id = ?
+            "#,
+        )
+        .bind(workflow_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| StorageError::WorkflowNotFound(workflow_id.to_string()))?;
+
+        map_workflow_row(row)
+    }
+
+    pub async fn create_workflow(
+        &self,
+        workflow_id: &str,
+        name: &str,
+        yaml: &str,
+    ) -> Result<WorkflowRecord, StorageError> {
+        if workflow_id.trim().is_empty() {
+            return Err(StorageError::InvalidInput("workflow id must not be empty".to_string()));
+        }
+        if name.trim().is_empty() {
+            return Err(StorageError::InvalidInput("workflow name must not be empty".to_string()));
+        }
+        if yaml.trim().is_empty() {
+            return Err(StorageError::InvalidInput("workflow yaml must not be empty".to_string()));
+        }
+
+        let now = current_timestamp();
+        let result = sqlx::query(
+            r#"
+            INSERT INTO workflows (id, name, yaml, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(workflow_id)
+        .bind(name)
+        .bind(yaml)
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await;
+
+        match result {
+            Ok(_) => self.get_workflow(workflow_id).await,
+            Err(sqlx::Error::Database(database_error)) if database_error.is_unique_violation() => {
+                Err(StorageError::WorkflowAlreadyExists(workflow_id.to_string()))
+            }
+            Err(error) => Err(StorageError::Sqlx(error)),
+        }
+    }
+
+    pub async fn create_workflow_if_missing(
+        &self,
+        workflow_id: &str,
+        name: &str,
+        yaml: &str,
+    ) -> Result<WorkflowRecord, StorageError> {
+        let now = current_timestamp();
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO workflows (id, name, yaml, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(workflow_id)
+        .bind(name)
+        .bind(yaml)
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_workflow(workflow_id).await
+    }
+
+    pub async fn update_workflow(
+        &self,
+        workflow_id: &str,
+        name: &str,
+        yaml: &str,
+    ) -> Result<WorkflowRecord, StorageError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE workflows
+            SET name = ?, yaml = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(name)
+        .bind(yaml)
+        .bind(current_timestamp())
+        .bind(workflow_id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StorageError::WorkflowNotFound(workflow_id.to_string()));
+        }
+
+        self.get_workflow(workflow_id).await
+    }
+
+    pub async fn rename_workflow(
+        &self,
+        workflow_id: &str,
+        target_id: &str,
+        name: &str,
+        yaml: &str,
+    ) -> Result<WorkflowRecord, StorageError> {
+        if workflow_id == target_id {
+            return self.update_workflow(workflow_id, name, yaml).await;
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let existing = sqlx::query("SELECT id FROM workflows WHERE id = ?")
+            .bind(target_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        if existing.is_some() {
+            return Err(StorageError::WorkflowAlreadyExists(target_id.to_string()));
+        }
+
+        let result = sqlx::query(
+            r#"
+            UPDATE workflows
+            SET id = ?, name = ?, yaml = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(target_id)
+        .bind(name)
+        .bind(yaml)
+        .bind(current_timestamp())
+        .bind(workflow_id)
+        .execute(&mut *tx)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StorageError::WorkflowNotFound(workflow_id.to_string()));
+        }
+
+        tx.commit().await?;
+        self.get_workflow(target_id).await
+    }
+
+    pub async fn delete_workflow(&self, workflow_id: &str) -> Result<(), StorageError> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM workflows
+            WHERE id = ?
+            "#,
+        )
+        .bind(workflow_id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StorageError::WorkflowNotFound(workflow_id.to_string()));
         }
 
         Ok(())
@@ -1166,6 +1345,20 @@ impl RunStore {
 
         sqlx::query(
             r#"
+            CREATE TABLE IF NOT EXISTS workflows (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              yaml TEXT NOT NULL,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
             CREATE TABLE IF NOT EXISTS credentials (
               name TEXT PRIMARY KEY,
               value TEXT NOT NULL,
@@ -1248,6 +1441,9 @@ impl RunStore {
         .await?;
 
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_runs_workflow_name ON runs(workflow_name)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_workflows_updated_at ON workflows(updated_at)")
             .execute(&self.pool)
             .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)")
@@ -1414,6 +1610,15 @@ pub struct CredentialRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowRecord {
+    pub id: String,
+    pub name: String,
+    pub yaml: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HumanTaskRecord {
     pub id: String,
     pub run_id: String,
@@ -1529,6 +1734,10 @@ pub enum StorageError {
     InvalidPath(String),
     #[error("run not found: {0}")]
     RunNotFound(String),
+    #[error("workflow not found: {0}")]
+    WorkflowNotFound(String),
+    #[error("workflow already exists: {0}")]
+    WorkflowAlreadyExists(String),
     #[error("human task not found: {0}")]
     HumanTaskNotFound(String),
     #[error("data integrity error: {0}")]
@@ -1565,8 +1774,9 @@ fn credential_master_key() -> Result<[u8; 32], StorageError> {
 
 fn encrypt_value(value: &str) -> Result<String, StorageError> {
     let key = credential_master_key()?;
-    let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|error| StorageError::CredentialEncryption(format!("invalid cipher key: {error}")))?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| {
+        StorageError::CredentialEncryption(format!("invalid cipher key: {error}"))
+    })?;
 
     let mut nonce_bytes = [0u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
@@ -1584,9 +1794,8 @@ fn encrypt_value(value: &str) -> Result<String, StorageError> {
 }
 
 fn encrypted_credential_segments(stored: &str) -> Option<(&str, &str)> {
-    let payload = stored
-        .strip_prefix(CREDENTIAL_CIPHER_VERSION)
-        .and_then(|value| value.strip_prefix(':'))?;
+    let payload =
+        stored.strip_prefix(CREDENTIAL_CIPHER_VERSION).and_then(|value| value.strip_prefix(':'))?;
     let (nonce_b64, cipher_b64) = payload.split_once(':')?;
     if nonce_b64.is_empty() || cipher_b64.is_empty() {
         return None;
@@ -1635,8 +1844,9 @@ fn decrypt_value(stored: &str, credential_name: Option<&str>) -> Result<String, 
 
     let key = credential_master_key()
         .map_err(|error| StorageError::CredentialDecryption(error.to_string()))?;
-    let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|error| StorageError::CredentialDecryption(format!("invalid cipher key: {error}")))?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| {
+        StorageError::CredentialDecryption(format!("invalid cipher key: {error}"))
+    })?;
 
     let nonce_bytes = BASE64.decode(nonce_b64).map_err(|error| {
         StorageError::CredentialDecryption(format!("invalid nonce encoding: {error}"))
@@ -1652,9 +1862,9 @@ fn decrypt_value(stored: &str, credential_name: Option<&str>) -> Result<String, 
     })?;
 
     let nonce = Nonce::from_slice(&nonce_bytes);
-    let plaintext = cipher.decrypt(nonce, ciphertext.as_ref()).map_err(|error| {
-        StorageError::CredentialDecryption(format!("decrypt failed: {error}"))
-    })?;
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext.as_ref())
+        .map_err(|error| StorageError::CredentialDecryption(format!("decrypt failed: {error}")))?;
 
     String::from_utf8(plaintext).map_err(|error| {
         StorageError::CredentialDecryption(format!("decrypted value is not valid utf-8: {error}"))
@@ -1735,6 +1945,16 @@ fn map_run_row(row: sqlx::sqlite::SqliteRow) -> Result<RunRecord, StorageError> 
         workflow_snapshot: row.try_get("workflow_snapshot")?,
         initial_payload: row.try_get("initial_payload")?,
         state_json: row.try_get("state_json")?,
+    })
+}
+
+fn map_workflow_row(row: sqlx::sqlite::SqliteRow) -> Result<WorkflowRecord, StorageError> {
+    Ok(WorkflowRecord {
+        id: row.try_get("id")?,
+        name: row.try_get("name")?,
+        yaml: row.try_get("yaml")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
     })
 }
 
@@ -1856,9 +2076,8 @@ mod tests {
 
         let _ = decrypt_value("plain-secret", None);
 
-        let queue = plaintext_credential_migration_queue()
-            .read()
-            .expect("queue lock should be acquired");
+        let queue =
+            plaintext_credential_migration_queue().read().expect("queue lock should be acquired");
         assert!(queue.contains(&None));
         assert!(!queue.contains(&Some("<unknown>".to_string())));
     }
@@ -1879,6 +2098,90 @@ mod tests {
             .await
             .expect_err("blank credential name should be rejected");
         assert!(matches!(error, StorageError::InvalidInput(_)));
+
+        tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
+    }
+
+    #[tokio::test]
+    async fn workflow_crud_is_db_backed() {
+        let temp_dir = std::env::temp_dir().join(format!("acsa-storage-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir).await.expect("temp dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
+        let store = RunStore::connect(&db_path).await.expect("store should connect");
+
+        let created = store
+            .create_workflow(
+                "customer-intake",
+                "customer intake",
+                "version: v1\nname: customer intake\ntrigger:\n  type: manual\nsteps: []\n",
+            )
+            .await
+            .expect("workflow should create");
+        assert_eq!(created.id, "customer-intake");
+
+        let listed = store.list_workflows().await.expect("workflows should list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "customer-intake");
+
+        let updated = store
+            .update_workflow(
+                "customer-intake",
+                "customer intake",
+                "version: v1\nname: customer intake\ntrigger:\n  type: manual\nsteps:\n  - id: start\n    type: constant\n    params:\n      value: true\n    next: []\n",
+            )
+            .await
+            .expect("workflow should update");
+        assert!(updated.yaml.contains("id: start"));
+
+        let renamed = store
+            .rename_workflow(
+                "customer-intake",
+                "customer-intake-v2",
+                "customer intake v2",
+                "version: v1\nname: customer intake v2\ntrigger:\n  type: manual\nsteps: []\n",
+            )
+            .await
+            .expect("workflow should rename");
+        assert_eq!(renamed.id, "customer-intake-v2");
+        assert_eq!(renamed.name, "customer intake v2");
+
+        store.delete_workflow("customer-intake-v2").await.expect("workflow should delete");
+        let error = store
+            .get_workflow("customer-intake-v2")
+            .await
+            .expect_err("deleted workflow should not load");
+        assert!(matches!(error, StorageError::WorkflowNotFound(_)));
+
+        tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
+    }
+
+    #[tokio::test]
+    async fn create_workflow_if_missing_preserves_existing_yaml() {
+        let temp_dir = std::env::temp_dir().join(format!("acsa-storage-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir).await.expect("temp dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
+        let store = RunStore::connect(&db_path).await.expect("store should connect");
+
+        store
+            .create_workflow(
+                "seeded",
+                "seeded workflow",
+                "version: v1\nname: seeded workflow\ntrigger:\n  type: manual\nsteps: []\n",
+            )
+            .await
+            .expect("workflow should create");
+
+        let seeded = store
+            .create_workflow_if_missing(
+                "seeded",
+                "replacement workflow",
+                "version: v1\nname: replacement workflow\ntrigger:\n  type: manual\nsteps:\n  - id: replacement\n    type: constant\n    params:\n      value: true\n    next: []\n",
+            )
+            .await
+            .expect("seed should preserve existing record");
+
+        assert_eq!(seeded.name, "seeded workflow");
+        assert!(!seeded.yaml.contains("replacement"));
 
         tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
     }

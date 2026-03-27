@@ -15,8 +15,8 @@
 #![deny(warnings)]
 #![allow(dead_code)]
 
-use std::env;
 use std::collections::HashSet;
+use std::env;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -139,6 +139,14 @@ fn compute_source_dir(rel_path: &str) -> Result<PathBuf, StarterPackError> {
                 if let Some(found) = candidates.into_iter().find(|candidate| candidate.exists()) {
                     return Ok(found);
                 }
+
+                #[cfg(test)]
+                {
+                    let fallback = PathBuf::from(BUILD_TIME_MANIFEST_DIR).join("..").join(rel_path);
+                    if fallback.exists() {
+                        return Ok(fallback);
+                    }
+                }
             }
             Err(StarterPackError::SourcePathResolution {
                 rel_path: rel_path.to_string(),
@@ -176,10 +184,7 @@ fn compute_source_dir(rel_path: &str) -> Result<PathBuf, StarterPackError> {
 
 #[cfg(unix)]
 fn platform_shared_data_dirs() -> Vec<PathBuf> {
-    vec![
-        PathBuf::from("/usr/local/share/acsa"),
-        PathBuf::from("/opt/homebrew/share/acsa"),
-    ]
+    vec![PathBuf::from("/usr/local/share/acsa"), PathBuf::from("/opt/homebrew/share/acsa")]
 }
 
 #[cfg(windows)]
@@ -227,7 +232,8 @@ mod tests {
 
     #[test]
     fn starter_connector_pack_catalog_uses_capability_first_copy() {
-        let catalog = starter_connector_packs().expect("starter pack catalog should resolve source directories");
+        let catalog = starter_connector_packs()
+            .expect("starter pack catalog should resolve source directories");
         let by_id = |id: &str| {
             catalog.iter().find(|pack| pack.id == id).expect("starter pack should exist")
         };
