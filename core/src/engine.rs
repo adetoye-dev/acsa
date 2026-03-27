@@ -804,10 +804,6 @@ pub fn validate_workflow(workflow: &Workflow) -> Result<(), EngineError> {
 
     validate_trigger(&workflow.trigger)?;
 
-    if workflow.steps.is_empty() {
-        return Err(EngineError::WorkflowHasNoSteps);
-    }
-
     let mut step_ids = HashSet::new();
 
     for step in &workflow.steps {
@@ -1596,6 +1592,22 @@ steps:
             error,
             EngineError::DuplicateStepId { step_id } if step_id == "shared"
         ));
+    }
+
+    #[test]
+    fn compiles_blank_workflow_without_steps() {
+        let workflow = Workflow {
+            version: "v1".to_string(),
+            name: "blank-workflow".to_string(),
+            trigger: Trigger { r#type: "manual".to_string(), details: Default::default() },
+            steps: vec![],
+            ui: Default::default(),
+        };
+
+        let plan = compile_workflow(workflow).expect("blank workflow should compile");
+
+        assert!(plan.order.is_empty());
+        assert!(plan.steps.is_empty());
     }
 
     #[test]

@@ -3560,6 +3560,44 @@ steps:
     }
 
     #[test]
+    fn create_workflow_response_allows_blank_workflows() {
+        let temp_dir = write_temp_directory("workflow-create-blank-state");
+        let workflows_dir = temp_dir.join("workflows");
+        std::fs::create_dir_all(&workflows_dir).expect("workflows dir should be created");
+        let connectors_dir = temp_dir.join("connectors");
+
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let response = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            create_workflow_document(
+                &store,
+                &connectors_dir,
+                &workflows_dir,
+                CreateWorkflowRequest {
+                    id: Some("blank-workflow".to_string()),
+                    yaml: r#"
+version: v1
+name: blank workflow
+trigger:
+  type: manual
+steps: []
+"#
+                    .to_string(),
+                },
+            )
+            .await
+            .expect("blank workflow should be created")
+        });
+
+        assert_eq!(response.id, "blank-workflow");
+        let payload = serde_json::to_value(response).expect("response should serialize");
+        assert_eq!(payload["summary"]["step_count"], json!(0));
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
     fn workflow_inventory_classifies_invalid_installed_connector_as_setup_blocked() {
         let temp_dir = write_temp_directory("workflow-inventory-invalid-connector");
         let workflows_dir = temp_dir.join("workflows");

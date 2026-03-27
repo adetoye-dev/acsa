@@ -51,8 +51,7 @@ import {
   addStepAfterNode,
   addStepToWorkflow,
   autoLayoutWorkflow,
-  createLocalWorkflowDocument,
-  createLocalWorkflowDocumentFromYaml,
+  createBlankWorkflow,
   defaultStepParamsForType,
   defaultTriggerDetailsForType,
   extractTriggerDetails,
@@ -522,29 +521,13 @@ export function EditorShell({
 
       if (createDraftOnBoot && !hasCreatedDraftOnBoot.current) {
         hasCreatedDraftOnBoot.current = true;
-        const document = persistDocumentLayout(
-          createDraftDocumentFromStarter({
-            documents: currentDocuments,
-            persistedWorkflows: mergedWorkflows,
-            starter,
-            starterYaml
-          })
-        );
-        setDocuments((current) => ({
-          ...current,
-          [document.id]: document
-        }));
-        setWorkflows((current) => upsertWorkflowSummary(current, document.summary));
-        patchWorkflowState({
-          activeWorkflowId: document.id,
-          lastAction: starter
-            ? `Loaded ${starter.name} starter draft`
-            : `Created ${document.summary.file_name} draft`,
-          selectedNodeId: TRIGGER_NODE_ID
+        const response = await createPersistedWorkflowFromSeed({
+          documents: currentDocuments,
+          persistedWorkflows: mergedWorkflows,
+          starter,
+          starterYaml
         });
-        applyInspectorDraftState(document, TRIGGER_NODE_ID);
-        navigateToWorkflowRoute(document.id);
-        await refreshRunHistory(document.workflow.name);
+        await refreshRunHistory(response.summary.name);
         return;
       }
 
@@ -594,7 +577,7 @@ export function EditorShell({
     return response.text();
   }
 
-  function createDraftDocumentFromStarter({
+  async function createPersistedWorkflowFromSeed({
     documents,
     persistedWorkflows,
     starter,
@@ -605,16 +588,31 @@ export function EditorShell({
     starter: WorkflowStarter | null;
     starterYaml: string | null;
   }) {
-    if (!starter || !starterYaml) {
-      return createLocalWorkflowDocument(nextDraftWorkflowId(persistedWorkflows, documents));
-    }
-
-    const workflowId = nextStarterDraftWorkflowId(starter.id, persistedWorkflows, documents);
-    try {
-      return createLocalWorkflowDocumentFromYaml(workflowId, starterYaml);
-    } catch {
-      return createLocalWorkflowDocument(nextDraftWorkflowId(persistedWorkflows, documents));
-    }
+    const workflowId =
+      starter && starterYaml
+        ? nextStarterDraftWorkflowId(starter.id, persistedWorkflows, documents)
+        : nextDraftWorkflowId(persistedWorkflows, documents);
+    const yaml =
+      starter && starterYaml ? starterYaml : workflowToYaml(createBlankWorkflow(workflowId));
+    const response = await fetchEngineJson<WorkflowDocumentResponse>("/api/workflows", {
+      body: JSON.stringify({ id: workflowId, yaml }),
+      headers: {
+        "content-type": "application/json"
+      },
+      method: "POST"
+    });
+    const nextDocument = applyWorkflowResponse(response);
+    patchWorkflowState({
+      activeWorkflowId: response.id,
+      globalError: null,
+      lastAction: starter
+        ? `Created ${response.summary.name} from ${starter.name}`
+        : `Created ${response.summary.name}`,
+      selectedNodeId: TRIGGER_NODE_ID
+    });
+    applyInspectorDraftState(nextDocument, TRIGGER_NODE_ID);
+    navigateToWorkflowRoute(response.id);
+    return response;
   }
 
   async function loadWorkflowDocument(
@@ -628,12 +626,12 @@ export function EditorShell({
       );
       const nextDocument = applyWorkflowResponse(response);
       applyInspectorDraftState(nextDocument, nextSelectedNodeId);
-      patchWorkflowState({ lastAction: `Opened ${response.summary.file_name}` });
+      patchWorkflowState({ lastAction: `Opened ${response.summary.name}` });
       return response;
     } catch (error) {
       patchWorkflowState({
         globalError: errorMessage(error),
-        lastAction: `Failed to load ${workflowId}.yaml`
+        lastAction: `Failed to load ${workflowId}`
       });
       return null;
     } finally {
@@ -746,26 +744,24 @@ export function EditorShell({
   }
 
   async function handleCreateWorkflow() {
-    const workflowId = nextDraftWorkflowId(workflows);
-    const document = persistDocumentLayout(createLocalWorkflowDocument(workflowId));
-    setDocuments((current) => ({
-      ...current,
-      [document.id]: document
-    }));
-    setWorkflows((current) => upsertWorkflowSummary(current, document.summary));
-    patchWorkflowState({
-      activeWorkflowId: document.id,
-      globalError: null,
-      lastAction: `Created ${document.summary.file_name} draft`,
-      selectedNodeId: TRIGGER_NODE_ID
-    });
-    applyInspectorDraftState(document, TRIGGER_NODE_ID);
-    navigateToWorkflowRoute(document.id);
-    await refreshRunHistory(document.workflow.name);
+    try {
+      const response = await createPersistedWorkflowFromSeed({
+        documents,
+        persistedWorkflows: workflows,
+        starter: null,
+        starterYaml: null
+      });
+      await refreshRunHistory(response.summary.name);
+    } catch (error) {
+      patchWorkflowState({
+        globalError: errorMessage(error),
+        lastAction: "Workflow creation failed"
+      });
+    }
   }
 
   async function handleDeleteWorkflow(workflowId: string) {
-    if (!window.confirm(`Delete ${workflowId}.yaml?`)) {
+    if (!window.confirm(`Delete ${workflowId}?`)) {
       return;
     }
 
@@ -785,7 +781,7 @@ export function EditorShell({
       patchWorkflowState({
         activeWorkflowId: nextWorkflowId,
         globalError: null,
-        lastAction: `Discarded ${workflowId}.yaml draft`,
+        lastAction: `Discarded ${workflowId} draft`,
         selectedNodeId: null
       });
       navigateToWorkflowRoute(nextWorkflowId);
@@ -832,14 +828,14 @@ export function EditorShell({
       await refreshRunHistory(workflowName);
       patchWorkflowState({
         globalError: null,
-        lastAction: `Deleted ${workflowId}.yaml`,
+        lastAction: `Deleted ${workflowId}`,
         selectedNodeId: null
       });
       navigateToWorkflowRoute(nextWorkflowId);
     } catch (error) {
       patchWorkflowState({
         globalError: errorMessage(error),
-        lastAction: `Failed to delete ${workflowId}.yaml`
+        lastAction: `Failed to delete ${workflowId}`
       });
     }
   }
@@ -852,7 +848,7 @@ export function EditorShell({
     const targetId = slugifyIdentifier(proposedId);
     if (workflows.some((workflow) => workflow.id === targetId)) {
       patchWorkflowState({
-        globalError: `A workflow named ${targetId}.yaml already exists.`,
+        globalError: `A workflow named ${targetId} already exists.`,
         lastAction: "Workflow duplication failed"
       });
       return;
@@ -883,7 +879,7 @@ export function EditorShell({
       patchWorkflowState({
         activeWorkflowId: targetId,
         globalError: null,
-        lastAction: `Duplicated ${workflowId}.yaml to ${duplicateDocument.summary.file_name}`,
+        lastAction: `Duplicated ${workflowId} to ${duplicateDocument.summary.name}`,
         selectedNodeId: null
       });
       applyInspectorDraftState(duplicateDocument, null);
@@ -907,7 +903,7 @@ export function EditorShell({
       patchWorkflowState({
         activeWorkflowId: response.id,
         globalError: null,
-        lastAction: `Duplicated ${workflowId}.yaml to ${response.summary.file_name}`,
+        lastAction: `Duplicated ${workflowId} to ${response.summary.name}`,
         selectedNodeId: null
       });
       applyInspectorDraftState(nextDocument, null);
@@ -949,7 +945,7 @@ export function EditorShell({
       )
     ) {
       patchWorkflowState({
-        globalError: `A workflow named ${targetId}.yaml already exists.`,
+        globalError: `A workflow named ${targetId} already exists.`,
         lastAction: "Workflow rename failed"
       });
       return;
@@ -982,7 +978,7 @@ export function EditorShell({
       patchWorkflowState({
         activeWorkflowId: activeWorkflowId === workflowId ? targetId : activeWorkflowId,
         globalError: null,
-        lastAction: `Renamed ${workflowId}.yaml to ${renamedDocument.summary.file_name}`
+        lastAction: `Renamed ${workflowId} to ${renamedDocument.summary.name}`
       });
       if (activeWorkflowId === workflowId) {
         applyInspectorDraftState(renamedDocument, selectedNodeId);
@@ -1031,7 +1027,7 @@ export function EditorShell({
       patchWorkflowState({
         activeWorkflowId: activeWorkflowId === workflowId ? response.id : activeWorkflowId,
         globalError: null,
-        lastAction: `Renamed ${workflowId}.yaml to ${response.summary.file_name}`
+        lastAction: `Renamed ${workflowId} to ${response.summary.name}`
       });
       if (activeWorkflowId === workflowId) {
         applyInspectorDraftState(renamedDocument, selectedNodeId);
@@ -1269,7 +1265,7 @@ export function EditorShell({
       patchWorkflowState({
         activeWorkflowId: response.id,
         globalError: null,
-        lastAction: `Saved ${response.summary.file_name}`,
+        lastAction: `Saved ${response.summary.name}`,
         selectedNodeId
       });
       applyInspectorDraftState(nextDocument, selectedNodeId);
@@ -1316,7 +1312,7 @@ export function EditorShell({
     applyInspectorDraftState(documents[workflowId], null);
     navigateToWorkflowRoute(workflowId);
     await refreshRunHistory(documents[workflowId].workflow.name);
-    patchWorkflowState({ lastAction: `Opened ${workflowId}.yaml` });
+    patchWorkflowState({ lastAction: `Opened ${documents[workflowId].summary.name}` });
   }
 
   function handleTriggerTypeChange(triggerType: string) {
@@ -1683,7 +1679,7 @@ export function EditorShell({
         }`}
       >
         <TopBar
-          activeWorkflowFile={activeWorkflow?.summary.file_name ?? "No workflow selected"}
+          activeWorkflowFile={activeWorkflow?.summary.name ?? "No workflow selected"}
           activeView={centerView}
           hasUnsavedChanges={activeWorkflow?.dirty ?? false}
           isRunning={isRunning}
@@ -2797,9 +2793,6 @@ function saveDisabledMessage(
   if (yamlError) {
     return "Fix YAML issues before saving.";
   }
-  if (!workflowHasRunnableSteps(activeWorkflow.workflow)) {
-    return "Add at least one step before saving this workflow.";
-  }
   return null;
 }
 
@@ -2814,7 +2807,7 @@ function runDisabledMessage(
     return "Fix YAML issues before running this workflow.";
   }
   if (!workflowHasRunnableSteps(activeWorkflow.workflow)) {
-    return "Add at least one step before saving or running this workflow.";
+    return "Add at least one step before running this workflow.";
   }
   if (activeWorkflow.localDraft) {
     return "Save this draft before running it.";
@@ -2827,7 +2820,7 @@ function workflowDraftNotice(activeWorkflow: WorkflowDocument | null) {
     return null;
   }
   if (!workflowHasRunnableSteps(activeWorkflow.workflow)) {
-    return "Add the first step to this workflow. Save and Run stay disabled until the canvas has at least one step.";
+    return "Add the first step to this workflow. You can save now, but Run stays disabled until the canvas has at least one step.";
   }
   if (activeWorkflow.localDraft) {
     return `Save this draft to create ${activeWorkflow.summary.file_name} and enable runs.`;

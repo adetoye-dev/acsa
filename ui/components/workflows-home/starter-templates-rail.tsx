@@ -93,7 +93,7 @@ function StarterCard({ item }: { item: StarterReadinessItem }) {
           Missing {missingCapabilities}
         </div>
       ) : (
-        <div className="mt-2 text-sm leading-6 text-[#2e7b54]">Opens as a local draft.</div>
+        <div className="mt-2 text-sm leading-6 text-[#2e7b54]">Creates a workflow in your workspace.</div>
       )}
     </Link>
   );

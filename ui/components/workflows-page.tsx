@@ -28,10 +28,10 @@ import {
   writeRecentWorkflows
 } from "../lib/recent-workflows";
 import {
-  createLocalWorkflowDocumentFromYaml,
   type InvalidWorkflowFile,
   type HumanTask,
   type RunSummary,
+  type WorkflowDocumentResponse,
   type WorkflowSummary
 } from "../lib/workflow-editor";
 import {
@@ -72,8 +72,7 @@ export function WorkflowsPage() {
       taskValues: state.taskValues
     }))
   );
-  const { clearTaskValue, patch, setDocuments, setTaskValue, setWorkflows } =
-    useWorkflowActions();
+  const { clearTaskValue, patch, setTaskValue } = useWorkflowActions();
   const [inventory, setInventory] = useState<WorkflowInventoryResponse>({
     invalid_files: [],
     workflows: []
@@ -155,69 +154,51 @@ export function WorkflowsPage() {
     }
   }
 
-  function handleOpenImportedDraft(result: N8nImportResponse) {
+  async function handleOpenImportedDraft(result: N8nImportResponse) {
     if (!importHasOpenableDraft(result)) {
       return;
     }
 
-    let document;
     try {
       const workflowId = nextImportedWorkflowId(
         result.workflow_id || result.workflow_name,
         availableWorkflows,
         documents
       );
-      document = createLocalWorkflowDocumentFromYaml(workflowId, result.yaml);
+      const response = await fetchEngineJson<WorkflowDocumentResponse>("/api/workflows", {
+        body: JSON.stringify({
+          id: workflowId,
+          yaml: result.yaml
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST"
+      });
+
+      const currentRecents = readRecentWorkflows(window.localStorage);
+      const nextRecents = recordRecentWorkflowOpen(currentRecents, {
+        fileName: response.summary.file_name,
+        name: response.summary.name,
+        openedAt: Date.now(),
+        workflowId: response.id
+      });
+      writeRecentWorkflows(window.localStorage, nextRecents);
+      setRecentEntries(nextRecents);
+      setInventory((current) => ({
+        ...current,
+        workflows: [
+          response.summary,
+          ...current.workflows.filter((workflow) => workflow.id !== response.id)
+        ]
+      }));
+      setIsImportPanelOpen(false);
+      router.push(`/workflows/${response.id}`);
     } catch (nextError) {
       setError(
         nextError instanceof Error
           ? nextError.message
-          : "Failed to open translated workflow draft"
+          : "Failed to import translated workflow"
       );
-      return;
     }
-
-    setDocuments((current) => ({
-      ...current,
-      [document.id]: document
-    }));
-    setWorkflows((current) => {
-      const existingIndex = current.findIndex((workflow) => workflow.id === document.id);
-      if (existingIndex === -1) {
-        return [...current, document.summary].sort((left, right) =>
-          left.file_name.localeCompare(right.file_name)
-        );
-      }
-
-      const nextWorkflows = [...current];
-      nextWorkflows[existingIndex] = document.summary;
-      return nextWorkflows.sort((left, right) =>
-        left.file_name.localeCompare(right.file_name)
-      );
-    });
-
-    try {
-      const currentRecents = readRecentWorkflows(window.localStorage);
-      const nextRecents = recordRecentWorkflowOpen(currentRecents, {
-        fileName: document.summary.file_name,
-        name: document.summary.name,
-        openedAt: Date.now(),
-        workflowId: document.id
-      });
-      writeRecentWorkflows(window.localStorage, nextRecents);
-      setRecentEntries(nextRecents);
-    } catch {
-      // Ignore storage failures; the imported draft still opens normally.
-    }
-
-    patch({
-      activeWorkflowId: document.id,
-      globalError: null,
-      lastAction: `Imported ${document.summary.file_name}`,
-      selectedNodeId: null
-    });
-    setIsImportPanelOpen(false);
-    router.push(`/workflows/${document.id}`);
   }
 
   async function handleResolveApproval(taskId: string, approved: boolean) {

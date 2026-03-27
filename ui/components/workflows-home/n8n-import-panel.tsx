@@ -160,7 +160,7 @@ export function N8nImportPanel({
                 onClick={() => result && onOpenDraft(result)}
                 type="button"
               >
-                Open draft
+                Create workflow
               </button>
             ) : null}
           </div>
@@ -180,7 +180,7 @@ export function N8nImportPanel({
                 </h3>
                 <p className="text-sm leading-6 text-[#5f6870]">
                   {importHasOpenableDraft(result)
-                    ? "This import can open as a local draft."
+                    ? "This import can create a workflow in your workspace."
                     : "This import is blocked until the issues below are resolved."}
                 </p>
               </div>
@@ -211,7 +211,7 @@ export function N8nImportPanel({
               <p className="section-kicker">Translation report</p>
               <p className="text-sm leading-6 text-[#5f6870]">
                 Translate first to see what Acsa can import exactly, what needs manual
-                follow-up, and whether the result can open as a draft.
+                follow-up, and whether the result can create a workflow.
               </p>
             </div>
           )}
