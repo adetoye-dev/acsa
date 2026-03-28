@@ -17,7 +17,7 @@
 use std::{
     collections::{HashMap, HashSet},
     env,
-    path::Path,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -26,6 +26,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::asset_store::{default_root_for_database, AssetStore};
 use aes_gcm::{
     aead::{rand_core::RngCore, Aead, KeyInit, OsRng},
     Aes256Gcm, Nonce,
@@ -86,6 +87,7 @@ pub fn resolve_secret_value(name: &str) -> Option<String> {
 
 #[derive(Debug, Clone)]
 pub struct RunStore {
+    asset_store_root: PathBuf,
     pool: SqlitePool,
 }
 
@@ -110,9 +112,11 @@ impl RunStore {
             .foreign_keys(true);
 
         let pool = SqlitePoolOptions::new().max_connections(5).connect_with(options).await?;
+        let asset_store_root = default_root_for_database(path)?;
+        AssetStore::new(&asset_store_root)?;
         // Connect initializes the shared managed credential cache for this process. Multiple
         // RunStore instances against different databases in one process are not supported.
-        let store = Self { pool };
+        let store = Self { asset_store_root, pool };
         store.initialize().await?;
         store.refresh_managed_credentials_cache().await?;
         store.mark_incomplete_runs_failed().await?;
@@ -121,6 +125,14 @@ impl RunStore {
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub fn asset_store_root(&self) -> &Path {
+        &self.asset_store_root
+    }
+
+    pub fn asset_store_connectors_dir(&self) -> PathBuf {
+        self.asset_store_root.join("connectors")
     }
 
     pub async fn start_run(
@@ -2351,6 +2363,8 @@ pub enum StorageError {
     InvalidConnectionUrl(String),
     #[error("path is not valid UTF-8: {0}")]
     InvalidPath(String),
+    #[error("asset store error: {0}")]
+    AssetStore(#[from] crate::asset_store::AssetStoreError),
     #[error("run not found: {0}")]
     RunNotFound(String),
     #[error("workflow not found: {0}")]

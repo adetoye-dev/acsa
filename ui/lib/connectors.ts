@@ -58,7 +58,6 @@ export type InvalidConnector = ConnectorDependencyMetadata & {
 
 export type ConnectorInventoryResponse = {
   connectors: ConnectorInventoryItem[];
-  connectors_dir: string;
   invalid_connectors: InvalidConnector[];
   wasm_enabled: boolean;
 };

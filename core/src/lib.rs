@@ -14,6 +14,7 @@
 
 #![deny(warnings)]
 
+pub mod asset_store;
 pub mod cli;
 pub mod connectors;
 pub mod engine;

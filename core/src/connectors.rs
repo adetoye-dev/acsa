@@ -182,9 +182,16 @@ pub fn load_connectors_into(
     registry: &NodeRegistry,
     connectors_dir: &Path,
 ) -> Result<Vec<String>, ConnectorError> {
+    load_connectors_from_dirs_into(registry, &[connectors_dir])
+}
+
+pub fn load_connectors_from_dirs_into(
+    registry: &NodeRegistry,
+    connectors_dirs: &[&Path],
+) -> Result<Vec<String>, ConnectorError> {
     let mut loaded = Vec::new();
 
-    for connector in inspect_connectors(connectors_dir)?.connectors {
+    for connector in inspect_connectors_from_dirs(connectors_dirs)?.connectors {
         let connector_dir = connector.connector_dir;
         let manifest = connector.manifest;
         let type_id = manifest.type_id.clone();
@@ -199,6 +206,14 @@ pub fn discover_connector_manifests(
     connectors_dir: &Path,
 ) -> Result<Vec<ConnectorManifest>, ConnectorError> {
     inspect_connectors(connectors_dir).map(|inspection| {
+        inspection.connectors.into_iter().map(|connector| connector.manifest).collect()
+    })
+}
+
+pub fn discover_connector_manifests_from_dirs(
+    connectors_dirs: &[&Path],
+) -> Result<Vec<ConnectorManifest>, ConnectorError> {
+    inspect_connectors_from_dirs(connectors_dirs).map(|inspection| {
         inspection.connectors.into_iter().map(|connector| connector.manifest).collect()
     })
 }
@@ -292,6 +307,23 @@ pub fn inspect_connectors(connectors_dir: &Path) -> Result<ConnectorInspection, 
     }
 
     Ok(ConnectorInspection { connectors, invalid })
+}
+
+pub fn inspect_connectors_from_dirs(
+    connectors_dirs: &[&Path],
+) -> Result<ConnectorInspection, ConnectorError> {
+    let mut connectors_by_type = BTreeMap::new();
+    let mut invalid = Vec::new();
+
+    for connectors_dir in connectors_dirs {
+        let inspection = inspect_connectors(connectors_dir)?;
+        invalid.extend(inspection.invalid);
+        for connector in inspection.connectors {
+            connectors_by_type.insert(connector.manifest.type_id.clone(), connector);
+        }
+    }
+
+    Ok(ConnectorInspection { connectors: connectors_by_type.into_values().collect(), invalid })
 }
 
 pub fn load_manifest(path: &Path) -> Result<ConnectorManifest, ConnectorError> {
@@ -1077,8 +1109,9 @@ mod tests {
     };
 
     use super::{
-        inspect_connectors, run_manifest_path, scaffold_connector, validate_manifest,
-        validate_output_keys, ConnectorLimits, ConnectorManifest, ConnectorRuntime,
+        inspect_connectors, inspect_connectors_from_dirs, run_manifest_path, scaffold_connector,
+        validate_manifest, validate_output_keys, ConnectorLimits, ConnectorManifest,
+        ConnectorRuntime,
     };
 
     #[test]
@@ -1425,6 +1458,39 @@ mod tests {
         fs::remove_dir_all(temp_dir).expect("temp connector directory should be removed");
     }
 
+    #[test]
+    fn merged_inspection_prefers_later_connector_roots() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("acsa-inspect-merged-{}", uuid::Uuid::new_v4()));
+        let legacy_dir = temp_dir.join("legacy");
+        let app_dir = temp_dir.join("app");
+        fs::create_dir_all(&legacy_dir).expect("legacy connector directory should be created");
+        fs::create_dir_all(&app_dir).expect("app connector directory should be created");
+
+        write_process_connector_fixture(
+            &legacy_dir.join("slack-notify"),
+            "Slack messages (legacy)",
+            "slack_notify",
+        );
+        write_process_connector_fixture(
+            &app_dir.join("slack-notify"),
+            "Slack messages (app)",
+            "slack_notify",
+        );
+
+        let inspection = inspect_connectors_from_dirs(&[legacy_dir.as_path(), app_dir.as_path()])
+            .expect("merged inspection should succeed");
+        assert_eq!(inspection.connectors.len(), 1);
+        assert_eq!(inspection.connectors[0].manifest.name, "Slack messages (app)");
+        assert_eq!(
+            inspection.connectors[0].connector_dir,
+            fs::canonicalize(app_dir.join("slack-notify"))
+                .expect("app connector should canonicalize")
+        );
+
+        fs::remove_dir_all(temp_dir).expect("temp connector directory should be removed");
+    }
+
     #[tokio::test]
     async fn ai_news_collector_normalizes_deduplicates_and_ranks_fixture_data() {
         let manifest_path = repo_root().join("connectors/ai-news-collector/manifest.json");
@@ -1549,6 +1615,31 @@ mod tests {
             .parent()
             .expect("crate directory should have a repo parent")
             .to_path_buf()
+    }
+
+    fn write_process_connector_fixture(connector_dir: &Path, name: &str, type_id: &str) {
+        fs::create_dir_all(connector_dir).expect("fixture connector directory should be created");
+        fs::write(
+            connector_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&ConnectorManifest {
+                allowed_env: Vec::new(),
+                allowed_hosts: Vec::new(),
+                allowed_paths: BTreeMap::new(),
+                entry: "python3 main.py".to_string(),
+                enable_wasi: false,
+                inputs: vec!["message".to_string()],
+                limits: ConnectorLimits { memory: None, timeout: Some(1_000), timeout_ms: None },
+                name: name.to_string(),
+                outputs: vec!["echoed".to_string()],
+                runtime: ConnectorRuntime::Process,
+                type_id: type_id.to_string(),
+                version: Some("0.1.0".to_string()),
+            })
+            .expect("fixture manifest should serialize"),
+        )
+        .expect("fixture manifest should write");
+        fs::write(connector_dir.join("main.py"), "print('{}')")
+            .expect("fixture script should write");
     }
 
     fn env_lock() -> &'static Mutex<()> {

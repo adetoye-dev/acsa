@@ -87,7 +87,7 @@ pub fn translate_n8n_workflow(workflow_json: Value) -> Result<N8nImportResponse,
         };
         let parameters = node_object.get("parameters").cloned().unwrap_or(Value::Null);
 
-        if nodes_by_name.contains_key(&name.to_string()) {
+        if nodes_by_name.contains_key(name) {
             tracing::warn!(
                 name = %name,
                 "skipping duplicate n8n node name; will use first occurrence"
@@ -606,9 +606,7 @@ fn follow_chain(
     chain
 }
 
-fn map_http_request_params(
-    node: &N8nNode,
-) -> Result<(Option<serde_yaml::Value>, Vec<String>, Vec<RequirementItem>), String> {
+fn map_http_request_params(node: &N8nNode) -> Result<HttpRequestMapping, String> {
     let mut degradations = Vec::new();
     let mut requirements = Vec::new();
     let params = node.parameters.as_object().cloned().unwrap_or_default();
@@ -695,6 +693,8 @@ fn map_http_request_params(
 
     Ok((Some(yaml_params), degradations, requirements))
 }
+
+type HttpRequestMapping = (Option<serde_yaml::Value>, Vec<String>, Vec<RequirementItem>);
 
 fn unique_step_id(name: &str, used_ids: &mut HashSet<String>) -> String {
     let base = slugify_workflow_name(name);

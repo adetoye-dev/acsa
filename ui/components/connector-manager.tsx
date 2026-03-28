@@ -170,8 +170,8 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
     <section className="space-y-4">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <p className="section-kicker">Local tooling</p>
-          <h2 className="section-title mt-2">Scaffold and test connectors</h2>
+          <p className="section-kicker">Developer tools</p>
+          <h2 className="section-title mt-2">Create and test connectors</h2>
         </div>
         <button
           className="ui-button"
@@ -192,11 +192,7 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
             </span>
           </div>
           <p className="mt-3 text-sm leading-6 text-slate">
-            Connectors are loaded from
-            <code className="mx-1 rounded bg-sand px-1.5 py-0.5 font-mono text-ember">
-              {inventory?.connectors_dir ?? "connectors/"}
-            </code>
-            and stay Git-visible in the repo.
+            Connectors installed or created in the app are available immediately in workflows and executions.
           </p>
           <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
             {lastAction}
@@ -273,7 +269,7 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
 
             <div className="mt-4 flex items-center justify-between gap-3">
               <p className="text-sm leading-6 text-slate">
-                Acsa writes the manifest, sample input, README, and runtime starter files for you.
+                Acsa creates the runtime bundle and starter files for you automatically.
               </p>
               <button
                 className="ui-button ui-button-tide"
@@ -288,7 +284,7 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
           <div className="space-y-3">
             {sortedConnectors.length === 0 ? (
               <div className="rounded-[12px] border border-dashed border-black/15 bg-white/80 px-4 py-8 text-center text-sm leading-6 text-slate">
-                No connectors are loaded yet. Scaffold one here or add a manifest under the local connectors directory.
+                No connectors are available yet. Create one here or install a starter pack above.
               </div>
             ) : (
               sortedConnectors.map((connector) => {

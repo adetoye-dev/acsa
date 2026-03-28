@@ -35,11 +35,14 @@ use thiserror::Error;
 use tokio::{spawn, sync::Semaphore, task::JoinSet, time::timeout};
 
 use crate::{
-    connectors::load_connectors_into,
+    asset_store::AssetStore,
+    connectors::{inspect_connectors, load_connectors_from_dirs_into},
     models::{Step, Trigger, Workflow},
     nodes::{split_control, BuiltInNodeConfig, NodeError, NodeOutcome, NodePause, NodeRegistry},
     observability::{record_log, LogLevel},
-    storage::{HumanTaskRecord, NewHumanTask, RunStore, StorageError},
+    storage::{
+        HumanTaskRecord, NewAssetRecord, NewConnectorRecord, NewHumanTask, RunStore, StorageError,
+    },
 };
 
 const SUPPORTED_WORKFLOW_VERSION: &str = "v1";
@@ -121,10 +124,12 @@ impl WorkflowEngine {
     ) -> Result<Self, EngineError> {
         let store = RunStore::connect(database_path).await?;
         let registry = NodeRegistry::built_in(BuiltInNodeConfig::default());
-        let connector_path = config.connector_path.as_deref().unwrap_or(Path::new("connectors"));
-        load_connectors_into(&registry, connector_path)
-            .map_err(|error| EngineError::ConnectorLoad(error.to_string()))?;
-        Ok(Self { config, registry, store })
+        let engine = Self { config, registry, store };
+        if engine.config.connector_path.is_none() {
+            engine.sync_repo_authored_connectors(Path::new("connectors")).await?;
+        }
+        engine.sync_connectors()?;
+        Ok(engine)
     }
 
     pub fn with_registry(store: RunStore, registry: NodeRegistry, config: ExecutionConfig) -> Self {
@@ -135,10 +140,95 @@ impl WorkflowEngine {
         &self.store
     }
 
+    pub fn reload_connectors(&self) -> Result<(), EngineError> {
+        self.sync_connectors()
+    }
+
+    pub async fn sync_repo_authored_connectors(
+        &self,
+        connectors_dir: &Path,
+    ) -> Result<(), EngineError> {
+        if !connectors_dir.exists() {
+            return Ok(());
+        }
+
+        let inspection = inspect_connectors(connectors_dir)
+            .map_err(|error| EngineError::ConnectorLoad(error.to_string()))?;
+        let asset_store = AssetStore::new(self.store.asset_store_root())
+            .map_err(|error| EngineError::ConnectorLoad(error.to_string()))?;
+
+        for connector in inspection.connectors {
+            match self.store.get_asset_record("connector", &connector.manifest.type_id).await {
+                Ok(existing_asset) => {
+                    if existing_asset.source_kind != "shipped" || existing_asset.is_locally_modified
+                    {
+                        continue;
+                    }
+                }
+                Err(StorageError::AssetRecordNotFound(_, _)) => {}
+                Err(error) => return Err(error.into()),
+            }
+
+            let dir_name =
+                connector.connector_dir.file_name().and_then(|value| value.to_str()).ok_or_else(
+                    || {
+                        EngineError::ConnectorLoad(format!(
+                            "connector directory {} has no valid name",
+                            connector.connector_dir.display()
+                        ))
+                    },
+                )?;
+            let stored_bundle = asset_store
+                .store_connector_bundle(dir_name, &connector.connector_dir)
+                .map_err(|error| EngineError::ConnectorLoad(error.to_string()))?;
+            let manifest_json = serde_json::to_string(&connector.manifest)?;
+            let runtime = match connector.manifest.runtime {
+                crate::connectors::ConnectorRuntime::Process => "process",
+                crate::connectors::ConnectorRuntime::Wasm => "wasm",
+            };
+            let connector_dir = stored_bundle.connector_dir.display().to_string();
+            let manifest_path = stored_bundle.manifest_path.display().to_string();
+
+            self.store
+                .upsert_asset_record(NewAssetRecord {
+                    asset_kind: "connector",
+                    type_name: &connector.manifest.type_id,
+                    name: &connector.manifest.name,
+                    description: &connector.manifest.name,
+                    category: Some("Apps"),
+                    runtime: Some(runtime),
+                    source_kind: "shipped",
+                    source_ref: Some(dir_name),
+                    definition_json: &manifest_json,
+                    installed_version: connector.manifest.version.as_deref(),
+                    available_version: connector.manifest.version.as_deref(),
+                    is_locally_modified: false,
+                })
+                .await?;
+            self.store
+                .upsert_connector_record(NewConnectorRecord {
+                    type_name: &connector.manifest.type_id,
+                    name: &connector.manifest.name,
+                    runtime,
+                    source_kind: "shipped",
+                    source_ref: Some(dir_name),
+                    connector_dir: &connector_dir,
+                    manifest_path: &manifest_path,
+                    manifest_json: &manifest_json,
+                })
+                .await?;
+        }
+
+        Ok(())
+    }
+
     fn sync_connectors(&self) -> Result<(), EngineError> {
-        let connector_path =
-            self.config.connector_path.as_deref().unwrap_or(Path::new("connectors"));
-        load_connectors_into(&self.registry, connector_path)
+        let asset_store_connectors_dir = self.store.asset_store_connectors_dir();
+        let connector_dirs: Vec<&Path> = match self.config.connector_path.as_deref() {
+            Some(connector_path) => vec![connector_path, asset_store_connectors_dir.as_path()],
+            None => vec![asset_store_connectors_dir.as_path()],
+        };
+        load_connectors_from_dirs_into(&self.registry, &connector_dirs)
             .map_err(|error| EngineError::ConnectorLoad(error.to_string()))?;
         Ok(())
     }
