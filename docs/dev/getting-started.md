@@ -203,7 +203,7 @@ cargo run -p acsa-core -- connector-test ./tmp-connectors/sample-echo/manifest.j
 docker compose -f deploy/docker-compose.yml up --build
 ```
 
-For Kubernetes and release packaging details, see `docs/self-hosting.md`.
+For Kubernetes and release packaging details, see `self-hosting.md`.
 
 ## Security reminders
 

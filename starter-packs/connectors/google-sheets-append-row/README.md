@@ -2,7 +2,7 @@
 
 Example starter pack for appending a row to Google Sheets.
 
-It keeps the workflow contract visible in Git while remaining editable as a local connector.
+It installs as an app-managed connector while keeping the workflow contract clear and editable.
 
 ## Prerequisites
 

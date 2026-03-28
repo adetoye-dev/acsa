@@ -2,8 +2,8 @@
 
 Example starter pack for sending a Slack message from a workflow step.
 
-This pack is installed into your local `connectors/` directory as a first-party
-connector scaffold you can edit and commit.
+This pack installs into Acsa's app-managed connector runtime as a first-party
+connector you can use immediately and customize later.
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@ connector scaffold you can edit and commit.
 1. Open Connectors in the Autonomous Cloud Service Assistant (ACSA) UI.
 2. Install the Slack Notify starter pack.
 3. Confirm it appears in installed packs and connector inventory.
-4. Add the required Slack secret(s) in the project-root `credentials` directory or via environment variables (`SLACK_WEBHOOK_URL`, `SLACK_BOT_TOKEN`).
+4. Add the required Slack secret(s) in Credentials or via environment variables (`SLACK_WEBHOOK_URL`, `SLACK_BOT_TOKEN`).
 
 ## Configuration
 

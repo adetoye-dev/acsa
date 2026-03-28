@@ -75,7 +75,7 @@ steps:
   - Built-in integration: `http_request`, `database_query`, `file_read`, `file_write`
   - Built-in AI: `llm_completion`, `classification`, `extraction`, `embedding`, `retrieval`
   - Built-in human gate nodes: `approval`, `manual_input`
-  - Connector-defined types are loaded from `connectors/*/manifest.json`
+  - Connector-defined types are loaded from the app asset registry; shipped repo connectors are synced there before runtime
 - `steps[].params`: arbitrary parameter object for the step runtime.
 - `steps[].next`: downstream step IDs used to build the DAG. Logic nodes may choose a subset at runtime.
 - `steps[].retry`: optional retry policy with `attempts` and `backoff_ms`.

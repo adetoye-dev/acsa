@@ -104,9 +104,9 @@ sequenceDiagram
 - `ui/`
   - visual editor, run history, human-task inbox
 - `workflows/`
-  - YAML workflow source of truth
+  - sample and repo-authored workflow sources used for seeding and development
 - `connectors/`
-  - packaged extension entrypoint
+  - repo-authored shipped connector source that syncs into the app-managed runtime asset store
 - `deploy/`
   - Docker and Kubernetes assets
 - `scripts/`

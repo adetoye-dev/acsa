@@ -152,17 +152,17 @@ The production UI is configured for Next.js standalone output so it can ship ins
 ## Documentation Map
 
 - Product:
-  - [docs/user-guide.md](docs/user-guide.md)
-  - [docs/api-reference.md](docs/api-reference.md)
-  - [docs/connector-development.md](docs/connector-development.md)
-  - [docs/security.md](docs/security.md)
-  - [docs/ui-manual.md](docs/ui-manual.md)
-  - [docs/architecture.md](docs/architecture.md)
-  - [docs/workflow-schema.md](docs/workflow-schema.md)
-- Operations:
-  - [docs/getting-started.md](docs/getting-started.md)
-  - [docs/observability.md](docs/observability.md)
-  - [docs/self-hosting.md](docs/self-hosting.md)
+  - [docs/product/user-guide.md](docs/product/user-guide.md)
+  - [docs/product/ui-manual.md](docs/product/ui-manual.md)
+- Development and operations:
+  - [docs/dev/getting-started.md](docs/dev/getting-started.md)
+  - [docs/dev/api-reference.md](docs/dev/api-reference.md)
+  - [docs/dev/workflow-schema.md](docs/dev/workflow-schema.md)
+  - [docs/dev/connector-development.md](docs/dev/connector-development.md)
+  - [docs/dev/security.md](docs/dev/security.md)
+  - [docs/dev/architecture.md](docs/dev/architecture.md)
+  - [docs/dev/observability.md](docs/dev/observability.md)
+  - [docs/dev/self-hosting.md](docs/dev/self-hosting.md)
 - Community and release:
   - [CONTRIBUTING.md](CONTRIBUTING.md)
   - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
@@ -213,11 +213,11 @@ The production UI is configured for Next.js standalone output so it can ship ins
 - `ACSA_LOG_RETENTION_DAYS=30` purges old logs in the background
 - `ACSA_RUN_RETENTION_DAYS=14` purges old finished runs and related records
 
-Sensitive keys and common credential patterns are redacted before log persistence. See [docs/observability.md](docs/observability.md) for the endpoint and retention reference, and [docs/security.md](docs/security.md) for the full hardening model.
+Sensitive keys and common credential patterns are redacted before log persistence. See [docs/dev/observability.md](docs/dev/observability.md) for the endpoint and retention reference, and [docs/dev/security.md](docs/dev/security.md) for the full hardening model.
 
 The repository audit command is [scripts/security-audit.sh](scripts/security-audit.sh), which carries the temporary Extism/Wasmtime exception list until upstream patched releases are available.
 
-See [docs/self-hosting.md](docs/self-hosting.md) for binary installs, Docker, Kubernetes, and release packaging commands.
+See [docs/dev/self-hosting.md](docs/dev/self-hosting.md) for binary installs, Docker, Kubernetes, and release packaging commands.
 
 ## Community
 

@@ -2,12 +2,12 @@
 
 Example starter pack for sending an email from a workflow step.
 
-Use it as the installed, Git-visible baseline for a real delivery connector.
+Use it as an app-installed baseline for a real delivery connector.
 
 ## Installation / Setup
 
 1. Install this starter pack from the Connectors page in the UI.
-2. Verify the connector appears as `email_send` in your local connector inventory.
+2. Verify the connector appears as `email_send` in the Connectors page.
 3. Configure credentials in the Credentials screen or provide environment variables.
 4. Run a connector test or workflow run with a sample payload.
 
@@ -158,5 +158,5 @@ Use secure secret handling for sensitive values:
 
 See also:
 
-- [docs/connector-development.md](../../../docs/connector-development.md)
-- [docs/security.md](../../../docs/security.md)
+- [docs/connector-development.md](../../../docs/dev/connector-development.md)
+- [docs/security.md](../../../docs/dev/security.md)

@@ -1,6 +1,6 @@
 # UI Manual
 
-The Acsa UI is a product shell on top of the engine API. It is not a separate workflow source of truth. Saved YAML is still what runs.
+The Acsa UI is the main product surface for building, running, and managing automations.
 
 ## Main areas
 
@@ -10,12 +10,10 @@ The Acsa UI is a product shell on top of the engine API. It is not a separate wo
 
 Use it to:
 
-- continue where you left off with recently opened workflows
+- browse workflows ordered by recent activity
+- create a new workflow
 - start from outcome-ready starters
-- browse the compact full workflow inventory
-- spot invalid YAML files near the inventory instead of losing them silently
-
-Outcome-ready starters open as local drafts first. They do not write workflow files until you save.
+- handle pending approval/manual-input tasks from paused runs
 
 ### Workflow studio
 
@@ -23,14 +21,14 @@ Open any workflow from the launchpad to enter the studio.
 
 The studio provides:
 
-- top-bar actions for refresh, save, and manual run
+- top-bar actions for save and manual run
 - the workflow canvas for trigger and step layout
-- the step library for adding new steps
-- the inspector for editing trigger and selected-step details
-- preview of the generated workflow YAML
-- the human-task inbox for paused approvals and manual input
+- in-app YAML editing
+- the add-step panel
+- node configuration and assistant side rails
+- pending approvals through the Workflows page and execution flow
 
-Changes are applied against the in-memory workflow document and then persisted on save.
+Changes are persisted through the workflow API and stored by the app.
 
 ### Executions
 
@@ -41,7 +39,6 @@ Use it to:
 - scan runs across workflows
 - inspect the selected run graph as the main workspace
 - review step payloads and logs in the right rail
-- understand when a run is rendering from a fallback snapshot
 
 ### Connectors
 
@@ -52,12 +49,16 @@ Use it to:
 - install a small curated first-party set of capability packs (bundles of integration capabilities)
 - see which installed capability packs are ready, blocked, or still need setup
 - access developer-focused scaffold and test tooling via the Connectors > Developer tab
-- inspect low-level manifest and runtime details only when you need them
+- inspect connector details only when you need them
+
+### Credentials
+
+`Credentials` is where API keys and secrets are managed for workflows and connectors.
 
 ## Typical workflow
 
 1. Open `Workflows`
-2. Resume a recent workflow or start from outcome-ready starters
+2. Open a workflow or start from an outcome-ready starter
 3. Edit the trigger, steps, retry settings, and params in the workflow studio
 4. Save the workflow
 5. Run it manually or trigger it through cron or webhook
@@ -69,7 +70,7 @@ Use it to:
 - Saves call the workflow API
 - Invalid ids are rejected
 - Inline secret-like values are rejected
-- YAML remains the persisted representation on disk
+- Workflows are stored by the app
 
 ## Run behavior
 

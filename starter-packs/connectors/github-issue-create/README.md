@@ -16,7 +16,7 @@ The installed connector is intentionally lightweight and performs real GitHub RE
 ## Installation
 
 1. Install the GitHub Issue Create starter pack from the Connectors page in the Autonomous Cloud Service Assistant UI (ACSA UI).
-2. Verify the connector appears as `github_issue_create` in your local connector inventory.
+2. Verify the connector appears as `github_issue_create` in the Connectors page.
 3. Add your GitHub token to Credentials at `/credentials` as an environment variable or secure secret.
 4. Run a connector test from the Connectors page or include a test step in a workflow.
 
@@ -70,5 +70,5 @@ This starter pack already calls the [GitHub REST API](https://docs.github.com/en
 
 See also:
 
-- [docs/connector-development.md](../../../docs/connector-development.md)
-- [docs/security.md](../../../docs/security.md)
+- [docs/connector-development.md](../../../docs/dev/connector-development.md)
+- [docs/security.md](../../../docs/dev/security.md)
