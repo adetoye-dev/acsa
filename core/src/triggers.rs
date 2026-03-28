@@ -885,35 +885,27 @@ async fn upsert_node_record(
         .filter(|value| !value.is_empty())
         .unwrap_or("noop");
 
-    match store
-        .upsert_node_record(NewNodeRecord {
-            type_name,
-            label,
-            description,
-            category,
-            source_kind,
-            source_ref,
-        })
-        .await
-    {
-        Ok(record) => match upsert_node_asset_record(
-            store,
-            type_name,
-            label,
-            description,
-            category,
-            source_kind,
-            source_ref,
-            base_type_name,
-        )
-        .await
-        {
-            Ok(()) => (StatusCode::OK, Json(json!(node_record_response(record)))).into_response(),
-            Err(error) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
-                    .into_response()
+    let node_record = NewNodeRecord {
+        type_name,
+        label,
+        description,
+        category,
+        source_kind,
+        source_ref,
+    };
+
+    match store.upsert_node_record(node_record).await {
+        Ok(record) => {
+            match upsert_node_asset_record(store, &node_record, base_type_name).await {
+                Ok(()) => {
+                    (StatusCode::OK, Json(json!(node_record_response(record)))).into_response()
+                }
+                Err(error) => {
+                    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+                        .into_response()
+                }
             }
-        },
+        }
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
                 .into_response()
@@ -923,12 +915,7 @@ async fn upsert_node_record(
 
 async fn upsert_node_asset_record(
     store: &RunStore,
-    type_name: &str,
-    label: &str,
-    description: &str,
-    category: &str,
-    source_kind: &str,
-    source_ref: Option<&str>,
+    node_record: &NewNodeRecord<'_>,
     base_type_name: &str,
 ) -> Result<(), TriggerError> {
     let definition_json = serde_json::to_string(&json!({
@@ -938,22 +925,22 @@ async fn upsert_node_asset_record(
     }))
     .map_err(|error| TriggerError::Engine(EngineError::ConnectorLoad(error.to_string())))?;
 
-    store
-        .upsert_asset_record(NewAssetRecord {
-            asset_kind: "node",
-            type_name,
-            name: label,
-            description,
-            category: Some(category),
-            runtime: Some("alias"),
-            source_kind,
-            source_ref,
-            definition_json: &definition_json,
-            installed_version: None,
-            available_version: None,
-            is_locally_modified: false,
-        })
-        .await?;
+    let record = NewAssetRecord {
+        asset_kind: "node",
+        type_name: node_record.type_name,
+        name: node_record.label,
+        description: node_record.description,
+        category: Some(node_record.category),
+        runtime: Some("alias"),
+        source_kind: node_record.source_kind,
+        source_ref: node_record.source_ref,
+        definition_json: &definition_json,
+        installed_version: None,
+        available_version: None,
+        is_locally_modified: false,
+    };
+
+    store.upsert_asset_record(record).await?;
 
     Ok(())
 }
