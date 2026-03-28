@@ -176,6 +176,8 @@ struct CreateConnectorRequest {
 
 #[derive(Debug, Deserialize)]
 struct UpsertNodeRecordRequest {
+    #[serde(default)]
+    base_type_name: Option<String>,
     category: String,
     description: String,
     label: String,
@@ -869,25 +871,91 @@ async fn upsert_node_record(
     State(state): State<AppState>,
     Json(request): Json<UpsertNodeRecordRequest>,
 ) -> Response {
-    match state
-        .engine
-        .store()
+    let store = state.engine.store();
+    let type_name = request.type_name.trim();
+    let label = request.label.trim();
+    let description = request.description.trim();
+    let category = request.category.trim();
+    let source_kind = request.source_kind.trim();
+    let source_ref = request.source_ref.as_deref().map(str::trim);
+    let base_type_name = request
+        .base_type_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("noop");
+
+    match store
         .upsert_node_record(NewNodeRecord {
-            type_name: request.type_name.trim(),
-            label: request.label.trim(),
-            description: request.description.trim(),
-            category: request.category.trim(),
-            source_kind: request.source_kind.trim(),
-            source_ref: request.source_ref.as_deref().map(str::trim),
+            type_name,
+            label,
+            description,
+            category,
+            source_kind,
+            source_ref,
         })
         .await
     {
-        Ok(record) => (StatusCode::OK, Json(json!(node_record_response(record)))).into_response(),
+        Ok(record) => match upsert_node_asset_record(
+            store,
+            type_name,
+            label,
+            description,
+            category,
+            source_kind,
+            source_ref,
+            base_type_name,
+        )
+        .await
+        {
+            Ok(()) => (StatusCode::OK, Json(json!(node_record_response(record)))).into_response(),
+            Err(error) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+                    .into_response()
+            }
+        },
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
                 .into_response()
         }
     }
+}
+
+async fn upsert_node_asset_record(
+    store: &RunStore,
+    type_name: &str,
+    label: &str,
+    description: &str,
+    category: &str,
+    source_kind: &str,
+    source_ref: Option<&str>,
+    base_type_name: &str,
+) -> Result<(), TriggerError> {
+    let definition_json = serde_json::to_string(&json!({
+        "kind": "alias",
+        "base_type": base_type_name,
+        "default_params": {}
+    }))
+    .map_err(|error| TriggerError::Engine(EngineError::ConnectorLoad(error.to_string())))?;
+
+    store
+        .upsert_asset_record(NewAssetRecord {
+            asset_kind: "node",
+            type_name,
+            name: label,
+            description,
+            category: Some(category),
+            runtime: Some("alias"),
+            source_kind,
+            source_ref,
+            definition_json: &definition_json,
+            installed_version: None,
+            available_version: None,
+            is_locally_modified: false,
+        })
+        .await?;
+
+    Ok(())
 }
 
 async fn test_connector(

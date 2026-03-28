@@ -18,6 +18,7 @@ import { fetchEngineJson } from "./engine-client";
 import { slugifyIdentifier } from "./workflow-editor";
 
 export type UpsertNodeRecordRequest = {
+  base_type_name?: string;
   category: string;
   description: string;
   label: string;

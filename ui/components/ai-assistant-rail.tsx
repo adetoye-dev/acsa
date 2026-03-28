@@ -78,12 +78,14 @@ export function AiAssistantRail({
     }
 
     const identity = deriveGeneratedNodeIdentity(trimmedPrompt, "Generated step");
+    const suggestedBaseType = suggestions[0]?.type_name ?? "noop";
     setIsSavingNode(true);
     setSaveError(null);
     setSavedNodeLabel(null);
 
     try {
       const record = await upsertNodeRecord({
+        base_type_name: suggestedBaseType,
         category: "Apps",
         description: trimmedPrompt,
         label: identity.label,

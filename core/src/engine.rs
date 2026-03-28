@@ -38,7 +38,10 @@ use crate::{
     asset_store::AssetStore,
     connectors::{inspect_connectors, load_connectors_from_dirs_into},
     models::{Step, Trigger, Workflow},
-    nodes::{split_control, BuiltInNodeConfig, NodeError, NodeOutcome, NodePause, NodeRegistry},
+    nodes::{
+        split_control, AliasNode, AliasNodeDefinition, BuiltInNodeConfig, NodeError, NodeOutcome,
+        NodePause, NodeRegistry,
+    },
     observability::{record_log, LogLevel},
     storage::{
         HumanTaskRecord, NewAssetRecord, NewConnectorRecord, NewHumanTask, RunStore, StorageError,
@@ -1226,10 +1229,7 @@ async fn execute_step_with_retries(
     let attempts = step.retry.as_ref().map(|retry| retry.attempts).unwrap_or(1).max(1);
     let backoff_ms = step.retry.as_ref().map(|retry| retry.backoff_ms).unwrap_or(0);
 
-    let node = registry.get(&step.r#type).ok_or_else(|| StepExecutionFailure {
-        step_id: step.id.clone(),
-        error: format!("unknown node type {}", step.r#type),
-    })?;
+    let node = resolve_executable_node(store, registry, step).await?;
 
     for attempt in 1..=attempts {
         let step_run = store.start_step_attempt(run_id, &step.id, attempt, &inputs).await.map_err(
@@ -1387,6 +1387,54 @@ async fn execute_step_with_retries(
         step_id: step.id.clone(),
         error: "step retry loop ended unexpectedly".to_string(),
     })
+}
+
+async fn resolve_executable_node(
+    store: &RunStore,
+    registry: &NodeRegistry,
+    step: &Step,
+) -> Result<Arc<dyn crate::nodes::Node>, StepExecutionFailure> {
+    if let Some(node) = registry.get(&step.r#type) {
+        return Ok(node);
+    }
+
+    let asset = match store.get_asset_record("node", &step.r#type).await {
+        Ok(asset) => asset,
+        Err(StorageError::AssetRecordNotFound(_, _)) => {
+            return Err(StepExecutionFailure {
+                step_id: step.id.clone(),
+                error: format!("unknown node type {}", step.r#type),
+            });
+        }
+        Err(error) => {
+            return Err(StepExecutionFailure {
+                step_id: step.id.clone(),
+                error: error.to_string(),
+            });
+        }
+    };
+
+    let definition =
+        serde_json::from_str::<AliasNodeDefinition>(&asset.definition_json).map_err(|error| {
+            StepExecutionFailure {
+                step_id: step.id.clone(),
+                error: format!("invalid node asset definition for {}: {error}", step.r#type),
+            }
+        })?;
+
+    if definition.kind != "alias" {
+        return Err(StepExecutionFailure {
+            step_id: step.id.clone(),
+            error: format!("unsupported node asset kind {} for {}", definition.kind, step.r#type),
+        });
+    }
+
+    Ok(Arc::new(AliasNode::new(
+        step.r#type.clone(),
+        definition.base_type,
+        definition.default_params,
+        registry.clone(),
+    )))
 }
 
 fn error_message(error: &NodeError) -> String {
@@ -1594,7 +1642,7 @@ mod tests {
     use crate::{
         models::{RetryPolicy, Step, Trigger, Workflow, WorkflowUi},
         nodes::{BuiltInNodeConfig, Node, NodeError, NodeRegistry},
-        storage::{LogQuery, RunStore},
+        storage::{LogQuery, NewAssetRecord, RunStore},
     };
 
     #[test]
@@ -2331,6 +2379,51 @@ json.dump({"echoed": "loaded-after-startup"}, sys.stdout)
 
         cleanup_file(temp_db);
         cleanup_dir(temp_data_dir);
+    }
+
+    #[tokio::test]
+    async fn executes_generated_alias_nodes_from_asset_records() {
+        let workflow = Workflow {
+            version: "v1".to_string(),
+            name: "generated-alias-node".to_string(),
+            trigger: Trigger { r#type: "manual".to_string(), details: Default::default() },
+            steps: vec![step("generated", "generated_echo", json!({ "prompt": "hello" }), vec![])],
+            ui: Default::default(),
+        };
+        let plan = compile_workflow(workflow).expect("workflow should plan");
+        let temp_db = temp_db_path("generated-alias-node");
+        let store = RunStore::connect(&temp_db).await.expect("sqlite should initialize");
+        store
+            .upsert_asset_record(NewAssetRecord {
+                asset_kind: "node",
+                type_name: "generated_echo",
+                name: "Generated Echo",
+                description: "Generated alias around echo.",
+                category: Some("Apps"),
+                runtime: Some("alias"),
+                source_kind: "generated",
+                source_ref: Some("prompt:test"),
+                definition_json:
+                    r#"{"kind":"alias","base_type":"echo","default_params":{"preset":"ok"}}"#,
+                installed_version: None,
+                available_version: None,
+                is_locally_modified: false,
+            })
+            .await
+            .expect("asset record should persist");
+        let registry = NodeRegistry::new();
+        registry.register(EchoNode);
+        let engine = WorkflowEngine::with_registry(store, registry, ExecutionConfig::default());
+
+        let summary = engine
+            .execute_plan(&plan, json!({ "trigger": "manual" }))
+            .await
+            .expect("workflow should execute with generated alias node");
+
+        assert_eq!(summary.outputs["generated"]["params"]["prompt"], json!("hello"));
+        assert_eq!(summary.outputs["generated"]["params"]["preset"], json!("ok"));
+
+        cleanup_file(temp_db);
     }
 
     fn cleanup_file(path: PathBuf) {

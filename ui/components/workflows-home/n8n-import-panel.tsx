@@ -113,6 +113,7 @@ export function N8nImportPanel({
 
     try {
       await upsertNodeRecord({
+        base_type_name: "noop",
         category: "Apps",
         description: item.message,
         label: identity.label,

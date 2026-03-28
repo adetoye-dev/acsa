@@ -7,6 +7,14 @@ const requiredFiles = [
   ".next/types/cache-life.d.ts",
   ".next/types/app/layout.ts",
   ".next/types/app/page.ts",
+  ".next/types/app/(product)/layout.ts",
+  ".next/types/app/(product)/connectors/page.ts",
+  ".next/types/app/(product)/credentials/page.ts",
+  ".next/types/app/(product)/executions/page.ts",
+  ".next/types/app/(product)/workflows/page.ts",
+  ".next/types/app/(studio)/workflows/[workflowId]/page.ts",
+  ".next/types/app/(studio)/workflows/new/page.ts",
+  ".next/types/validator.ts",
 ];
 
 for (const relativePath of requiredFiles) {

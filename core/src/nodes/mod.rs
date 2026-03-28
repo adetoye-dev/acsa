@@ -115,6 +115,64 @@ impl NodeRegistry {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AliasNodeDefinition {
+    #[serde(default = "default_alias_kind")]
+    pub kind: String,
+    pub base_type: String,
+    #[serde(default = "default_alias_params")]
+    pub default_params: Value,
+}
+
+fn default_alias_kind() -> String {
+    "alias".to_string()
+}
+
+fn default_alias_params() -> Value {
+    Value::Object(Map::new())
+}
+
+#[derive(Clone)]
+pub struct AliasNode {
+    base_type: String,
+    default_params: Value,
+    registry: NodeRegistry,
+    type_name: String,
+}
+
+impl AliasNode {
+    pub fn new(
+        type_name: String,
+        base_type: String,
+        default_params: Value,
+        registry: NodeRegistry,
+    ) -> Self {
+        Self { base_type, default_params, registry, type_name }
+    }
+}
+
+#[async_trait]
+impl Node for AliasNode {
+    fn type_name(&self) -> &str {
+        &self.type_name
+    }
+
+    async fn execute(&self, inputs: &Value, params: &Value) -> Result<Value, NodeError> {
+        if self.base_type == self.type_name {
+            return Err(NodeError::Message {
+                message: format!("alias node {} cannot target itself", self.type_name),
+            });
+        }
+
+        let base_node = self.registry.get(&self.base_type).ok_or_else(|| NodeError::Message {
+            message: format!("alias base node {} is not available", self.base_type),
+        })?;
+        let merged_params = merge_json_values(&self.default_params, params);
+
+        base_node.execute(inputs, &merged_params).await
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BuiltInNodeConfig {
     pub data_dir: PathBuf,
@@ -406,6 +464,24 @@ pub(crate) fn cosine_similarity(left: &[f64], right: &[f64]) -> f64 {
     }
 
     dot / (left_norm.sqrt() * right_norm.sqrt())
+}
+
+fn merge_json_values(defaults: &Value, overrides: &Value) -> Value {
+    match (defaults, overrides) {
+        (Value::Object(default_map), Value::Object(override_map)) => {
+            let mut merged = default_map.clone();
+            for (key, value) in override_map {
+                let next = merged
+                    .get(key)
+                    .map(|existing| merge_json_values(existing, value))
+                    .unwrap_or_else(|| value.clone());
+                merged.insert(key.clone(), next);
+            }
+            Value::Object(merged)
+        }
+        (_, Value::Null) => defaults.clone(),
+        (_, value) => value.clone(),
+    }
 }
 
 pub(crate) fn ensure_relative_path(root: &Path, relative_path: &str) -> Result<PathBuf, NodeError> {
