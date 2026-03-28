@@ -77,18 +77,19 @@ async fn run() -> Result<(), MainError> {
             let connector_dir = scaffold_connector(&connectors_dir, &name, &type_id, runtime)
                 .map_err(|error| -> MainError { Box::new(error) })?;
             println!(
-                "Scaffolded connector '{}' ({}) in {}",
+                "Scaffolded connector source '{}' ({}) in {}",
                 type_id,
                 runtime_name(runtime),
                 connector_dir.display()
             );
             println!("Next steps:");
-            println!("  1. Review {}", connector_dir.join("README.md").display());
+            println!("  1. Edit {}", connector_dir.join("manifest.json").display());
             println!(
                 "  2. Test it with: cargo run -p acsa-core -- connector-test {} --inputs {}",
                 connector_dir.join("manifest.json").display(),
                 connector_dir.join("sample-input.json").display()
             );
+            println!("  3. Run or restart the app to sync this source bundle into app-managed runtime assets");
         }
         Command::ConnectorTest { inputs_path, manifest_path, params_path } => {
             ensure_file_exists(&manifest_path, "connector manifest")?;

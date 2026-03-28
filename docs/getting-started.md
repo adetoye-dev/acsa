@@ -195,7 +195,7 @@ cargo run -p acsa-core -- connector-new sample-echo --type sample_echo --runtime
 cargo run -p acsa-core -- connector-test ./tmp-connectors/sample-echo/manifest.json --inputs ./tmp-connectors/sample-echo/sample-input.json
 ```
 
-`connector-new` now writes a starter `README.md` and `sample-input.json` into the scaffolded connector directory.
+`connector-new` writes repo-authored connector source plus `sample-input.json`. Run or restart the app to sync that source into app-managed runtime assets.
 
 ## Container Example
 

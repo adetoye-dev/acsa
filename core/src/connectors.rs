@@ -729,7 +729,7 @@ message = payload.get("inputs", {}).get("message", "")
 print(json.dumps({"echoed": message, "params": payload.get("params", {})}))
 "#,
     )?;
-    scaffold_sample_files(connector_dir, name, type_id, ConnectorRuntime::Process)?;
+    scaffold_sample_files(connector_dir, type_id)?;
     Ok(())
 }
 
@@ -782,50 +782,18 @@ pub fn execute(input: String) -> FnResult<String> {
 }
 "#,
     )?;
-    scaffold_sample_files(connector_dir, name, type_id, ConnectorRuntime::Wasm)?;
+    scaffold_sample_files(connector_dir, type_id)?;
     Ok(())
 }
 
-fn scaffold_sample_files(
-    connector_dir: &Path,
-    name: &str,
-    type_id: &str,
-    runtime: ConnectorRuntime,
-) -> Result<(), ConnectorError> {
+fn scaffold_sample_files(connector_dir: &Path, type_id: &str) -> Result<(), ConnectorError> {
     fs::write(
         connector_dir.join("sample-input.json"),
         serde_json::to_string_pretty(&json!({
             "message": format!("hello from {type_id}")
         }))?,
     )?;
-    fs::write(connector_dir.join("README.md"), scaffold_readme(name, type_id, runtime))?;
     Ok(())
-}
-
-fn scaffold_readme(name: &str, type_id: &str, runtime: ConnectorRuntime) -> String {
-    let runtime_notes = match runtime {
-        ConnectorRuntime::Process => {
-            "Edit `main.py`, then test locally with the command below."
-        }
-        ConnectorRuntime::Wasm => {
-            "Build the WASM artifact into `dist/connector.wasm`, enable `ACSA_ENABLE_WASM_CONNECTORS=1`, then test locally with the command below."
-        }
-    };
-
-    format!(
-        "# {name}\n\n\
-Type: `{type_id}`\n\
-Runtime: `{}`\n\n\
-{runtime_notes}\n\n\
-## Local test\n\n\
-```bash\n\
-cargo run -p acsa-core -- connector-test ./manifest.json --inputs ./sample-input.json\n\
-```\n",
-        match runtime {
-            ConnectorRuntime::Process => "process",
-            ConnectorRuntime::Wasm => "wasm",
-        }
-    )
 }
 
 fn resolve_secrets(params: &Value) -> Result<Value, NodeError> {
@@ -1154,7 +1122,6 @@ mod tests {
         let installed_dir = connectors_dir.join("slack-notify");
         assert!(installed_dir.join("manifest.json").exists());
         assert!(installed_dir.join("main.py").exists());
-        assert!(installed_dir.join("README.md").exists());
 
         let inspection =
             inspect_connectors(&connectors_dir).expect("installed connectors should inspect");
@@ -1336,7 +1303,7 @@ mod tests {
     }
 
     #[test]
-    fn scaffolded_connectors_include_readme_and_sample_input() {
+    fn scaffolded_connectors_include_sample_input() {
         let temp_dir = std::env::temp_dir().join(format!("acsa-scaffold-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&temp_dir).expect("temp connector directory should be created");
 
@@ -1344,7 +1311,6 @@ mod tests {
             scaffold_connector(&temp_dir, "sample-echo", "sample_echo", ConnectorRuntime::Process)
                 .expect("connector should scaffold");
 
-        assert!(connector_dir.join("README.md").exists());
         assert!(connector_dir.join("sample-input.json").exists());
 
         fs::remove_dir_all(temp_dir).expect("temp connector directory should be removed");
