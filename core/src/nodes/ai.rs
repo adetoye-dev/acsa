@@ -21,6 +21,8 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
+use crate::storage::resolve_secret_value;
+
 use super::{
     as_array, as_object, as_string, cosine_similarity, embed_text, lookup_required,
     take_string_list, EmbeddedDocument, Node, NodeError, RateLimiter, VectorStore,
@@ -370,10 +372,13 @@ fn resolve_api_key(params: &Value) -> Result<String, NodeError> {
         .get("api_key_env")
         .and_then(Value::as_str)
         .ok_or(NodeError::MissingParameter { parameter: "api_key_env" })?;
-    std::env::var(env_name).map_err(|_| NodeError::InvalidParameter {
-        parameter: "api_key_env".to_string(),
-        message: format!("environment variable {env_name} is not set"),
-    })
+    resolve_secret_value(env_name)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| NodeError::InvalidParameter {
+            parameter: "api_key_env".to_string(),
+            message: format!("secret or key {env_name} not found or empty"),
+        })
 }
 
 fn resolve_openai_endpoint(params: &Value) -> Result<String, NodeError> {

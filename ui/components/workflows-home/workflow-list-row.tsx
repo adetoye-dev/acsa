@@ -43,7 +43,7 @@ export function WorkflowListRow({
 
   return (
     <Link
-      className={`group block rounded-[16px] border border-black/10 bg-white/94 shadow-[0_1px_0_rgba(16,20,20,0.02)] transition hover:-translate-y-0.5 hover:border-black/15 hover:bg-white ${
+      className={`group block rounded-[14px] border border-black/10 bg-white transition hover:-translate-y-0.5 hover:border-black/15 hover:bg-white ${
         isRecent ? "px-4 py-4" : "px-3.5 py-3.5"
       }`}
       href={href}

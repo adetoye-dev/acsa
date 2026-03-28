@@ -20,6 +20,7 @@ import type {
   TriggerTypeEntry,
   WorkflowDocument
 } from "../lib/workflow-editor";
+import { semanticCategoryLabel } from "../lib/semantic-labels";
 import { YamlEditor } from "./yaml-editor";
 
 type NodeInspectorProps = {
@@ -66,16 +67,16 @@ export function NodeInspector({
 
   if (!activeWorkflow || !selectedNode) {
     return (
-      <div className="rounded-[12px] border border-dashed border-black/10 bg-white px-4 py-5 text-sm leading-6 text-slate">
+      <div className="px-4 py-4 text-sm leading-6 text-slate">
         Select a node on the canvas to configure it here.
       </div>
     );
   }
 
   return (
-    <div className="space-y-3">
+    <div className="min-h-full">
       {triggerSelected ? (
-        <section className="ui-panel-card p-3">
+        <section className="border-b border-black/10 px-4 py-4">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62">
@@ -125,7 +126,7 @@ export function NodeInspector({
       ) : null}
 
       {selectedStep ? (
-        <section className="p-2">
+        <section className="px-4 py-4">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62">
@@ -148,7 +149,7 @@ export function NodeInspector({
                 className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62"
                 htmlFor="step-type"
               >
-                Step type
+                Capability
               </label>
               <select
                 className="ui-input"
@@ -157,7 +158,7 @@ export function NodeInspector({
                 value={selectedStep.type}
               >
                 {groupedStepOptions(stepCatalog).map(([category, entries]) => (
-                  <optgroup key={category} label={titleCase(category)}>
+                  <optgroup key={category} label={semanticCategoryLabel(category)}>
                     {entries.map((entry) => (
                       <option key={entry.type_name} value={entry.type_name}>
                         {entry.label}
@@ -233,7 +234,7 @@ export function NodeInspector({
       ) : null}
 
       {inspectorError ? (
-        <div className="rounded-2xl border border-ember/20 bg-[#fff0eb] px-3 py-2.5 text-sm leading-6 text-[#cd694d]">
+        <div className="border-t border-ember/20 bg-[#fff0eb] px-4 py-3 text-sm leading-6 text-[#cd694d]">
           {inspectorError}
         </div>
       ) : null}
@@ -249,8 +250,4 @@ function groupedStepOptions(stepCatalog: StepTypeEntry[]) {
     groups.set(entry.category, bucket);
   }
   return Array.from(groups.entries());
-}
-
-function titleCase(value: string) {
-  return value.charAt(0).toUpperCase() + value.slice(1);
 }

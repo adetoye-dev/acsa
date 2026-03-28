@@ -39,12 +39,6 @@ export const WorkflowNode = memo(function WorkflowNode({
   selected
 }: NodeProps<CanvasNode>) {
   const state = data.executionState ?? "idle";
-  const footerLabel =
-    data.kind === "trigger"
-      ? "entrypoint"
-      : data.runtime
-        ? `${formatToken(data.source ?? "connector")} · ${data.runtime}`
-        : formatToken(data.source ?? "built_in");
 
   return (
     <div className={containerClassName(data.kind, selected, state)}>
@@ -80,16 +74,6 @@ export const WorkflowNode = memo(function WorkflowNode({
           </div>
 
           <div className="mt-3 flex items-center justify-between gap-3">
-            <span
-              className={`inline-flex items-center rounded-[8px] border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${nodeAccentClassName({
-                category: data.category,
-                kind: data.kind,
-                source: data.source,
-                typeName: data.typeName
-              })}`}
-            >
-              {data.kind === "trigger" ? formatToken(data.typeName) : footerLabel}
-            </span>
             <div className="flex items-center gap-2">
               {data.detached ? (
                 <span className="rounded-[8px] border border-black/10 bg-[#f6f7f9] px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-[#666c75]">
@@ -178,11 +162,4 @@ function containerClassName(
     default:
       return `${base} ${selectedState} ${kindStateDefault}`;
   }
-}
-
-function formatToken(value?: string | null) {
-  if (!value) {
-    return "built in";
-  }
-  return value.replace(/[_-]+/g, " ");
 }

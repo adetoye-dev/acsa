@@ -114,8 +114,9 @@ The scaffold includes:
 
 - `manifest.json`
 - `sample-input.json`
-- `README.md`
 - runtime-specific starter source files
+
+This scaffold is repo-authored source. Run or restart the app to sync it into app-managed runtime assets.
 
 Test a manifest directly:
 

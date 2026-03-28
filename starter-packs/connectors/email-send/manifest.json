@@ -1,0 +1,157 @@
+{
+  "name": "Email Send",
+  "type": "email_send",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "inputs": [
+    {
+      "name": "recipient",
+      "type": "string",
+      "description": "Recipient email address (PII). Prefer per-message values in inputs; if params.recipient is configured as a default destination, this input should override it.",
+      "pattern": "^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$",
+      "patternDescription": "RFC-style email address in local@domain format",
+      "sensitive": true,
+      "pii": true,
+      "required": true
+    },
+    {
+      "name": "subject",
+      "type": "string",
+      "description": "Message subject line. Provide per-message content in inputs.",
+      "sensitive": true,
+      "pii": true,
+      "maxLength": 998,
+      "required": true
+    },
+    {
+      "name": "body",
+      "type": "string",
+      "description": "Message body text. Provide per-message content in inputs.",
+      "sensitive": true,
+      "pii": true,
+      "maxLength": 100000,
+      "required": true
+    },
+    {
+      "name": "from_address",
+      "type": "string",
+      "description": "Sender email address. Can also be provided as params.from_address.",
+      "pattern": "^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$",
+      "patternDescription": "RFC-style email address in local@domain format",
+      "sensitive": true,
+      "pii": true,
+      "required": false
+    },
+    {
+      "name": "smtp_host",
+      "type": "string",
+      "description": "SMTP server hostname. Must be a public RFC-1123 style DNS hostname (IP literals are not allowed). Typically configured in params for connector/runtime defaults.",
+      "pattern": "^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z]{2,63}$",
+      "required": false
+    },
+    {
+      "name": "smtp_port",
+      "type": "integer",
+      "description": "SMTP server port (for example 587 with STARTTLS or 465 with implicit TLS).",
+      "minimum": 1,
+      "maximum": 65535,
+      "required": false
+    },
+    {
+      "name": "smtp_username",
+      "type": "string",
+      "description": "SMTP username (if using username/password auth).",
+      "maxLength": 128,
+      "sensitive": true,
+      "required": false
+    },
+    {
+      "name": "smtp_password",
+      "type": "string",
+      "description": "SMTP password secret reference or injected secret value. Mutually exclusive with api_key; do not provide both.",
+      "maxLength": 256,
+      "required": false,
+      "sensitive": true
+    },
+    {
+      "name": "api_key",
+      "type": "string",
+      "description": "Provider API key secret reference/value when API-key based auth is used instead of SMTP password. Mutually exclusive with smtp_password; do not provide both.",
+      "maxLength": 256,
+      "required": false,
+      "sensitive": true
+    },
+    {
+      "name": "smtp_secure",
+      "type": "boolean",
+      "description": "Use implicit TLS for SMTP transport. If both smtp_secure and smtp_tls are true, smtp_secure takes precedence.",
+      "required": false,
+      "default": false
+    },
+    {
+      "name": "smtp_tls",
+      "type": "boolean",
+      "description": "Use STARTTLS upgrade when supported by the SMTP server. Ignored when smtp_secure is true.",
+      "required": false,
+      "default": true
+    }
+  ],
+  "input_constraints": {
+    "mutually_exclusive": [
+      [
+        "smtp_password",
+        "api_key"
+      ]
+    ]
+  },
+  "outputs": [
+    {
+      "name": "sent",
+      "type": "boolean",
+      "description": "True when the connector actually sent an email."
+    },
+    {
+      "name": "recipient",
+      "type": "string",
+      "description": "Resolved recipient email address for this send attempt. WARNING: This field contains PII (personally identifiable information). Ensure logs and stored outputs are redacted or hashed before persistence or sharing. Consumers must follow data retention and consent policies.",
+      "sensitive": true,
+      "pii": true
+    },
+    {
+      "name": "subject",
+      "type": "string",
+      "description": "Subject line used for the attempted message. This field may contain PII; avoid logging raw values and redact or hash before storing/persisting.",
+      "sensitive": true,
+      "pii": true
+    },
+    {
+      "name": "mock",
+      "type": "boolean",
+      "description": "Mode flag indicating whether this run was in mock/stub mode."
+    },
+    {
+      "name": "would_send",
+      "type": "boolean",
+      "description": "Dry-run/sendability result indicating whether the message would be sent with current inputs."
+    },
+    {
+      "name": "error_code",
+      "type": "string",
+      "description": "Machine-readable error code when delivery fails."
+    },
+    {
+      "name": "error_message",
+      "type": "string",
+      "description": "Sanitized human-readable error summary when delivery fails. Does not include raw SMTP/auth details, hostnames, usernames, passwords, stack traces, or quoted input values."
+    },
+    {
+      "name": "correlation_id",
+      "type": "string",
+      "description": "Non-sensitive correlation identifier for troubleshooting failed deliveries."
+    }
+  ],
+  "limits": {
+    "timeout_ms": 30000
+  },
+  "version": "0.1.0"
+}

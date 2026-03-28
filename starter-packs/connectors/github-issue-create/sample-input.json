@@ -1,0 +1,11 @@
+{
+  "inputs": {
+    "title": "Workflow follow-up",
+    "labels": [
+      "automation"
+    ]
+  },
+  "params": {
+    "repository": "acsa/acsa"
+  }
+}

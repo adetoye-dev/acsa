@@ -18,14 +18,21 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  semanticCategoryDescription,
+  semanticCategoryLabel
+} from "../lib/semantic-labels";
 import type { StepTypeEntry } from "../lib/workflow-editor";
 import { NodeGlyph } from "./node-visuals";
 
 type NodeBrowserProps = {
+  autoFocusSearch?: boolean;
   contextHint?: string | null;
-  onClose: () => void;
+  onClose?: () => void;
   onSelectType: (typeName: string) => void;
   stepCatalog: StepTypeEntry[];
+  subtitle?: string;
+  title?: string;
 };
 
 const RECENT_STEP_TYPES_KEY = "acsa.node-browser.recent-step-types";
@@ -40,10 +47,13 @@ const SUGGESTED_TYPE_NAMES = [
 ];
 
 export function NodeBrowser({
+  autoFocusSearch = true,
   contextHint,
   onClose,
   onSelectType,
-  stepCatalog
+  stepCatalog,
+  subtitle = "Choose what this step should do",
+  title = "Capability library"
 }: NodeBrowserProps) {
   const [search, setSearch] = useState("");
   const [highlightedTypeName, setHighlightedTypeName] = useState<string | null>(null);
@@ -148,8 +158,11 @@ export function NodeBrowser({
   }, []);
 
   useEffect(function focusNodeBrowserSearchEffect() {
+    if (!autoFocusSearch) {
+      return;
+    }
     searchInputRef.current?.focus();
-  }, []);
+  }, [autoFocusSearch]);
 
   useEffect(function keepHighlightedOptionInViewEffect() {
     if (!activeHighlightedTypeName) {
@@ -183,6 +196,9 @@ export function NodeBrowser({
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement | HTMLInputElement>) {
     if (event.key === "Escape") {
+      if (!onClose) {
+        return;
+      }
       event.preventDefault();
       onClose();
       return;
@@ -220,35 +236,37 @@ export function NodeBrowser({
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate/60">
-              Step library
+              {title}
             </div>
             <div className="mt-1 text-[16px] font-medium tracking-tight text-ink">
-              Add a step
+              {subtitle}
             </div>
             {contextHint ? (
               <div className="mt-1 text-[12px] text-slate">{contextHint}</div>
             ) : null}
           </div>
-          <button
-            aria-label="Close node browser"
-            className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-black/10 bg-white text-slate/70 transition hover:border-black/20 hover:bg-[#fafaf8]"
-            onClick={onClose}
-            type="button"
-          >
-            <CloseIcon />
-          </button>
+          {onClose ? (
+            <button
+              aria-label="Close node browser"
+              className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-black/10 bg-white text-slate/70 transition hover:border-black/20 hover:bg-[#fafaf8]"
+              onClick={onClose}
+              type="button"
+            >
+              <CloseIcon />
+            </button>
+          ) : null}
         </div>
       </div>
 
       <div className="border-b border-black/10 px-4 py-3">
         <label className="sr-only" htmlFor="node-browser-search">
-          Search nodes
+          Search capabilities
         </label>
         <input
           className="ui-input"
           id="node-browser-search"
           onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search steps, actions, and categories"
+          placeholder="Search capabilities, apps, actions, and flow controls"
           ref={searchInputRef}
           type="search"
           value={search}
@@ -261,7 +279,8 @@ export function NodeBrowser({
             <SectionHeader
               accentClassName="bg-[#6a727b]"
               count={recentEntries.length}
-              title="Recent"
+              description="Jump back into capabilities you have used lately."
+              title="Recently used"
             />
             <div className="space-y-2">
               {recentEntries.map((entry) => (
@@ -282,7 +301,8 @@ export function NodeBrowser({
             <SectionHeader
               accentClassName="bg-[#8a8176]"
               count={suggestedEntries.length}
-              title="Suggested"
+              description="Common starting points for new workflow steps."
+              title="Good starting points"
             />
             <div className="space-y-2">
               {suggestedEntries.map((entry) => (
@@ -304,7 +324,8 @@ export function NodeBrowser({
               <SectionHeader
                 accentClassName={categoryAccentClassName(category)}
                 count={entries.length}
-                title={titleCase(category)}
+                description={semanticCategoryDescription(category)}
+                title={semanticCategoryLabel(category)}
               />
 
               <div className="space-y-2">
@@ -322,7 +343,10 @@ export function NodeBrowser({
           ))
         ) : (
           <div className="rounded-[12px] border border-dashed border-black/10 bg-[#fbfbfa] px-4 py-8 text-center text-sm leading-6 text-slate">
-            No node matched your search. Try a broader keyword like <span className="font-medium text-ink">http</span>, <span className="font-medium text-ink">ai</span>, or <span className="font-medium text-ink">flow</span>.
+            No capability matched your search. Try a broader keyword like{" "}
+            <span className="font-medium text-ink">approval</span>,{" "}
+            <span className="font-medium text-ink">email</span>, or{" "}
+            <span className="font-medium text-ink">ai</span>.
           </div>
         )}
       </div>
@@ -334,19 +358,26 @@ export function NodeBrowser({
 function SectionHeader({
   accentClassName,
   count,
+  description,
   title
 }: {
   accentClassName: string;
   count: number;
+  description?: string;
   title: string;
 }) {
   return (
-    <div className="mb-2 flex items-center justify-between gap-3 px-1">
-      <div className="flex items-center gap-2">
-        <span className={`h-2 w-2 rounded-full ${accentClassName}`} />
-        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/60">
-          {title}
+    <div className="mb-2 flex items-start justify-between gap-3 px-1">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className={`h-2 w-2 rounded-full ${accentClassName}`} />
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/60">
+            {title}
+          </div>
         </div>
+        {description ? (
+          <div className="mt-1 text-[12px] leading-5 text-slate">{description}</div>
+        ) : null}
       </div>
       <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-slate/55">
         {count}
@@ -387,16 +418,22 @@ function NodeOption({
         typeName={entry.type_name}
       />
       <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
             <div className="truncate text-sm font-medium text-ink">{entry.label}</div>
-            <div className="mt-0.5 truncate text-[12px] leading-5 text-slate">
-              {entry.description}
-            </div>
+            {entry.app_record ? (
+              <span className="rounded-md bg-[#f3f0ff] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-[#6f63ff]">
+                {entry.app_record.source_kind === "generated"
+                  ? "Generated"
+                  : entry.app_record.source_kind === "custom"
+                    ? "Custom"
+                    : "Saved"}
+              </span>
+            ) : null}
           </div>
-          <span className="inline-flex shrink-0 items-center rounded-[8px] border border-black/10 bg-white px-1.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-[#6a717a]">
-            {entry.runtime ?? entry.source}
-          </span>
+          <div className="mt-0.5 truncate text-[12px] leading-5 text-slate">
+            {entry.description}
+          </div>
         </div>
       </div>
     </button>
@@ -407,23 +444,21 @@ function categoryAccentClassName(category: string) {
   switch (category.toLowerCase()) {
     case "ai":
       return "bg-[#5d6670]";
+    case "apps":
+    case "integration":
+    case "connector":
+      return "bg-[#858c95]";
+    case "core":
+    case "data":
+      return "bg-[#76808a]";
     case "human":
       return "bg-[#7b7166]";
     case "flow":
     case "logic":
       return "bg-[#6c737c]";
-    case "integration":
-    case "connector":
-      return "bg-[#858c95]";
     default:
       return "bg-[#9ba1a8]";
   }
-}
-
-function titleCase(value: string) {
-  return value
-    .replace(/[_-]+/g, " ")
-    .replace(/\b\w/g, (character) => character.toUpperCase());
 }
 
 function CloseIcon() {

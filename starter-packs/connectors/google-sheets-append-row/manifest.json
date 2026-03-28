@@ -1,0 +1,113 @@
+{
+  "name": "Google Sheets Append Row",
+  "type": "google_sheets_append_row",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "inputs": [
+    {
+      "name": "credentials",
+      "description": "Google auth credentials. Accepts either a Google service account JSON object or an OAuth access token string.",
+      "required": true,
+      "sensitive": true,
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "type",
+            "project_id",
+            "private_key",
+            "client_email"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "minLength": 1
+            },
+            "project_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "private_key": {
+              "type": "string",
+              "minLength": 1
+            },
+            "client_email": {
+              "type": "string",
+              "minLength": 6
+            }
+          }
+        },
+        {
+          "type": "string",
+          "minLength": 20,
+          "pattern": "^[A-Za-z0-9._\\-~+/=]+$"
+        }
+      ]
+    },
+    {
+      "name": "sheet_id",
+      "type": "string",
+      "description": "Google spreadsheet ID.",
+      "required": true,
+      "pattern": "^[A-Za-z0-9_-]{20,}$"
+    },
+    {
+      "name": "row",
+      "oneOf": [
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      ],
+      "description": "Row values to append. Accepts either an ordered array of strings or an object mapping. For object input, key insertion order is preserved when converting to output columns on Python runtimes that preserve dict insertion order (for example Python 3.7+).",
+      "required": true
+    }
+  ],
+  "outputs": [
+    {
+      "name": "appended",
+      "type": "boolean",
+      "description": "True when one row was appended successfully. On authentication, network, invalid sheet_id, or rate-limiting failures this is always false."
+    },
+    {
+      "name": "sheet_id",
+      "type": "string",
+      "description": "Spreadsheet ID used for the append operation. On errors this remains the supplied sheet_id when available, otherwise an empty string."
+    },
+    {
+      "name": "row",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Echoed row values attempted or appended by the connector. On failures this contains the normalized attempted row values when available, otherwise an empty array."
+    },
+    {
+      "name": "error",
+      "type": "string",
+      "description": "Failure detail summary. Empty or omitted on success; populated on authentication, network, invalid sheet_id, or rate-limiting failures."
+    },
+    {
+      "name": "error_code",
+      "type": "string",
+      "description": "Machine-readable failure code for dependency, auth, network, and API errors."
+    }
+  ],
+  "limits": {
+    "timeout_ms": 30000
+  },
+  "runtimes": {
+    "python": ">=3.7"
+  },
+  "version": "0.1.0"
+}

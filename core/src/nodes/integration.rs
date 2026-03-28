@@ -28,6 +28,8 @@ use sqlx::{
     Column, Row, Type, TypeInfo,
 };
 
+use crate::storage::resolve_secret_value;
+
 use super::{
     as_array, as_object, as_string, ensure_relative_path, lookup_required, Node, NodeError,
     RateLimiter,
@@ -434,10 +436,13 @@ fn build_headers(
         for (key, value) in object {
             let header_name = parse_header_name(key, "headers_env")?;
             let env_name = as_string(value, "headers_env")?;
-            let env_value = std::env::var(env_name).map_err(|_| NodeError::InvalidParameter {
-                parameter: "headers_env".to_string(),
-                message: format!("environment variable {env_name} is not set"),
-            })?;
+            let env_value =
+                resolve_secret_value(env_name).ok_or_else(|| NodeError::InvalidParameter {
+                    parameter: "headers_env".to_string(),
+                    message: format!(
+                        "secret '{env_name}' could not be resolved (missing or unset)"
+                    ),
+                })?;
             let header_value =
                 HeaderValue::from_str(&env_value).map_err(|error| NodeError::InvalidParameter {
                     parameter: "headers_env".to_string(),
@@ -471,10 +476,11 @@ fn resolve_connection_string(params: &Value) -> Result<String, NodeError> {
         });
     }
     if let Some(env_name) = params.get("connection_env").and_then(Value::as_str) {
-        let connection = std::env::var(env_name).map_err(|_| NodeError::InvalidParameter {
-            parameter: "connection_env".to_string(),
-            message: format!("environment variable {env_name} is not set"),
-        })?;
+        let connection =
+            resolve_secret_value(env_name).ok_or_else(|| NodeError::InvalidParameter {
+                parameter: "connection_env".to_string(),
+                message: format!("secret '{env_name}' could not be resolved (missing or unset)"),
+            })?;
         if !(connection.starts_with("postgres://") || connection.starts_with("postgresql://")) {
             return Err(NodeError::InvalidParameter {
                 parameter: "connection_env".to_string(),

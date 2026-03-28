@@ -350,17 +350,31 @@ function InitialFrame({
   const nodesInitialized = useNodesInitialized();
   const reactFlow = useReactFlow();
 
+  function scheduleFitView(duration: number) {
+    const rafId = window.requestAnimationFrame(() => {
+      void reactFlow.fitView({ duration, maxZoom: 1.05, padding: 0.18 });
+    });
+    const timeoutId = window.setTimeout(() => {
+      void reactFlow.fitView({ duration, maxZoom: 1.05, padding: 0.18 });
+    }, 110);
+    const timeoutIdLate = window.setTimeout(() => {
+      void reactFlow.fitView({ duration, maxZoom: 1.05, padding: 0.18 });
+    }, 240);
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      window.clearTimeout(timeoutId);
+      window.clearTimeout(timeoutIdLate);
+    };
+  }
+
   useEffect(function frameCanvasOnFirstRenderEffect() {
     if (!nodesInitialized || hasFramedOnMount.current || nodeCount === 0) {
       return;
     }
 
     hasFramedOnMount.current = true;
-    const frameId = window.requestAnimationFrame(() => {
-      void reactFlow.fitView({ duration: 0, maxZoom: 1.05, padding: 0.18 });
-    });
-
-    return () => window.cancelAnimationFrame(frameId);
+    return scheduleFitView(0);
   }, [nodeCount, nodesInitialized, reactFlow]);
 
   useEffect(function frameCanvasOnRequestEffect() {
@@ -368,11 +382,7 @@ function InitialFrame({
       return;
     }
 
-    const frameId = window.requestAnimationFrame(() => {
-      void reactFlow.fitView({ duration: 180, maxZoom: 1.05, padding: 0.18 });
-    });
-
-    return () => window.cancelAnimationFrame(frameId);
+    return scheduleFitView(180);
   }, [frameRequestKey, nodesInitialized, reactFlow]);
 
   return null;

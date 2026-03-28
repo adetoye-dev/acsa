@@ -15,11 +15,23 @@
 #![deny(warnings)]
 
 use std::{
-    path::Path,
+    collections::{HashMap, HashSet},
+    env,
+    path::{Path, PathBuf},
     str::FromStr,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        OnceLock, RwLock,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::asset_store::{default_root_for_database, AssetStore};
+use aes_gcm::{
+    aead::{rand_core::RngCore, Aead, KeyInit, OsRng},
+    Aes256Gcm, Nonce,
+};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::{
@@ -31,8 +43,51 @@ use uuid::Uuid;
 
 use crate::observability::{HistogramBucket, HistogramSnapshot, MetricsSnapshot};
 
+// NOTE: Managed credentials are process-global by design so non-storage modules (connectors,
+// triggers, and nodes) can resolve secrets without holding a RunStore reference.
+// This implies a single-process, single-active-store expectation: initialize one RunStore per
+// process and avoid running multiple database-backed RunStore instances concurrently.
+static MANAGED_CREDENTIALS: OnceLock<RwLock<HashMap<String, String>>> = OnceLock::new();
+static PLAINTEXT_CREDENTIAL_MIGRATION_QUEUE: OnceLock<RwLock<HashSet<Option<String>>>> =
+    OnceLock::new();
+static PLAINTEXT_CREDENTIALS_SEEN_TOTAL: AtomicU64 = AtomicU64::new(0);
+const CREDENTIAL_CIPHER_VERSION: &str = "enc:v1";
+const CREDENTIAL_MASTER_KEY_ENV: &str = "ACSA_CREDENTIAL_MASTER_KEY";
+const CREDENTIAL_STRICT_ENCRYPTION_ENV: &str = "ACSA_STRICT_CREDENTIAL_ENCRYPTION";
+
+fn managed_credentials() -> &'static RwLock<HashMap<String, String>> {
+    MANAGED_CREDENTIALS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn plaintext_credential_migration_queue() -> &'static RwLock<HashSet<Option<String>>> {
+    PLAINTEXT_CREDENTIAL_MIGRATION_QUEUE.get_or_init(|| RwLock::new(HashSet::new()))
+}
+
+fn strict_credential_encryption_enabled() -> bool {
+    matches!(
+        env::var(CREDENTIAL_STRICT_ENCRYPTION_ENV).ok().as_deref().map(str::trim),
+        Some("1" | "true" | "TRUE" | "yes" | "YES" | "on" | "ON")
+    )
+}
+
+pub fn resolve_secret_value(name: &str) -> Option<String> {
+    std::env::var(name).ok().or_else(|| match managed_credentials().read() {
+        Ok(credentials) => credentials.get(name).cloned(),
+        Err(poisoned) => {
+            tracing::warn!(
+                credential = %name,
+                error = %poisoned,
+                "managed_credentials read lock poisoned during resolve_secret_value; recovering lock"
+            );
+            let credentials = poisoned.into_inner();
+            credentials.get(name).cloned()
+        }
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct RunStore {
+    asset_store_root: PathBuf,
     pool: SqlitePool,
 }
 
@@ -57,14 +112,27 @@ impl RunStore {
             .foreign_keys(true);
 
         let pool = SqlitePoolOptions::new().max_connections(5).connect_with(options).await?;
-        let store = Self { pool };
+        let asset_store_root = default_root_for_database(path)?;
+        AssetStore::new(&asset_store_root)?;
+        // Connect initializes the shared managed credential cache for this process. Multiple
+        // RunStore instances against different databases in one process are not supported.
+        let store = Self { asset_store_root, pool };
         store.initialize().await?;
+        store.refresh_managed_credentials_cache().await?;
         store.mark_incomplete_runs_failed().await?;
         Ok(store)
     }
 
     pub fn pool(&self) -> &SqlitePool {
         &self.pool
+    }
+
+    pub fn asset_store_root(&self) -> &Path {
+        &self.asset_store_root
+    }
+
+    pub fn asset_store_connectors_dir(&self) -> PathBuf {
+        self.asset_store_root.join("connectors")
     }
 
     pub async fn start_run(
@@ -138,6 +206,816 @@ impl RunStore {
         .ok_or_else(|| StorageError::RunNotFound(run_id.to_string()))?;
 
         map_run_row(row)
+    }
+
+    pub async fn list_credentials(&self) -> Result<Vec<CredentialRecord>, StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT name, updated_at
+            FROM credentials
+            ORDER BY name ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                Ok(CredentialRecord {
+                    name: row.try_get("name")?,
+                    updated_at: row.try_get("updated_at")?,
+                })
+            })
+            .collect()
+    }
+
+    pub async fn upsert_credential(
+        &self,
+        name: &str,
+        value: &str,
+    ) -> Result<CredentialRecord, StorageError> {
+        let name = name.trim();
+
+        if name.is_empty() {
+            return Err(StorageError::InvalidInput(
+                "credential name must not be empty".to_string(),
+            ));
+        }
+
+        let updated_at = current_timestamp();
+        let encrypted_value = encrypt_value(value)?;
+        sqlx::query(
+            r#"
+            INSERT INTO credentials (name, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(name) DO UPDATE
+            SET value = excluded.value,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(name)
+        .bind(encrypted_value)
+        .bind(updated_at)
+        .execute(&self.pool)
+        .await?;
+
+        match managed_credentials().write() {
+            Ok(mut credentials) => {
+                credentials.insert(name.to_string(), value.to_string());
+            }
+            Err(poisoned) => {
+                tracing::warn!(
+                    credential = %name,
+                    error = %poisoned,
+                    "managed_credentials write lock poisoned during upsert; recovering lock and updating cache. cache will be refreshed on next connect() call"
+                );
+                let mut credentials = poisoned.into_inner();
+                credentials.insert(name.to_string(), value.to_string());
+            }
+        }
+
+        match plaintext_credential_migration_queue().write() {
+            Ok(mut queue) => {
+                queue.remove(&Some(name.to_string()));
+            }
+            Err(poisoned) => {
+                tracing::warn!(
+                    credential = %name,
+                    error = %poisoned,
+                    "plaintext credential migration queue lock poisoned during upsert; recovering lock"
+                );
+                let mut queue = poisoned.into_inner();
+                queue.remove(&Some(name.to_string()));
+            }
+        }
+
+        Ok(CredentialRecord { name: name.to_string(), updated_at })
+    }
+
+    pub async fn delete_credential(&self, name: &str) -> Result<(), StorageError> {
+        sqlx::query(
+            r#"
+            DELETE FROM credentials
+            WHERE name = ?
+            "#,
+        )
+        .bind(name)
+        .execute(&self.pool)
+        .await?;
+
+        match managed_credentials().write() {
+            Ok(mut credentials) => {
+                credentials.remove(name);
+            }
+            Err(poisoned) => {
+                tracing::warn!(
+                    credential = %name,
+                    error = %poisoned,
+                    "managed_credentials write lock poisoned during delete; recovering lock and updating cache. cache will be refreshed on next connect() call"
+                );
+                let mut credentials = poisoned.into_inner();
+                credentials.remove(name);
+            }
+        }
+
+        match plaintext_credential_migration_queue().write() {
+            Ok(mut queue) => {
+                queue.remove(&Some(name.to_string()));
+            }
+            Err(poisoned) => {
+                tracing::warn!(
+                    credential = %name,
+                    error = %poisoned,
+                    "plaintext credential migration queue lock poisoned during delete; recovering lock"
+                );
+                let mut queue = poisoned.into_inner();
+                queue.remove(&Some(name.to_string()));
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn list_workflows(&self) -> Result<Vec<WorkflowRecord>, StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, name, yaml, created_at, updated_at
+            FROM workflows
+            ORDER BY updated_at DESC, created_at DESC, name ASC, id ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(map_workflow_row).collect()
+    }
+
+    pub async fn get_workflow(&self, workflow_id: &str) -> Result<WorkflowRecord, StorageError> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, name, yaml, created_at, updated_at
+            FROM workflows
+            WHERE id = ?
+            "#,
+        )
+        .bind(workflow_id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| StorageError::WorkflowNotFound(workflow_id.to_string()))?;
+
+        map_workflow_row(row)
+    }
+
+    pub async fn create_workflow(
+        &self,
+        workflow_id: &str,
+        name: &str,
+        yaml: &str,
+    ) -> Result<WorkflowRecord, StorageError> {
+        if workflow_id.trim().is_empty() {
+            return Err(StorageError::InvalidInput("workflow id must not be empty".to_string()));
+        }
+        if name.trim().is_empty() {
+            return Err(StorageError::InvalidInput("workflow name must not be empty".to_string()));
+        }
+        if yaml.trim().is_empty() {
+            return Err(StorageError::InvalidInput("workflow yaml must not be empty".to_string()));
+        }
+
+        let now = current_timestamp();
+        let result = sqlx::query(
+            r#"
+            INSERT INTO workflows (id, name, yaml, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(workflow_id)
+        .bind(name)
+        .bind(yaml)
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await;
+
+        match result {
+            Ok(_) => self.get_workflow(workflow_id).await,
+            Err(sqlx::Error::Database(database_error)) if database_error.is_unique_violation() => {
+                Err(StorageError::WorkflowAlreadyExists(workflow_id.to_string()))
+            }
+            Err(error) => Err(StorageError::Sqlx(error)),
+        }
+    }
+
+    pub async fn create_workflow_if_missing(
+        &self,
+        workflow_id: &str,
+        name: &str,
+        yaml: &str,
+    ) -> Result<WorkflowRecord, StorageError> {
+        let now = current_timestamp();
+        sqlx::query(
+            r#"
+            INSERT OR IGNORE INTO workflows (id, name, yaml, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            "#,
+        )
+        .bind(workflow_id)
+        .bind(name)
+        .bind(yaml)
+        .bind(now)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_workflow(workflow_id).await
+    }
+
+    pub async fn update_workflow(
+        &self,
+        workflow_id: &str,
+        name: &str,
+        yaml: &str,
+    ) -> Result<WorkflowRecord, StorageError> {
+        let result = sqlx::query(
+            r#"
+            UPDATE workflows
+            SET name = ?, yaml = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(name)
+        .bind(yaml)
+        .bind(current_timestamp())
+        .bind(workflow_id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StorageError::WorkflowNotFound(workflow_id.to_string()));
+        }
+
+        self.get_workflow(workflow_id).await
+    }
+
+    pub async fn rename_workflow(
+        &self,
+        workflow_id: &str,
+        target_id: &str,
+        name: &str,
+        yaml: &str,
+    ) -> Result<WorkflowRecord, StorageError> {
+        if workflow_id == target_id {
+            return self.update_workflow(workflow_id, name, yaml).await;
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let existing = sqlx::query("SELECT id FROM workflows WHERE id = ?")
+            .bind(target_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        if existing.is_some() {
+            return Err(StorageError::WorkflowAlreadyExists(target_id.to_string()));
+        }
+
+        let result = sqlx::query(
+            r#"
+            UPDATE workflows
+            SET id = ?, name = ?, yaml = ?, updated_at = ?
+            WHERE id = ?
+            "#,
+        )
+        .bind(target_id)
+        .bind(name)
+        .bind(yaml)
+        .bind(current_timestamp())
+        .bind(workflow_id)
+        .execute(&mut *tx)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StorageError::WorkflowNotFound(workflow_id.to_string()));
+        }
+
+        tx.commit().await?;
+        self.get_workflow(target_id).await
+    }
+
+    pub async fn delete_workflow(&self, workflow_id: &str) -> Result<(), StorageError> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM workflows
+            WHERE id = ?
+            "#,
+        )
+        .bind(workflow_id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StorageError::WorkflowNotFound(workflow_id.to_string()));
+        }
+
+        Ok(())
+    }
+
+    pub async fn list_connector_records(&self) -> Result<Vec<ConnectorRecord>, StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+              id,
+              type_name,
+              name,
+              runtime,
+              source_kind,
+              source_ref,
+              connector_dir,
+              manifest_path,
+              manifest_json,
+              created_at,
+              updated_at
+            FROM connector_records
+            ORDER BY updated_at DESC, created_at DESC, name ASC, type_name ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(map_connector_record_row).collect()
+    }
+
+    pub async fn list_asset_records(&self) -> Result<Vec<AssetRecord>, StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+              id,
+              asset_kind,
+              type_name,
+              name,
+              description,
+              category,
+              runtime,
+              source_kind,
+              source_ref,
+              definition_json,
+              installed_version,
+              available_version,
+              is_locally_modified,
+              created_at,
+              updated_at
+            FROM asset_records
+            ORDER BY asset_kind ASC, updated_at DESC, created_at DESC, name ASC, type_name ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(map_asset_record_row).collect()
+    }
+
+    pub async fn get_asset_record(
+        &self,
+        asset_kind: &str,
+        type_name: &str,
+    ) -> Result<AssetRecord, StorageError> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+              id,
+              asset_kind,
+              type_name,
+              name,
+              description,
+              category,
+              runtime,
+              source_kind,
+              source_ref,
+              definition_json,
+              installed_version,
+              available_version,
+              is_locally_modified,
+              created_at,
+              updated_at
+            FROM asset_records
+            WHERE asset_kind = ? AND type_name = ?
+            "#,
+        )
+        .bind(asset_kind)
+        .bind(type_name)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| {
+            StorageError::AssetRecordNotFound(asset_kind.to_string(), type_name.to_string())
+        })?;
+
+        map_asset_record_row(row)
+    }
+
+    pub async fn upsert_asset_record(
+        &self,
+        record: NewAssetRecord<'_>,
+    ) -> Result<AssetRecord, StorageError> {
+        if record.asset_kind.trim().is_empty() {
+            return Err(StorageError::InvalidInput("asset_kind must not be empty".to_string()));
+        }
+        if record.type_name.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "asset type_name must not be empty".to_string(),
+            ));
+        }
+        if record.name.trim().is_empty() {
+            return Err(StorageError::InvalidInput("asset name must not be empty".to_string()));
+        }
+        if record.description.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "asset description must not be empty".to_string(),
+            ));
+        }
+        if record.source_kind.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "asset source_kind must not be empty".to_string(),
+            ));
+        }
+        if record.definition_json.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "asset definition_json must not be empty".to_string(),
+            ));
+        }
+
+        let existing = sqlx::query(
+            r#"
+            SELECT id, created_at
+            FROM asset_records
+            WHERE asset_kind = ? AND type_name = ?
+            "#,
+        )
+        .bind(record.asset_kind)
+        .bind(record.type_name)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let now = current_timestamp();
+        let (id, created_at) = match existing {
+            Some(row) => (row.try_get("id")?, row.try_get("created_at")?),
+            None => (Uuid::new_v4().to_string(), now),
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO asset_records (
+              id,
+              asset_kind,
+              type_name,
+              name,
+              description,
+              category,
+              runtime,
+              source_kind,
+              source_ref,
+              definition_json,
+              installed_version,
+              available_version,
+              is_locally_modified,
+              created_at,
+              updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(asset_kind, type_name) DO UPDATE
+            SET name = excluded.name,
+                description = excluded.description,
+                category = excluded.category,
+                runtime = excluded.runtime,
+                source_kind = excluded.source_kind,
+                source_ref = excluded.source_ref,
+                definition_json = excluded.definition_json,
+                installed_version = excluded.installed_version,
+                available_version = excluded.available_version,
+                is_locally_modified = excluded.is_locally_modified,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(&id)
+        .bind(record.asset_kind)
+        .bind(record.type_name)
+        .bind(record.name)
+        .bind(record.description)
+        .bind(record.category)
+        .bind(record.runtime)
+        .bind(record.source_kind)
+        .bind(record.source_ref)
+        .bind(record.definition_json)
+        .bind(record.installed_version)
+        .bind(record.available_version)
+        .bind(record.is_locally_modified)
+        .bind(created_at)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_asset_record(record.asset_kind, record.type_name).await
+    }
+
+    pub async fn get_connector_record_by_type(
+        &self,
+        type_name: &str,
+    ) -> Result<ConnectorRecord, StorageError> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+              id,
+              type_name,
+              name,
+              runtime,
+              source_kind,
+              source_ref,
+              connector_dir,
+              manifest_path,
+              manifest_json,
+              created_at,
+              updated_at
+            FROM connector_records
+            WHERE type_name = ?
+            "#,
+        )
+        .bind(type_name)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| StorageError::ConnectorRecordNotFound(type_name.to_string()))?;
+
+        map_connector_record_row(row)
+    }
+
+    pub async fn upsert_connector_record(
+        &self,
+        record: NewConnectorRecord<'_>,
+    ) -> Result<ConnectorRecord, StorageError> {
+        if record.type_name.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "connector type_name must not be empty".to_string(),
+            ));
+        }
+        if record.name.trim().is_empty() {
+            return Err(StorageError::InvalidInput("connector name must not be empty".to_string()));
+        }
+        if record.runtime.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "connector runtime must not be empty".to_string(),
+            ));
+        }
+        if record.source_kind.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "connector source_kind must not be empty".to_string(),
+            ));
+        }
+        if record.connector_dir.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "connector connector_dir must not be empty".to_string(),
+            ));
+        }
+        if record.manifest_path.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "connector manifest_path must not be empty".to_string(),
+            ));
+        }
+        if record.manifest_json.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "connector manifest_json must not be empty".to_string(),
+            ));
+        }
+
+        let existing = sqlx::query(
+            r#"
+            SELECT id, created_at
+            FROM connector_records
+            WHERE type_name = ?
+            "#,
+        )
+        .bind(record.type_name)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let now = current_timestamp();
+        let (id, created_at) = match existing {
+            Some(row) => (row.try_get("id")?, row.try_get("created_at")?),
+            None => (Uuid::new_v4().to_string(), now),
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO connector_records (
+              id,
+              type_name,
+              name,
+              runtime,
+              source_kind,
+              source_ref,
+              connector_dir,
+              manifest_path,
+              manifest_json,
+              created_at,
+              updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(type_name) DO UPDATE
+            SET name = excluded.name,
+                runtime = excluded.runtime,
+                source_kind = excluded.source_kind,
+                source_ref = excluded.source_ref,
+                connector_dir = excluded.connector_dir,
+                manifest_path = excluded.manifest_path,
+                manifest_json = excluded.manifest_json,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(&id)
+        .bind(record.type_name)
+        .bind(record.name)
+        .bind(record.runtime)
+        .bind(record.source_kind)
+        .bind(record.source_ref)
+        .bind(record.connector_dir)
+        .bind(record.manifest_path)
+        .bind(record.manifest_json)
+        .bind(created_at)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_connector_record_by_type(record.type_name).await
+    }
+
+    pub async fn list_node_records(&self) -> Result<Vec<NodeRecord>, StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+              id,
+              type_name,
+              label,
+              description,
+              category,
+              source_kind,
+              source_ref,
+              created_at,
+              updated_at
+            FROM node_records
+            ORDER BY updated_at DESC, created_at DESC, label ASC, type_name ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        rows.into_iter().map(map_node_record_row).collect()
+    }
+
+    pub async fn get_node_record_by_type(
+        &self,
+        type_name: &str,
+    ) -> Result<NodeRecord, StorageError> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+              id,
+              type_name,
+              label,
+              description,
+              category,
+              source_kind,
+              source_ref,
+              created_at,
+              updated_at
+            FROM node_records
+            WHERE type_name = ?
+            "#,
+        )
+        .bind(type_name)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| StorageError::NodeRecordNotFound(type_name.to_string()))?;
+
+        map_node_record_row(row)
+    }
+
+    pub async fn upsert_node_record(
+        &self,
+        record: NewNodeRecord<'_>,
+    ) -> Result<NodeRecord, StorageError> {
+        if record.type_name.trim().is_empty() {
+            return Err(StorageError::InvalidInput("node type_name must not be empty".to_string()));
+        }
+        if record.label.trim().is_empty() {
+            return Err(StorageError::InvalidInput("node label must not be empty".to_string()));
+        }
+        if record.description.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "node description must not be empty".to_string(),
+            ));
+        }
+        if record.category.trim().is_empty() {
+            return Err(StorageError::InvalidInput("node category must not be empty".to_string()));
+        }
+        if record.source_kind.trim().is_empty() {
+            return Err(StorageError::InvalidInput(
+                "node source_kind must not be empty".to_string(),
+            ));
+        }
+
+        let existing = sqlx::query(
+            r#"
+            SELECT id, created_at
+            FROM node_records
+            WHERE type_name = ?
+            "#,
+        )
+        .bind(record.type_name)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let now = current_timestamp();
+        let (id, created_at) = match existing {
+            Some(row) => (row.try_get("id")?, row.try_get("created_at")?),
+            None => (Uuid::new_v4().to_string(), now),
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO node_records (
+              id,
+              type_name,
+              label,
+              description,
+              category,
+              source_kind,
+              source_ref,
+              created_at,
+              updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(type_name) DO UPDATE
+            SET label = excluded.label,
+                description = excluded.description,
+                category = excluded.category,
+                source_kind = excluded.source_kind,
+                source_ref = excluded.source_ref,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(&id)
+        .bind(record.type_name)
+        .bind(record.label)
+        .bind(record.description)
+        .bind(record.category)
+        .bind(record.source_kind)
+        .bind(record.source_ref)
+        .bind(created_at)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        self.get_node_record_by_type(record.type_name).await
+    }
+
+    pub fn queued_plaintext_credential_names(&self) -> Vec<String> {
+        match plaintext_credential_migration_queue().read() {
+            Ok(queue) => queue.iter().filter_map(Clone::clone).collect(),
+            Err(poisoned) => {
+                tracing::warn!(
+                    error = %poisoned,
+                    "plaintext credential migration queue lock poisoned during read; recovering lock"
+                );
+                poisoned.into_inner().iter().filter_map(Clone::clone).collect()
+            }
+        }
+    }
+
+    pub fn plaintext_credential_hits_total(&self) -> u64 {
+        PLAINTEXT_CREDENTIALS_SEEN_TOTAL.load(Ordering::Relaxed)
+    }
+
+    pub async fn migrate_queued_plaintext_credentials(&self) -> Result<usize, StorageError> {
+        let queued_names = self.queued_plaintext_credential_names();
+        let mut migrated = 0usize;
+
+        for name in queued_names {
+            let value = match managed_credentials().read() {
+                Ok(credentials) => credentials.get(&name).cloned(),
+                Err(poisoned) => {
+                    tracing::warn!(
+                        credential = %name,
+                        error = %poisoned,
+                        "managed_credentials lock poisoned during plaintext credential migration read; recovering lock"
+                    );
+                    poisoned.into_inner().get(&name).cloned()
+                }
+            };
+
+            let Some(value) = value else {
+                continue;
+            };
+
+            self.upsert_credential(&name, &value).await?;
+            migrated += 1;
+        }
+
+        Ok(migrated)
     }
 
     pub async fn complete_run_success(&self, run_id: &str) -> Result<(), StorageError> {
@@ -934,6 +1812,95 @@ impl RunStore {
 
         sqlx::query(
             r#"
+            CREATE TABLE IF NOT EXISTS workflows (
+              id TEXT PRIMARY KEY,
+              name TEXT NOT NULL,
+              yaml TEXT NOT NULL,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS credentials (
+              name TEXT PRIMARY KEY,
+              value TEXT NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS asset_records (
+              id TEXT PRIMARY KEY,
+              asset_kind TEXT NOT NULL,
+              type_name TEXT NOT NULL,
+              name TEXT NOT NULL,
+              description TEXT NOT NULL,
+              category TEXT,
+              runtime TEXT,
+              source_kind TEXT NOT NULL,
+              source_ref TEXT,
+              definition_json TEXT NOT NULL,
+              installed_version TEXT,
+              available_version TEXT,
+              is_locally_modified INTEGER NOT NULL DEFAULT 0,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              UNIQUE(asset_kind, type_name)
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS connector_records (
+              id TEXT PRIMARY KEY,
+              type_name TEXT NOT NULL UNIQUE,
+              name TEXT NOT NULL,
+              runtime TEXT NOT NULL,
+              source_kind TEXT NOT NULL,
+              source_ref TEXT,
+              connector_dir TEXT NOT NULL,
+              manifest_path TEXT NOT NULL,
+              manifest_json TEXT NOT NULL,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS node_records (
+              id TEXT PRIMARY KEY,
+              type_name TEXT NOT NULL UNIQUE,
+              label TEXT NOT NULL,
+              description TEXT NOT NULL,
+              category TEXT NOT NULL,
+              source_kind TEXT NOT NULL,
+              source_ref TEXT,
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            r#"
             CREATE TABLE IF NOT EXISTS step_runs (
               id TEXT PRIMARY KEY,
               run_id TEXT NOT NULL,
@@ -1006,6 +1973,25 @@ impl RunStore {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_runs_workflow_name ON runs(workflow_name)")
             .execute(&self.pool)
             .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_workflows_updated_at ON workflows(updated_at)")
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_asset_records_updated_at ON asset_records(updated_at)",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_connector_records_updated_at ON connector_records(updated_at)",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_node_records_updated_at ON node_records(updated_at)",
+        )
+        .execute(&self.pool)
+        .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)")
             .execute(&self.pool)
             .await?;
@@ -1085,6 +2071,43 @@ impl RunStore {
             .await?;
         Ok(())
     }
+
+    async fn refresh_managed_credentials_cache(&self) -> Result<(), StorageError> {
+        let rows = sqlx::query(
+            r#"
+            SELECT name, value
+            FROM credentials
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut next_credentials = HashMap::new();
+        for row in rows {
+            let name: String = row.try_get("name")?;
+            let encrypted_value: String = row.try_get("value")?;
+            let value = decrypt_value(&encrypted_value, Some(&name))?;
+            next_credentials.insert(name, value);
+        }
+
+        match managed_credentials().write() {
+            Ok(mut credentials) => {
+                *credentials = next_credentials;
+            }
+            Err(error) => {
+                tracing::error!(
+                    error = %error,
+                    "failed to acquire managed_credentials write lock in refresh_managed_credentials_cache"
+                );
+                return Err(StorageError::DataIntegrity(
+                    "failed to acquire managed_credentials write lock in refresh_managed_credentials_cache"
+                        .to_string(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1127,6 +2150,68 @@ pub struct LogRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CredentialRecord {
+    pub name: String,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowRecord {
+    pub id: String,
+    pub name: String,
+    pub yaml: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConnectorRecord {
+    pub id: String,
+    pub type_name: String,
+    pub name: String,
+    pub runtime: String,
+    pub source_kind: String,
+    pub source_ref: Option<String>,
+    pub connector_dir: String,
+    pub manifest_path: String,
+    pub manifest_json: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssetRecord {
+    pub id: String,
+    pub asset_kind: String,
+    pub type_name: String,
+    pub name: String,
+    pub description: String,
+    pub category: Option<String>,
+    pub runtime: Option<String>,
+    pub source_kind: String,
+    pub source_ref: Option<String>,
+    pub definition_json: String,
+    pub installed_version: Option<String>,
+    pub available_version: Option<String>,
+    pub is_locally_modified: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeRecord {
+    pub id: String,
+    pub type_name: String,
+    pub label: String,
+    pub description: String,
+    pub category: String,
+    pub source_kind: String,
+    pub source_ref: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HumanTaskRecord {
     pub id: String,
     pub run_id: String,
@@ -1151,6 +2236,44 @@ pub struct NewHumanTask<'a> {
     pub run_id: &'a str,
     pub step_id: &'a str,
     pub step_run_id: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewConnectorRecord<'a> {
+    pub type_name: &'a str,
+    pub name: &'a str,
+    pub runtime: &'a str,
+    pub source_kind: &'a str,
+    pub source_ref: Option<&'a str>,
+    pub connector_dir: &'a str,
+    pub manifest_path: &'a str,
+    pub manifest_json: &'a str,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewAssetRecord<'a> {
+    pub asset_kind: &'a str,
+    pub type_name: &'a str,
+    pub name: &'a str,
+    pub description: &'a str,
+    pub category: Option<&'a str>,
+    pub runtime: Option<&'a str>,
+    pub source_kind: &'a str,
+    pub source_ref: Option<&'a str>,
+    pub definition_json: &'a str,
+    pub installed_version: Option<&'a str>,
+    pub available_version: Option<&'a str>,
+    pub is_locally_modified: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NewNodeRecord<'a> {
+    pub type_name: &'a str,
+    pub label: &'a str,
+    pub description: &'a str,
+    pub category: &'a str,
+    pub source_kind: &'a str,
+    pub source_ref: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1240,12 +2363,151 @@ pub enum StorageError {
     InvalidConnectionUrl(String),
     #[error("path is not valid UTF-8: {0}")]
     InvalidPath(String),
+    #[error("asset store error: {0}")]
+    AssetStore(#[from] crate::asset_store::AssetStoreError),
     #[error("run not found: {0}")]
     RunNotFound(String),
+    #[error("workflow not found: {0}")]
+    WorkflowNotFound(String),
+    #[error("workflow already exists: {0}")]
+    WorkflowAlreadyExists(String),
+    #[error("connector record not found: {0}")]
+    ConnectorRecordNotFound(String),
+    #[error("asset record not found: {0}:{1}")]
+    AssetRecordNotFound(String, String),
+    #[error("node record not found: {0}")]
+    NodeRecordNotFound(String),
     #[error("human task not found: {0}")]
     HumanTaskNotFound(String),
     #[error("data integrity error: {0}")]
     DataIntegrity(String),
+    #[error("invalid input: {0}")]
+    InvalidInput(String),
+    #[error("credential encryption failed: {0}")]
+    CredentialEncryption(String),
+    #[error("credential decryption failed: {0}")]
+    CredentialDecryption(String),
+}
+
+fn credential_master_key() -> Result<[u8; 32], StorageError> {
+    let encoded = env::var(CREDENTIAL_MASTER_KEY_ENV).map_err(|_| {
+        StorageError::CredentialEncryption(format!(
+            "missing master key env var {CREDENTIAL_MASTER_KEY_ENV}"
+        ))
+    })?;
+
+    let bytes = BASE64.decode(encoded).map_err(|error| {
+        StorageError::CredentialEncryption(format!("invalid base64 master key: {error}"))
+    })?;
+
+    if bytes.len() != 32 {
+        return Err(StorageError::CredentialEncryption(format!(
+            "master key in {CREDENTIAL_MASTER_KEY_ENV} must decode to 32 bytes"
+        )));
+    }
+
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&bytes);
+    Ok(key)
+}
+
+fn encrypt_value(value: &str) -> Result<String, StorageError> {
+    let key = credential_master_key()?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| {
+        StorageError::CredentialEncryption(format!("invalid cipher key: {error}"))
+    })?;
+
+    let mut nonce_bytes = [0u8; 12];
+    OsRng.fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+
+    let ciphertext = cipher
+        .encrypt(nonce, value.as_bytes())
+        .map_err(|error| StorageError::CredentialEncryption(format!("encrypt failed: {error}")))?;
+
+    Ok(format!(
+        "{CREDENTIAL_CIPHER_VERSION}:{}:{}",
+        BASE64.encode(nonce_bytes),
+        BASE64.encode(ciphertext)
+    ))
+}
+
+fn encrypted_credential_segments(stored: &str) -> Option<(&str, &str)> {
+    let payload =
+        stored.strip_prefix(CREDENTIAL_CIPHER_VERSION).and_then(|value| value.strip_prefix(':'))?;
+    let (nonce_b64, cipher_b64) = payload.split_once(':')?;
+    if nonce_b64.is_empty() || cipher_b64.is_empty() {
+        return None;
+    }
+
+    Some((nonce_b64, cipher_b64))
+}
+
+fn decrypt_value(stored: &str, credential_name: Option<&str>) -> Result<String, StorageError> {
+    let Some((nonce_b64, cipher_b64)) = encrypted_credential_segments(stored) else {
+        PLAINTEXT_CREDENTIALS_SEEN_TOTAL.fetch_add(1, Ordering::Relaxed);
+        let queued_credential_name = credential_name.map(str::to_string);
+        let credential = credential_name.unwrap_or("<unknown>");
+
+        match plaintext_credential_migration_queue().write() {
+            Ok(mut queue) => {
+                queue.insert(queued_credential_name.clone());
+            }
+            Err(poisoned) => {
+                tracing::warn!(
+                    credential = %credential,
+                    error = %poisoned,
+                    "plaintext credential migration queue lock poisoned while enqueueing; recovering lock"
+                );
+                let mut queue = poisoned.into_inner();
+                queue.insert(queued_credential_name);
+            }
+        }
+
+        tracing::warn!(
+            credential = %credential,
+            expected_prefix = CREDENTIAL_CIPHER_VERSION,
+            strict_mode = strict_credential_encryption_enabled(),
+            plaintext_hits_total = PLAINTEXT_CREDENTIALS_SEEN_TOTAL.load(Ordering::Relaxed),
+            "plaintext credential encountered in storage; queued for re-encryption migration"
+        );
+
+        if strict_credential_encryption_enabled() {
+            return Err(StorageError::CredentialDecryption(format!(
+                "plaintext credential encountered for {credential}; strict mode requires {CREDENTIAL_CIPHER_VERSION}"
+            )));
+        }
+
+        return Ok(stored.to_string());
+    };
+
+    let key = credential_master_key()
+        .map_err(|error| StorageError::CredentialDecryption(error.to_string()))?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| {
+        StorageError::CredentialDecryption(format!("invalid cipher key: {error}"))
+    })?;
+
+    let nonce_bytes = BASE64.decode(nonce_b64).map_err(|error| {
+        StorageError::CredentialDecryption(format!("invalid nonce encoding: {error}"))
+    })?;
+    if nonce_bytes.len() != 12 {
+        return Err(StorageError::CredentialDecryption(
+            "invalid nonce length for encrypted credential".to_string(),
+        ));
+    }
+
+    let ciphertext = BASE64.decode(cipher_b64).map_err(|error| {
+        StorageError::CredentialDecryption(format!("invalid ciphertext encoding: {error}"))
+    })?;
+
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let plaintext = cipher
+        .decrypt(nonce, ciphertext.as_ref())
+        .map_err(|error| StorageError::CredentialDecryption(format!("decrypt failed: {error}")))?;
+
+    String::from_utf8(plaintext).map_err(|error| {
+        StorageError::CredentialDecryption(format!("decrypted value is not valid utf-8: {error}"))
+    })
 }
 
 fn current_timestamp() -> i64 {
@@ -1325,6 +2587,66 @@ fn map_run_row(row: sqlx::sqlite::SqliteRow) -> Result<RunRecord, StorageError> 
     })
 }
 
+fn map_workflow_row(row: sqlx::sqlite::SqliteRow) -> Result<WorkflowRecord, StorageError> {
+    Ok(WorkflowRecord {
+        id: row.try_get("id")?,
+        name: row.try_get("name")?,
+        yaml: row.try_get("yaml")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn map_connector_record_row(row: sqlx::sqlite::SqliteRow) -> Result<ConnectorRecord, StorageError> {
+    Ok(ConnectorRecord {
+        id: row.try_get("id")?,
+        type_name: row.try_get("type_name")?,
+        name: row.try_get("name")?,
+        runtime: row.try_get("runtime")?,
+        source_kind: row.try_get("source_kind")?,
+        source_ref: row.try_get("source_ref")?,
+        connector_dir: row.try_get("connector_dir")?,
+        manifest_path: row.try_get("manifest_path")?,
+        manifest_json: row.try_get("manifest_json")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn map_node_record_row(row: sqlx::sqlite::SqliteRow) -> Result<NodeRecord, StorageError> {
+    Ok(NodeRecord {
+        id: row.try_get("id")?,
+        type_name: row.try_get("type_name")?,
+        label: row.try_get("label")?,
+        description: row.try_get("description")?,
+        category: row.try_get("category")?,
+        source_kind: row.try_get("source_kind")?,
+        source_ref: row.try_get("source_ref")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
+fn map_asset_record_row(row: sqlx::sqlite::SqliteRow) -> Result<AssetRecord, StorageError> {
+    Ok(AssetRecord {
+        id: row.try_get("id")?,
+        asset_kind: row.try_get("asset_kind")?,
+        type_name: row.try_get("type_name")?,
+        name: row.try_get("name")?,
+        description: row.try_get("description")?,
+        category: row.try_get("category")?,
+        runtime: row.try_get("runtime")?,
+        source_kind: row.try_get("source_kind")?,
+        source_ref: row.try_get("source_ref")?,
+        definition_json: row.try_get("definition_json")?,
+        installed_version: row.try_get("installed_version")?,
+        available_version: row.try_get("available_version")?,
+        is_locally_modified: row.try_get("is_locally_modified")?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
+}
+
 fn map_step_run_row(row: sqlx::sqlite::SqliteRow) -> Result<StepRunRecord, StorageError> {
     let attempt_i64 = row.try_get::<i64, _>("attempt")?;
     let attempt = u32::try_from(attempt_i64).map_err(|_| {
@@ -1378,6 +2700,327 @@ fn map_human_task_row(row: sqlx::sqlite::SqliteRow) -> Result<HumanTaskRecord, S
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
+
+    struct ScopedEnvVarRestore {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl ScopedEnvVarRestore {
+        fn new_cleared(key: &'static str) -> Self {
+            let original = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, original }
+        }
+
+        fn new_set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for ScopedEnvVarRestore {
+        fn drop(&mut self) {
+            if let Some(value) = &self.original {
+                std::env::set_var(self.key, value);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
+    }
+
+    #[test]
+    fn encrypted_credential_segments_require_full_delimited_format() {
+        assert_eq!(
+            encrypted_credential_segments("enc:v1:bm9uY2U=:Y2lwaGVydGV4dA=="),
+            Some(("bm9uY2U=", "Y2lwaGVydGV4dA=="))
+        );
+        assert_eq!(encrypted_credential_segments("enc:v1-some-api-key"), None);
+        assert_eq!(encrypted_credential_segments("enc:v1"), None);
+        assert_eq!(encrypted_credential_segments("enc:v1:"), None);
+        assert_eq!(encrypted_credential_segments("enc:v1:nonce"), None);
+        assert_eq!(encrypted_credential_segments("enc:v1::cipher"), None);
+    }
+
+    #[test]
+    fn decrypt_value_preserves_prefix_lookalike_plaintext_values() {
+        let _strict_env = ScopedEnvVarRestore::new_cleared("ACSA_STRICT_CREDENTIAL_ENCRYPTION");
+        let stored = "enc:v1-some-api-key";
+        let decrypted = decrypt_value(stored, Some("api_key"))
+            .expect("prefix lookalike value should be treated as plaintext");
+        assert_eq!(decrypted, stored);
+    }
+
+    #[test]
+    fn decrypt_value_without_name_queues_none_sentinel() {
+        let _strict_env = ScopedEnvVarRestore::new_cleared("ACSA_STRICT_CREDENTIAL_ENCRYPTION");
+        {
+            let mut queue = plaintext_credential_migration_queue()
+                .write()
+                .expect("queue lock should be acquired");
+            queue.clear();
+        }
+
+        let _ = decrypt_value("plain-secret", None);
+
+        let queue =
+            plaintext_credential_migration_queue().read().expect("queue lock should be acquired");
+        assert!(queue.contains(&None));
+        assert!(!queue.contains(&Some("<unknown>".to_string())));
+    }
+
+    #[tokio::test]
+    async fn upsert_credential_rejects_blank_names() {
+        let _master_key_env = ScopedEnvVarRestore::new_set(
+            "ACSA_CREDENTIAL_MASTER_KEY",
+            "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
+        );
+        let temp_dir = std::env::temp_dir().join(format!("acsa-storage-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir).await.expect("temp dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
+        let store = RunStore::connect(&db_path).await.expect("store should connect");
+
+        let error = store
+            .upsert_credential("   ", "secret")
+            .await
+            .expect_err("blank credential name should be rejected");
+        assert!(matches!(error, StorageError::InvalidInput(_)));
+
+        tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
+    }
+
+    #[tokio::test]
+    async fn workflow_crud_is_db_backed() {
+        let temp_dir = std::env::temp_dir().join(format!("acsa-storage-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir).await.expect("temp dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
+        let store = RunStore::connect(&db_path).await.expect("store should connect");
+
+        let created = store
+            .create_workflow(
+                "customer-intake",
+                "customer intake",
+                "version: v1\nname: customer intake\ntrigger:\n  type: manual\nsteps: []\n",
+            )
+            .await
+            .expect("workflow should create");
+        assert_eq!(created.id, "customer-intake");
+
+        let listed = store.list_workflows().await.expect("workflows should list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "customer-intake");
+
+        let updated = store
+            .update_workflow(
+                "customer-intake",
+                "customer intake",
+                "version: v1\nname: customer intake\ntrigger:\n  type: manual\nsteps:\n  - id: start\n    type: constant\n    params:\n      value: true\n    next: []\n",
+            )
+            .await
+            .expect("workflow should update");
+        assert!(updated.yaml.contains("id: start"));
+
+        let renamed = store
+            .rename_workflow(
+                "customer-intake",
+                "customer-intake-v2",
+                "customer intake v2",
+                "version: v1\nname: customer intake v2\ntrigger:\n  type: manual\nsteps: []\n",
+            )
+            .await
+            .expect("workflow should rename");
+        assert_eq!(renamed.id, "customer-intake-v2");
+        assert_eq!(renamed.name, "customer intake v2");
+
+        store.delete_workflow("customer-intake-v2").await.expect("workflow should delete");
+        let error = store
+            .get_workflow("customer-intake-v2")
+            .await
+            .expect_err("deleted workflow should not load");
+        assert!(matches!(error, StorageError::WorkflowNotFound(_)));
+
+        tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
+    }
+
+    #[tokio::test]
+    async fn create_workflow_if_missing_preserves_existing_yaml() {
+        let temp_dir = std::env::temp_dir().join(format!("acsa-storage-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir).await.expect("temp dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
+        let store = RunStore::connect(&db_path).await.expect("store should connect");
+
+        store
+            .create_workflow(
+                "seeded",
+                "seeded workflow",
+                "version: v1\nname: seeded workflow\ntrigger:\n  type: manual\nsteps: []\n",
+            )
+            .await
+            .expect("workflow should create");
+
+        let seeded = store
+            .create_workflow_if_missing(
+                "seeded",
+                "replacement workflow",
+                "version: v1\nname: replacement workflow\ntrigger:\n  type: manual\nsteps:\n  - id: replacement\n    type: constant\n    params:\n      value: true\n    next: []\n",
+            )
+            .await
+            .expect("seed should preserve existing record");
+
+        assert_eq!(seeded.name, "seeded workflow");
+        assert!(!seeded.yaml.contains("replacement"));
+
+        tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
+    }
+
+    #[tokio::test]
+    async fn connector_record_crud_is_db_backed() {
+        let temp_dir = std::env::temp_dir().join(format!("acsa-storage-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir).await.expect("temp dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
+        let store = RunStore::connect(&db_path).await.expect("store should connect");
+
+        let created = store
+            .upsert_connector_record(NewConnectorRecord {
+                type_name: "slack_notify",
+                name: "Slack Notify",
+                runtime: "process",
+                source_kind: "starter_pack",
+                source_ref: Some("slack-notify"),
+                connector_dir: "connectors/slack-notify",
+                manifest_path: "connectors/slack-notify/manifest.json",
+                manifest_json: r#"{"name":"Slack Notify","runtime":"process","type":"slack_notify"}"#,
+            })
+            .await
+            .expect("connector record should create");
+
+        let listed = store.list_connector_records().await.expect("connector records should list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].type_name, "slack_notify");
+        assert_eq!(listed[0].source_ref.as_deref(), Some("slack-notify"));
+
+        let updated = store
+            .upsert_connector_record(NewConnectorRecord {
+                type_name: "slack_notify",
+                name: "Slack Notify",
+                runtime: "process",
+                source_kind: "generated",
+                source_ref: Some("prompt:123"),
+                connector_dir: "connectors/slack-notify",
+                manifest_path: "connectors/slack-notify/manifest.json",
+                manifest_json: r#"{"name":"Slack Notify","runtime":"process","type":"slack_notify","version":"2"}"#,
+            })
+            .await
+            .expect("connector record should update");
+
+        assert_eq!(updated.id, created.id);
+        assert_eq!(updated.source_kind, "generated");
+        assert_eq!(updated.source_ref.as_deref(), Some("prompt:123"));
+        assert!(updated.manifest_json.contains("\"version\":\"2\""));
+
+        tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
+    }
+
+    #[tokio::test]
+    async fn asset_record_crud_is_db_backed() {
+        let temp_dir = std::env::temp_dir().join(format!("acsa-storage-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir).await.expect("temp dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
+        let store = RunStore::connect(&db_path).await.expect("store should connect");
+
+        let created = store
+            .upsert_asset_record(NewAssetRecord {
+                asset_kind: "node",
+                type_name: "constant",
+                name: "Set value",
+                description: "Produce a fixed value for downstream steps.",
+                category: Some("Data"),
+                runtime: None,
+                source_kind: "shipped",
+                source_ref: Some("built_in"),
+                definition_json: r#"{"type":"constant"}"#,
+                installed_version: Some("1.0.0"),
+                available_version: Some("1.0.0"),
+                is_locally_modified: false,
+            })
+            .await
+            .expect("asset record should create");
+
+        let listed = store.list_asset_records().await.expect("asset records should list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].asset_kind, "node");
+        assert_eq!(listed[0].type_name, "constant");
+
+        let updated = store
+            .upsert_asset_record(NewAssetRecord {
+                asset_kind: "node",
+                type_name: "constant",
+                name: "Set value",
+                description: "Produce a fixed value for downstream automation steps.",
+                category: Some("Data"),
+                runtime: None,
+                source_kind: "shipped",
+                source_ref: Some("built_in"),
+                definition_json: r#"{"type":"constant","version":"2"}"#,
+                installed_version: Some("1.0.0"),
+                available_version: Some("1.1.0"),
+                is_locally_modified: true,
+            })
+            .await
+            .expect("asset record should update");
+
+        assert_eq!(updated.id, created.id);
+        assert_eq!(updated.available_version.as_deref(), Some("1.1.0"));
+        assert!(updated.is_locally_modified);
+        assert!(updated.description.contains("automation"));
+
+        tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
+    }
+
+    #[tokio::test]
+    async fn node_record_crud_is_db_backed() {
+        let temp_dir = std::env::temp_dir().join(format!("acsa-storage-{}", Uuid::new_v4()));
+        tokio::fs::create_dir_all(&temp_dir).await.expect("temp dir should be created");
+        let db_path = temp_dir.join("runs.sqlite");
+        let store = RunStore::connect(&db_path).await.expect("store should connect");
+
+        let created = store
+            .upsert_node_record(NewNodeRecord {
+                type_name: "custom_summary",
+                label: "Summarize payload",
+                description: "Summarize incoming payloads for the team.",
+                category: "AI",
+                source_kind: "generated",
+                source_ref: Some("prompt:node-1"),
+            })
+            .await
+            .expect("node record should create");
+
+        let listed = store.list_node_records().await.expect("node records should list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].type_name, "custom_summary");
+
+        let updated = store
+            .upsert_node_record(NewNodeRecord {
+                type_name: "custom_summary",
+                label: "Summarize payload",
+                description: "Summarize incoming payloads in a friendlier tone.",
+                category: "AI",
+                source_kind: "custom",
+                source_ref: Some("user-edit"),
+            })
+            .await
+            .expect("node record should update");
+
+        assert_eq!(updated.id, created.id);
+        assert_eq!(updated.source_kind, "custom");
+        assert_eq!(updated.source_ref.as_deref(), Some("user-edit"));
+        assert!(updated.description.contains("friendlier tone"));
+
+        tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
+    }
 
     struct InsertRunArgs<'a> {
         editor_snapshot: Option<&'a str>,

@@ -1,16 +1,21 @@
 # Documentation Index
 
-## Product guides
+## Product
 
-- [user-guide.md](./user-guide.md)
-- [api-reference.md](./api-reference.md)
-- [connector-development.md](./connector-development.md)
-- [ui-manual.md](./ui-manual.md)
-- [architecture.md](./architecture.md)
-- [workflow-schema.md](./workflow-schema.md)
+- [User guide](./product/user-guide.md)
+- [UI manual](./product/ui-manual.md)
 
-## Operations
+## Development and operations
 
-- [getting-started.md](./getting-started.md)
-- [observability.md](./observability.md)
-- [self-hosting.md](./self-hosting.md)
+- [Getting started](./dev/getting-started.md)
+- [API reference](./dev/api-reference.md)
+- [Workflow schema](./dev/workflow-schema.md)
+- [Connector development](./dev/connector-development.md)
+- [Architecture](./dev/architecture.md)
+- [Security](./dev/security.md)
+- [Observability](./dev/observability.md)
+- [Self-hosting](./dev/self-hosting.md)
+
+## Archived planning
+
+- [Superpowers planning archive](./archive/superpowers/)

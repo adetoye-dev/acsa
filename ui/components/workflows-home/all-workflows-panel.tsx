@@ -34,7 +34,7 @@ export function AllWorkflowsPanel({
   workflows
 }: AllWorkflowsPanelProps) {
   return (
-    <section className="grid min-h-0 grid-rows-[56px_minmax(0,1fr)] rounded-[20px] border border-black/10 bg-[rgba(255,255,255,0.62)] shadow-[0_1px_0_rgba(16,20,20,0.02)]">
+    <section className="grid min-h-0 grid-rows-[56px_minmax(0,1fr)] border-t border-black/10 bg-white">
       <div className="flex items-center justify-between gap-4 border-b border-black/10 px-5">
         <h2 className="text-[15px] font-medium tracking-tight text-ink">All workflows</h2>
         <span className="ui-badge">{workflows.length}</span>
@@ -60,7 +60,7 @@ export function AllWorkflowsPanel({
           </PanelEmptyState>
         )}
 
-        <div className="mt-4 rounded-[18px] border border-black/10 bg-white/80 px-4 py-4">
+        <div className="mt-4 border-t border-black/10 px-0 pt-4">
           <div className="flex items-center justify-between gap-4">
             <h3 className="text-sm font-medium tracking-tight text-ink">Invalid YAML files</h3>
             <span className="ui-badge">{invalidFiles.length}</span>
@@ -93,7 +93,7 @@ export function AllWorkflowsPanel({
 
 function PanelEmptyState({ children }: { children: string }) {
   return (
-    <div className="flex min-h-[188px] items-center justify-center rounded-[16px] border border-dashed border-black/10 bg-white/72 px-6 text-center text-sm leading-6 text-slate">
+    <div className="flex min-h-[188px] items-center justify-center px-6 text-center text-sm leading-6 text-slate">
       {children}
     </div>
   );

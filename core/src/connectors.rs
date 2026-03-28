@@ -24,13 +24,16 @@ use std::{
 
 use async_trait::async_trait;
 use extism::{Manifest as ExtismManifest, PluginBuilder, Wasm};
-use serde::{Deserialize, Serialize};
+use serde::{de::Deserializer, Deserialize, Serialize};
 use serde_json::{json, Value};
 use shlex::split as shlex_split;
 use thiserror::Error;
 use tokio::{io::AsyncWriteExt, process::Command, time::timeout};
 
+pub use crate::starter_connector_packs;
+
 use crate::nodes::{ensure_relative_path, Node, NodeError, NodeRegistry};
+use crate::storage::resolve_secret_value;
 
 const DEFAULT_CONNECTOR_TIMEOUT_MS: u64 = 10_000;
 const MAX_CONNECTOR_TIMEOUT_MS: u64 = 5 * 60_000;
@@ -51,12 +54,12 @@ pub struct ConnectorManifest {
     pub entry: String,
     #[serde(default)]
     pub enable_wasi: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_manifest_field_names")]
     pub inputs: Vec<String>,
     #[serde(default)]
     pub limits: ConnectorLimits,
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_manifest_field_names")]
     pub outputs: Vec<String>,
     pub runtime: ConnectorRuntime,
     #[serde(rename = "type")]
@@ -71,6 +74,34 @@ pub struct ConnectorLimits {
     pub memory: Option<u64>,
     #[serde(default)]
     pub timeout: Option<u64>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum ManifestFieldEntry {
+    Name(String),
+    Schema(ManifestFieldSchema),
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ManifestFieldSchema {
+    name: String,
+}
+
+fn deserialize_manifest_field_names<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let entries = Vec::<ManifestFieldEntry>::deserialize(deserializer)?;
+    Ok(entries
+        .into_iter()
+        .map(|entry| match entry {
+            ManifestFieldEntry::Name(name) => name,
+            ManifestFieldEntry::Schema(schema) => schema.name,
+        })
+        .collect())
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -151,9 +182,16 @@ pub fn load_connectors_into(
     registry: &NodeRegistry,
     connectors_dir: &Path,
 ) -> Result<Vec<String>, ConnectorError> {
+    load_connectors_from_dirs_into(registry, &[connectors_dir])
+}
+
+pub fn load_connectors_from_dirs_into(
+    registry: &NodeRegistry,
+    connectors_dirs: &[&Path],
+) -> Result<Vec<String>, ConnectorError> {
     let mut loaded = Vec::new();
 
-    for connector in inspect_connectors(connectors_dir)?.connectors {
+    for connector in inspect_connectors_from_dirs(connectors_dirs)?.connectors {
         let connector_dir = connector.connector_dir;
         let manifest = connector.manifest;
         let type_id = manifest.type_id.clone();
@@ -168,6 +206,14 @@ pub fn discover_connector_manifests(
     connectors_dir: &Path,
 ) -> Result<Vec<ConnectorManifest>, ConnectorError> {
     inspect_connectors(connectors_dir).map(|inspection| {
+        inspection.connectors.into_iter().map(|connector| connector.manifest).collect()
+    })
+}
+
+pub fn discover_connector_manifests_from_dirs(
+    connectors_dirs: &[&Path],
+) -> Result<Vec<ConnectorManifest>, ConnectorError> {
+    inspect_connectors_from_dirs(connectors_dirs).map(|inspection| {
         inspection.connectors.into_iter().map(|connector| connector.manifest).collect()
     })
 }
@@ -261,6 +307,23 @@ pub fn inspect_connectors(connectors_dir: &Path) -> Result<ConnectorInspection, 
     }
 
     Ok(ConnectorInspection { connectors, invalid })
+}
+
+pub fn inspect_connectors_from_dirs(
+    connectors_dirs: &[&Path],
+) -> Result<ConnectorInspection, ConnectorError> {
+    let mut connectors_by_type = BTreeMap::new();
+    let mut invalid = Vec::new();
+
+    for connectors_dir in connectors_dirs {
+        let inspection = inspect_connectors(connectors_dir)?;
+        invalid.extend(inspection.invalid);
+        for connector in inspection.connectors {
+            connectors_by_type.insert(connector.manifest.type_id.clone(), connector);
+        }
+    }
+
+    Ok(ConnectorInspection { connectors: connectors_by_type.into_values().collect(), invalid })
 }
 
 pub fn load_manifest(path: &Path) -> Result<ConnectorManifest, ConnectorError> {
@@ -366,6 +429,64 @@ pub fn scaffold_connector(
     Ok(connector_dir)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StarterConnectorPackInstallResult {
+    Installed { connector_dir: PathBuf },
+    AlreadyInstalled { connector_dir: PathBuf },
+}
+
+pub fn install_starter_connector_pack(
+    connectors_dir: &Path,
+    pack: &starter_connector_packs::StarterConnectorPack,
+) -> Result<StarterConnectorPackInstallResult, ConnectorError> {
+    fs::create_dir_all(connectors_dir)?;
+    let connector_dir = connectors_dir.join(pack.install_dir_name);
+    match fs::create_dir(&connector_dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Ok(StarterConnectorPackInstallResult::AlreadyInstalled { connector_dir });
+        }
+        Err(error) => return Err(error.into()),
+    }
+
+    if let Err(error) = copy_dir_all(&pack.source_dir, &connector_dir) {
+        if let Err(cleanup_error) = fs::remove_dir_all(&connector_dir) {
+            tracing::warn!(
+                connector_dir = %connector_dir.display(),
+                error = %cleanup_error,
+                "failed to clean up starter connector install directory after copy failure"
+            );
+        }
+        return Err(error);
+    }
+
+    Ok(StarterConnectorPackInstallResult::Installed { connector_dir })
+}
+
+fn copy_dir_all(source_dir: &Path, target_dir: &Path) -> Result<(), ConnectorError> {
+    if !source_dir.exists() {
+        return Err(ConnectorError::InvalidManifest {
+            message: format!(
+                "starter pack template directory {} does not exist",
+                source_dir.display()
+            ),
+        });
+    }
+
+    fs::create_dir_all(target_dir)?;
+    for entry in fs::read_dir(source_dir)? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        let target_path = target_dir.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&entry_path, &target_path)?;
+        } else {
+            fs::copy(&entry_path, &target_path)?;
+        }
+    }
+    Ok(())
+}
+
 async fn execute_process_connector(
     connector_dir: &Path,
     manifest: &ConnectorManifest,
@@ -381,7 +502,7 @@ async fn execute_process_connector(
         process.env("PATH", path);
     }
     for env_name in &manifest.allowed_env {
-        if let Ok(value) = std::env::var(env_name) {
+        if let Some(value) = resolve_secret_value(env_name) {
             process.env(env_name, value);
         }
     }
@@ -589,7 +710,7 @@ fn scaffold_process_connector(
         entry: "python3 main.py".to_string(),
         enable_wasi: false,
         inputs: vec!["message".to_string()],
-        limits: ConnectorLimits { memory: None, timeout: Some(10_000) },
+        limits: ConnectorLimits { memory: None, timeout: Some(10_000), timeout_ms: None },
         name: name.to_string(),
         outputs: vec!["echoed".to_string()],
         runtime: ConnectorRuntime::Process,
@@ -608,7 +729,7 @@ message = payload.get("inputs", {}).get("message", "")
 print(json.dumps({"echoed": message, "params": payload.get("params", {})}))
 "#,
     )?;
-    scaffold_sample_files(connector_dir, name, type_id, ConnectorRuntime::Process)?;
+    scaffold_sample_files(connector_dir, type_id)?;
     Ok(())
 }
 
@@ -624,7 +745,7 @@ fn scaffold_wasm_connector(
         entry: "dist/connector.wasm".to_string(),
         enable_wasi: false,
         inputs: vec!["message".to_string()],
-        limits: ConnectorLimits { memory: Some(64), timeout: Some(10_000) },
+        limits: ConnectorLimits { memory: Some(64), timeout: Some(10_000), timeout_ms: None },
         name: name.to_string(),
         outputs: vec!["echoed".to_string()],
         runtime: ConnectorRuntime::Wasm,
@@ -661,50 +782,18 @@ pub fn execute(input: String) -> FnResult<String> {
 }
 "#,
     )?;
-    scaffold_sample_files(connector_dir, name, type_id, ConnectorRuntime::Wasm)?;
+    scaffold_sample_files(connector_dir, type_id)?;
     Ok(())
 }
 
-fn scaffold_sample_files(
-    connector_dir: &Path,
-    name: &str,
-    type_id: &str,
-    runtime: ConnectorRuntime,
-) -> Result<(), ConnectorError> {
+fn scaffold_sample_files(connector_dir: &Path, type_id: &str) -> Result<(), ConnectorError> {
     fs::write(
         connector_dir.join("sample-input.json"),
         serde_json::to_string_pretty(&json!({
             "message": format!("hello from {type_id}")
         }))?,
     )?;
-    fs::write(connector_dir.join("README.md"), scaffold_readme(name, type_id, runtime))?;
     Ok(())
-}
-
-fn scaffold_readme(name: &str, type_id: &str, runtime: ConnectorRuntime) -> String {
-    let runtime_notes = match runtime {
-        ConnectorRuntime::Process => {
-            "Edit `main.py`, then test locally with the command below."
-        }
-        ConnectorRuntime::Wasm => {
-            "Build the WASM artifact into `dist/connector.wasm`, enable `ACSA_ENABLE_WASM_CONNECTORS=1`, then test locally with the command below."
-        }
-    };
-
-    format!(
-        "# {name}\n\n\
-Type: `{type_id}`\n\
-Runtime: `{}`\n\n\
-{runtime_notes}\n\n\
-## Local test\n\n\
-```bash\n\
-cargo run -p acsa-core -- connector-test ./manifest.json --inputs ./sample-input.json\n\
-```\n",
-        match runtime {
-            ConnectorRuntime::Process => "process",
-            ConnectorRuntime::Wasm => "wasm",
-        }
-    )
 }
 
 fn resolve_secrets(params: &Value) -> Result<Value, NodeError> {
@@ -727,10 +816,11 @@ fn resolve_secrets(params: &Value) -> Result<Value, NodeError> {
                 message: "all secret mappings must be strings".to_string(),
             });
         };
-        let secret_value = std::env::var(env_name).map_err(|_| NodeError::InvalidParameter {
-            parameter: "secrets_env".to_string(),
-            message: format!("environment variable {env_name} is not set"),
-        })?;
+        let secret_value =
+            resolve_secret_value(env_name).ok_or_else(|| NodeError::InvalidParameter {
+                parameter: "secrets_env".to_string(),
+                message: format!("environment variable {env_name} is not set"),
+            })?;
         secrets.insert(key.clone(), Value::String(secret_value));
     }
 
@@ -738,7 +828,7 @@ fn resolve_secrets(params: &Value) -> Result<Value, NodeError> {
 }
 
 fn timeout_ms(manifest: &ConnectorManifest) -> u64 {
-    manifest.limits.timeout.unwrap_or(DEFAULT_CONNECTOR_TIMEOUT_MS)
+    manifest.limits.timeout_ms.or(manifest.limits.timeout).unwrap_or(DEFAULT_CONNECTOR_TIMEOUT_MS)
 }
 
 fn validate_manifest(
@@ -755,8 +845,11 @@ fn validate_manifest(
             message: "connector manifest entry must be non-empty".to_string(),
         });
     }
-    let timeout_ms = manifest.limits.timeout.ok_or_else(|| ConnectorError::InvalidManifest {
-        message: "connector manifest must define limits.timeout".to_string(),
+    let timeout_ms = manifest.limits.timeout_ms.or(manifest.limits.timeout).ok_or_else(|| {
+        ConnectorError::InvalidManifest {
+            message: "connector manifest must define limits.timeout_ms (or legacy limits.timeout)"
+                .to_string(),
+        }
     })?;
     if timeout_ms == 0 || timeout_ms > MAX_CONNECTOR_TIMEOUT_MS {
         return Err(ConnectorError::InvalidManifest {
@@ -984,9 +1077,113 @@ mod tests {
     };
 
     use super::{
-        inspect_connectors, run_manifest_path, scaffold_connector, validate_manifest,
-        validate_output_keys, ConnectorLimits, ConnectorManifest, ConnectorRuntime,
+        inspect_connectors, inspect_connectors_from_dirs, run_manifest_path, scaffold_connector,
+        validate_manifest, validate_output_keys, ConnectorLimits, ConnectorManifest,
+        ConnectorRuntime,
     };
+
+    #[test]
+    fn starter_pack_catalog_lists_curated_first_party_packs() {
+        let catalog = super::starter_connector_packs::starter_connector_packs()
+            .expect("starter pack catalog should resolve");
+        let ids = catalog.iter().map(|pack| pack.id).collect::<Vec<_>>();
+
+        assert_eq!(
+            ids,
+            vec!["slack-notify", "github-issue-create", "google-sheets-append-row", "email-send",]
+        );
+        assert_eq!(catalog[0].provided_step_types, &["slack_notify"]);
+    }
+
+    #[test]
+    fn install_starter_pack_copies_template_files_into_connectors_dir() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("acsa-starter-install-{}", uuid::Uuid::new_v4()));
+        let connectors_dir = temp_dir.join("connectors");
+        fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
+
+        let pack = super::starter_connector_packs::starter_connector_pack("slack-notify")
+            .expect("starter pack lookup should succeed")
+            .expect("starter pack should exist");
+        let result = super::install_starter_connector_pack(&connectors_dir, &pack)
+            .expect("starter pack should install");
+
+        match result {
+            super::StarterConnectorPackInstallResult::Installed {
+                connector_dir: installed_dir,
+            } => {
+                assert_eq!(installed_dir, connectors_dir.join("slack-notify"));
+            }
+            super::StarterConnectorPackInstallResult::AlreadyInstalled { .. } => {
+                panic!("starter pack should install fresh into an empty connectors dir");
+            }
+        }
+
+        let installed_dir = connectors_dir.join("slack-notify");
+        assert!(installed_dir.join("manifest.json").exists());
+        assert!(installed_dir.join("main.py").exists());
+
+        let inspection =
+            inspect_connectors(&connectors_dir).expect("installed connectors should inspect");
+        assert_eq!(inspection.connectors.len(), 1);
+        assert_eq!(inspection.connectors[0].manifest.type_id, "slack_notify");
+
+        fs::remove_dir_all(temp_dir).expect("temp directory should be removed");
+    }
+
+    #[test]
+    fn install_starter_pack_does_not_overwrite_existing_connector_dir() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("acsa-starter-existing-{}", uuid::Uuid::new_v4()));
+        let connectors_dir = temp_dir.join("connectors");
+        let existing_connector_dir = connectors_dir.join("slack-notify");
+        fs::create_dir_all(&existing_connector_dir)
+            .expect("existing connector dir should be created");
+        fs::write(existing_connector_dir.join("main.py"), "sentinel")
+            .expect("sentinel file should write");
+        fs::write(
+            existing_connector_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&ConnectorManifest {
+                allowed_env: Vec::new(),
+                allowed_hosts: Vec::new(),
+                allowed_paths: BTreeMap::new(),
+                entry: "main.py".to_string(),
+                enable_wasi: false,
+                inputs: vec!["message".to_string()],
+                limits: ConnectorLimits { memory: None, timeout: Some(1_000), timeout_ms: None },
+                name: "Slack Notify".to_string(),
+                outputs: vec!["sent".to_string()],
+                runtime: ConnectorRuntime::Process,
+                type_id: "slack_notify".to_string(),
+                version: Some("0.1.0".to_string()),
+            })
+            .expect("manifest should serialize"),
+        )
+        .expect("manifest should write");
+
+        let pack = super::starter_connector_packs::starter_connector_pack("slack-notify")
+            .expect("starter pack lookup should succeed")
+            .expect("starter pack should exist");
+        let result = super::install_starter_connector_pack(&connectors_dir, &pack)
+            .expect("starter pack install should succeed");
+
+        match result {
+            super::StarterConnectorPackInstallResult::AlreadyInstalled { connector_dir } => {
+                assert_eq!(connector_dir, existing_connector_dir);
+            }
+            super::StarterConnectorPackInstallResult::Installed { .. } => {
+                panic!("starter pack should not overwrite an existing connector dir");
+            }
+        }
+
+        assert_eq!(
+            fs::read_to_string(existing_connector_dir.join("main.py"))
+                .expect("main.py should remain"),
+            "sentinel"
+        );
+
+        fs::remove_dir_all(temp_dir).expect("temp directory should be removed");
+    }
 
     #[test]
     fn validates_required_output_keys() {
@@ -1023,7 +1220,7 @@ mod tests {
                 entry: "sh connector.sh".to_string(),
                 enable_wasi: false,
                 inputs: vec!["message".to_string()],
-                limits: ConnectorLimits { memory: None, timeout: Some(1_000) },
+                limits: ConnectorLimits { memory: None, timeout: Some(1_000), timeout_ms: None },
                 name: "Echo".to_string(),
                 outputs: vec!["echoed".to_string()],
                 runtime: ConnectorRuntime::Process,
@@ -1091,7 +1288,7 @@ mod tests {
             entry: "dist/connector.wasm".to_string(),
             enable_wasi: false,
             inputs: vec![],
-            limits: ConnectorLimits { memory: Some(64), timeout: Some(1_000) },
+            limits: ConnectorLimits { memory: Some(64), timeout: Some(1_000), timeout_ms: None },
             name: "Echo".to_string(),
             outputs: vec![],
             runtime: ConnectorRuntime::Wasm,
@@ -1106,7 +1303,7 @@ mod tests {
     }
 
     #[test]
-    fn scaffolded_connectors_include_readme_and_sample_input() {
+    fn scaffolded_connectors_include_sample_input() {
         let temp_dir = std::env::temp_dir().join(format!("acsa-scaffold-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&temp_dir).expect("temp connector directory should be created");
 
@@ -1114,7 +1311,6 @@ mod tests {
             scaffold_connector(&temp_dir, "sample-echo", "sample_echo", ConnectorRuntime::Process)
                 .expect("connector should scaffold");
 
-        assert!(connector_dir.join("README.md").exists());
         assert!(connector_dir.join("sample-input.json").exists());
 
         fs::remove_dir_all(temp_dir).expect("temp connector directory should be removed");
@@ -1136,7 +1332,7 @@ mod tests {
                 entry: "python3 main.py".to_string(),
                 enable_wasi: false,
                 inputs: vec!["message".to_string()],
-                limits: ConnectorLimits { memory: None, timeout: Some(1_000) },
+                limits: ConnectorLimits { memory: None, timeout: Some(1_000), timeout_ms: None },
                 name: "valid".to_string(),
                 outputs: vec!["echoed".to_string()],
                 runtime: ConnectorRuntime::Process,
@@ -1180,7 +1376,7 @@ mod tests {
                 entry: "python3 main.py".to_string(),
                 enable_wasi: false,
                 inputs: vec!["message".to_string()],
-                limits: ConnectorLimits { memory: None, timeout: None },
+                limits: ConnectorLimits { memory: None, timeout: None, timeout_ms: None },
                 name: "broken".to_string(),
                 outputs: vec!["echoed".to_string()],
                 runtime: ConnectorRuntime::Process,
@@ -1224,6 +1420,39 @@ mod tests {
             inspect_connectors(&temp_dir).expect("connector inspection should succeed");
         assert_eq!(inspection.invalid.len(), 1);
         assert_eq!(inspection.invalid[0].attempted_type_id.as_deref(), Some("broken_connector"));
+
+        fs::remove_dir_all(temp_dir).expect("temp connector directory should be removed");
+    }
+
+    #[test]
+    fn merged_inspection_prefers_later_connector_roots() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("acsa-inspect-merged-{}", uuid::Uuid::new_v4()));
+        let legacy_dir = temp_dir.join("legacy");
+        let app_dir = temp_dir.join("app");
+        fs::create_dir_all(&legacy_dir).expect("legacy connector directory should be created");
+        fs::create_dir_all(&app_dir).expect("app connector directory should be created");
+
+        write_process_connector_fixture(
+            &legacy_dir.join("slack-notify"),
+            "Slack messages (legacy)",
+            "slack_notify",
+        );
+        write_process_connector_fixture(
+            &app_dir.join("slack-notify"),
+            "Slack messages (app)",
+            "slack_notify",
+        );
+
+        let inspection = inspect_connectors_from_dirs(&[legacy_dir.as_path(), app_dir.as_path()])
+            .expect("merged inspection should succeed");
+        assert_eq!(inspection.connectors.len(), 1);
+        assert_eq!(inspection.connectors[0].manifest.name, "Slack messages (app)");
+        assert_eq!(
+            inspection.connectors[0].connector_dir,
+            fs::canonicalize(app_dir.join("slack-notify"))
+                .expect("app connector should canonicalize")
+        );
 
         fs::remove_dir_all(temp_dir).expect("temp connector directory should be removed");
     }
@@ -1352,6 +1581,31 @@ mod tests {
             .parent()
             .expect("crate directory should have a repo parent")
             .to_path_buf()
+    }
+
+    fn write_process_connector_fixture(connector_dir: &Path, name: &str, type_id: &str) {
+        fs::create_dir_all(connector_dir).expect("fixture connector directory should be created");
+        fs::write(
+            connector_dir.join("manifest.json"),
+            serde_json::to_string_pretty(&ConnectorManifest {
+                allowed_env: Vec::new(),
+                allowed_hosts: Vec::new(),
+                allowed_paths: BTreeMap::new(),
+                entry: "python3 main.py".to_string(),
+                enable_wasi: false,
+                inputs: vec!["message".to_string()],
+                limits: ConnectorLimits { memory: None, timeout: Some(1_000), timeout_ms: None },
+                name: name.to_string(),
+                outputs: vec!["echoed".to_string()],
+                runtime: ConnectorRuntime::Process,
+                type_id: type_id.to_string(),
+                version: Some("0.1.0".to_string()),
+            })
+            .expect("fixture manifest should serialize"),
+        )
+        .expect("fixture manifest should write");
+        fs::write(connector_dir.join("main.py"), "print('{}')")
+            .expect("fixture script should write");
     }
 
     fn env_lock() -> &'static Mutex<()> {

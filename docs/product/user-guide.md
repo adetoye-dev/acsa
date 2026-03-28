@@ -2,7 +2,7 @@
 
 ## What Acsa is
 
-Acsa is a local-first workflow automation engine built around YAML workflow-as-code, a Rust execution runtime, and a lightweight visual editor. The YAML file remains the source of truth. The UI is an authoring layer on top of the same workflow model and HTTP APIs.
+Acsa is an app-first workflow automation product with a Rust execution runtime and a web UI for building, running, and debugging automations. Workflows, credentials, and execution history live in the app. YAML remains available as an editable representation inside the product.
 
 ## Install paths
 
@@ -18,12 +18,12 @@ Choose one of these paths:
 - Container:
   - `docker compose -f deploy/docker-compose.yml up --build`
 
-See [self-hosting.md](./self-hosting.md) for deployment details.
+See [self-hosting.md](../dev/self-hosting.md) for deployment details.
 
 ## Core concepts
 
 - Workflow:
-  - A YAML document with `version`, `name`, `trigger`, and `steps`.
+  - An app-managed automation with `version`, `name`, `trigger`, and `steps`.
 - Trigger:
   - Starts a workflow. Supported types are `manual`, `cron`, and `webhook`.
 - Step:
@@ -33,7 +33,7 @@ See [self-hosting.md](./self-hosting.md) for deployment details.
 - Human task:
   - A persisted approval or manual-input checkpoint that pauses execution until resolved.
 - Connector:
-  - An externally packaged node implemented as a subprocess or WASM plugin.
+  - An app-managed integration asset implemented as a subprocess or WASM plugin.
 
 ## Starting the engine
 
@@ -58,7 +58,7 @@ ACSA_WEBHOOK_SECRET=change-me \
 cargo run -p acsa-core -- serve workflows --db ./acsa.db --port 3001
 ```
 
-## Writing workflows
+## Building workflows
 
 Minimal manual workflow:
 
@@ -84,12 +84,18 @@ Guidelines:
 - Keep secrets in environment variables, not inline in YAML.
 - Treat connector outputs as contracts. Validate required output fields early.
 
-For the full schema, see [workflow-schema.md](./workflow-schema.md).
+Use the studio for normal editing:
+
+- `Canvas` for step layout and configuration
+- `YAML` for direct editing inside the app
+- `Executions` for debugging runs
+
+For the full schema, see [workflow-schema.md](../dev/workflow-schema.md).
 
 ## Working with triggers
 
 - `manual`
-  - Best for local execution and UI-driven runs.
+  - Best for UI-driven runs and testing.
 - `cron`
   - Best for scheduled jobs and recurring maintenance tasks.
 - `webhook`
@@ -167,16 +173,17 @@ Recommended shape:
 4. `llm_completion` step for the draft
 5. `manual_input` or `approval` step before sending downstream
 
-## UI workflow editing
+## Working in the app
 
-The editor supports:
+The app supports:
 
-- workflow creation, duplication, and deletion
-- drag-based layout on the canvas
-- trigger and step parameter editing
-- YAML-backed save and manual run actions
-- human-task resolution
-- run history, logs, and metrics
+- workflow creation, duplication, rename, and deletion
+- drag-based canvas editing
+- direct YAML editing inside the studio
+- connector install/setup from the Connectors page
+- credentials management from the Credentials page
+- pending human-task approvals
+- execution history, logs, and metrics
 
 See [ui-manual.md](./ui-manual.md) for the complete UI walkthrough.
 
@@ -189,7 +196,7 @@ See [ui-manual.md](./ui-manual.md) for the complete UI walkthrough.
 - Run paused unexpectedly:
   - Check `/human-tasks` or the UI inbox for pending approval or manual input.
 - Connector execution failed:
-  - Validate the manifest, check required outputs, and run `connector-test` locally.
+  - Check required credentials, connector setup, required outputs, and run `connector-test` on the connector source bundle if needed.
 - Logs missing payloads:
   - Confirm `ACSA_LOG_PAYLOADS` is not set to `0`.
 - Old runs disappeared:
@@ -197,7 +204,7 @@ See [ui-manual.md](./ui-manual.md) for the complete UI walkthrough.
 
 ## Next references
 
-- [api-reference.md](./api-reference.md)
-- [connector-development.md](./connector-development.md)
-- [observability.md](./observability.md)
-- [self-hosting.md](./self-hosting.md)
+- [api-reference.md](../dev/api-reference.md)
+- [connector-development.md](../dev/connector-development.md)
+- [observability.md](../dev/observability.md)
+- [self-hosting.md](../dev/self-hosting.md)

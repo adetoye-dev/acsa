@@ -85,6 +85,10 @@ export type WorkflowDocumentResponse = {
 };
 
 export type StepTypeEntry = {
+  app_record?: {
+    source_kind: string;
+    source_ref?: string | null;
+  } | null;
   category: string;
   description: string;
   label: string;
