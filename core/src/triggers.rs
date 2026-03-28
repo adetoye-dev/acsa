@@ -885,27 +885,17 @@ async fn upsert_node_record(
         .filter(|value| !value.is_empty())
         .unwrap_or("noop");
 
-    let node_record = NewNodeRecord {
-        type_name,
-        label,
-        description,
-        category,
-        source_kind,
-        source_ref,
-    };
+    let node_record =
+        NewNodeRecord { type_name, label, description, category, source_kind, source_ref };
 
     match store.upsert_node_record(node_record).await {
-        Ok(record) => {
-            match upsert_node_asset_record(store, &node_record, base_type_name).await {
-                Ok(()) => {
-                    (StatusCode::OK, Json(json!(node_record_response(record)))).into_response()
-                }
-                Err(error) => {
-                    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
-                        .into_response()
-                }
+        Ok(record) => match upsert_node_asset_record(store, &node_record, base_type_name).await {
+            Ok(()) => (StatusCode::OK, Json(json!(node_record_response(record)))).into_response(),
+            Err(error) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+                    .into_response()
             }
-        }
+        },
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
                 .into_response()
