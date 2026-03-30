@@ -59,6 +59,7 @@ use crate::{
     },
     models::{Trigger, Workflow},
     n8n_import::translate_n8n_workflow,
+    nodes::AliasNodeDefinition,
     observability::{
         current_timestamp, metrics_text, payload_visibility_enabled, record_log,
         redact_json_string, redact_text, LogLevel, RetentionPolicy,
@@ -74,7 +75,7 @@ use crate::{
     storage::{
         resolve_secret_value, AssetRecord, CredentialRecord, LogQuery, LogRecord, NewAssetRecord,
         NewConnectorRecord, NewNodeRecord, PaginatedResponse, RunQuery, RunRecord, RunStore,
-        StepRunRecord, WorkflowRecord,
+        StepRunRecord, StorageError, WorkflowRecord,
     },
 };
 
@@ -297,6 +298,7 @@ struct ConnectorTestResponse {
 
 #[derive(Debug, Clone, Serialize)]
 struct NodeRecordResponse {
+    base_type_name: Option<String>,
     category: String,
     description: String,
     id: String,
@@ -365,6 +367,7 @@ struct ConnectorRecordView {
 
 #[derive(Debug, Clone, Serialize)]
 struct NodeRecordView {
+    base_type_name: Option<String>,
     source_kind: String,
     source_ref: Option<String>,
 }
@@ -732,10 +735,26 @@ async fn list_starter_connector_packs(State(state): State<AppState>) -> impl Int
 }
 
 async fn list_node_records(State(state): State<AppState>) -> impl IntoResponse {
+    let node_asset_base_types = match node_asset_base_type_map(state.engine.store()).await {
+        Ok(base_types) => base_types,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string() })),
+            );
+        }
+    };
+
     match state.engine.store().list_node_records().await {
         Ok(records) => (
             StatusCode::OK,
-            Json(json!(records.into_iter().map(node_record_response).collect::<Vec<_>>())),
+            Json(json!(records
+                .into_iter()
+                .map(|record| {
+                    let base_type_name = node_asset_base_types.get(&record.type_name).cloned();
+                    node_record_response(record, base_type_name)
+                })
+                .collect::<Vec<_>>())),
         ),
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
@@ -887,11 +906,32 @@ async fn upsert_node_record(
 
     let node_record =
         NewNodeRecord { type_name, label, description, category, source_kind, source_ref };
+    let node_record_existed = match store.get_node_record_by_type(type_name).await {
+        Ok(_) => true,
+        Err(StorageError::NodeRecordNotFound(_)) => false,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+                .into_response()
+        }
+    };
 
     match store.upsert_node_record(node_record).await {
         Ok(record) => match upsert_node_asset_record(store, &node_record, base_type_name).await {
-            Ok(()) => (StatusCode::OK, Json(json!(node_record_response(record)))).into_response(),
+            Ok(()) => (
+                StatusCode::OK,
+                Json(json!(node_record_response(record, Some(base_type_name.to_string())))),
+            )
+                .into_response(),
             Err(error) => {
+                if !node_record_existed {
+                    if let Err(rollback_error) = store.delete_node_record(&record.id).await {
+                        error!(
+                            node_record_id = %record.id,
+                            rollback_error = %rollback_error,
+                            "failed to rollback inserted node record after node asset upsert failure"
+                        );
+                    }
+                }
                 (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
                     .into_response()
             }
@@ -1876,17 +1916,47 @@ async fn connector_record_map(
 async fn node_record_map(
     store: &RunStore,
 ) -> Result<HashMap<String, NodeRecordView>, TriggerError> {
+    let base_type_names = node_asset_base_type_map(store).await?;
     Ok(store
         .list_node_records()
         .await?
         .into_iter()
         .map(|record| {
+            let type_name = record.type_name.clone();
             (
-                record.type_name,
-                NodeRecordView { source_kind: record.source_kind, source_ref: record.source_ref },
+                type_name.clone(),
+                NodeRecordView {
+                    base_type_name: base_type_names.get(&type_name).cloned(),
+                    source_kind: record.source_kind,
+                    source_ref: record.source_ref,
+                },
             )
         })
         .collect())
+}
+
+async fn node_asset_base_type_map(
+    store: &RunStore,
+) -> Result<HashMap<String, String>, TriggerError> {
+    Ok(store
+        .list_asset_records()
+        .await?
+        .into_iter()
+        .filter(|record| record.asset_kind == "node")
+        .filter_map(|record| {
+            parse_node_asset_base_type(&record)
+                .map(|base_type_name| (record.type_name, base_type_name))
+        })
+        .collect())
+}
+
+fn parse_node_asset_base_type(record: &AssetRecord) -> Option<String> {
+    let definition = serde_json::from_str::<AliasNodeDefinition>(&record.definition_json).ok()?;
+    if definition.kind != "alias" || definition.base_type.trim().is_empty() {
+        return None;
+    }
+
+    Some(definition.base_type)
 }
 
 async fn starter_connector_pack_views(
@@ -1959,8 +2029,12 @@ fn starter_connector_pack_install_state(
     }
 }
 
-fn node_record_response(record: crate::storage::NodeRecord) -> NodeRecordResponse {
+fn node_record_response(
+    record: crate::storage::NodeRecord,
+    base_type_name: Option<String>,
+) -> NodeRecordResponse {
     NodeRecordResponse {
+        base_type_name,
         category: record.category,
         description: record.description,
         id: record.id,
@@ -2338,10 +2412,7 @@ async fn node_catalog(
         .into_iter()
         .filter(|record| !existing_type_names.contains(&record.type_name))
         .map(|record| StepTypeEntry {
-            app_record: Some(NodeRecordView {
-                source_kind: record.source_kind.clone(),
-                source_ref: record.source_ref.clone(),
-            }),
+            app_record: node_records.get(&record.type_name).cloned(),
             category: record.category,
             description: record.description,
             label: record.label,
@@ -3754,6 +3825,56 @@ mod tests {
             generated_step.app_record.as_ref().map(|record| record.source_ref.as_deref()),
             Some(Some("n8n:send-email"))
         );
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn node_catalog_exposes_generated_node_base_type_metadata() {
+        let temp_dir = write_temp_directory("node-catalog-base-type");
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let (steps, _triggers) = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            store
+                .upsert_node_record(NewNodeRecord {
+                    type_name: "send_whatsapp_message",
+                    label: "Send WhatsApp message",
+                    description: "Send a WhatsApp message to a contact.",
+                    category: "Apps",
+                    source_kind: "generated",
+                    source_ref: Some("prompt:whatsapp"),
+                })
+                .await
+                .expect("node record should persist");
+            store
+                .upsert_asset_record(NewAssetRecord {
+                    asset_kind: "node",
+                    type_name: "send_whatsapp_message",
+                    name: "Send WhatsApp message",
+                    description: "Send a WhatsApp message to a contact.",
+                    category: Some("Apps"),
+                    runtime: Some("alias"),
+                    source_kind: "generated",
+                    source_ref: Some("prompt:whatsapp"),
+                    definition_json:
+                        r#"{"kind":"alias","base_type":"http_request","default_params":{}}"#,
+                    installed_version: None,
+                    available_version: None,
+                    is_locally_modified: false,
+                })
+                .await
+                .expect("asset record should persist");
+            node_catalog(&store, &temp_dir).await.expect("catalog should load")
+        });
+
+        let generated_step = steps
+            .iter()
+            .find(|entry| entry.type_name == "send_whatsapp_message")
+            .expect("generated step should exist");
+        let payload = serde_json::to_value(generated_step).expect("step should serialize");
+
+        assert_eq!(payload["app_record"]["base_type_name"], json!("http_request"));
 
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
     }

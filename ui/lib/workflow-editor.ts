@@ -86,6 +86,7 @@ export type WorkflowDocumentResponse = {
 
 export type StepTypeEntry = {
   app_record?: {
+    base_type_name?: string | null;
     source_kind: string;
     source_ref?: string | null;
   } | null;

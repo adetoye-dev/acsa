@@ -305,12 +305,16 @@ export function EditorShell({
   }
 
   async function refreshNodeCatalog() {
-    const catalog = await fetchEngineJson<NodeCatalogResponse>("/api/node-catalog");
-    patchWorkflowState({
-      newStepType: catalog.step_types[0]?.type_name ?? "noop",
-      stepCatalog: catalog.step_types,
-      triggerCatalog: catalog.trigger_types
-    });
+    try {
+      const catalog = await fetchEngineJson<NodeCatalogResponse>("/api/node-catalog");
+      patchWorkflowState({
+        newStepType: catalog.step_types[0]?.type_name ?? "noop",
+        stepCatalog: catalog.step_types,
+        triggerCatalog: catalog.trigger_types
+      });
+    } catch (error) {
+      console.error("Failed to refresh node catalog", error);
+    }
   }
 
   useEffect(function bootstrapEditorEffect() {
@@ -1934,6 +1938,7 @@ export function EditorShell({
                         setAddStepIntent({ mode: "detached" });
                         closeRightPanel("library");
                       }}
+                      onNodeRecordSaved={() => refreshNodeCatalog()}
                       onSelectType={handleAddStep}
                       stepCatalog={stepCatalog}
                     />
@@ -1980,6 +1985,7 @@ export function EditorShell({
                         setAddStepIntent({ mode: "detached" });
                         closeRightPanel("library");
                       }}
+                      onNodeRecordSaved={() => refreshNodeCatalog()}
                       onSelectType={handleAddStep}
                       stepCatalog={stepCatalog}
                     />

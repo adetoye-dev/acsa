@@ -28,6 +28,7 @@ export type UpsertNodeRecordRequest = {
 };
 
 export type NodeRecordResponse = {
+  base_type_name?: string | null;
   category: string;
   description: string;
   id: string;
