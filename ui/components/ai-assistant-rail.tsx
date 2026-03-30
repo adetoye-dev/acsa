@@ -211,6 +211,7 @@ export function AiAssistantRail({
                       category={entry.category}
                       className="shrink-0"
                       kind="step"
+                      size="md"
                       source={entry.source}
                       typeName={entry.type_name}
                     />

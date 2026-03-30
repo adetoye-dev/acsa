@@ -55,6 +55,7 @@ export const WorkflowNode = memo(function WorkflowNode({
           category={data.category}
           className="shrink-0"
           kind={data.kind}
+          size="lg"
           source={data.source}
           typeName={data.typeName}
         />
@@ -141,7 +142,7 @@ function containerClassName(
   state: NodeExecutionState
 ) {
   const base =
-    "relative min-w-[232px] cursor-grab rounded-[12px] border bg-white px-4 py-3 shadow-[0_1px_2px_rgba(16,20,20,0.04)] transition duration-150 active:cursor-grabbing";
+    "relative min-w-[232px] cursor-grab rounded-[12px] border bg-white p-3 shadow-[0_1px_2px_rgba(16,20,20,0.04)] transition duration-150 active:cursor-grabbing";
   const selectedState = selected ? "border-[#6f63ff] ring-1 ring-[#6f63ff]/18" : "";
   const kindStateDefault =
   kind === "trigger"
