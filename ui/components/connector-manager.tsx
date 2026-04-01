@@ -57,7 +57,12 @@ function connectorSourceLabel(connector: ConnectorInventoryItem) {
 export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps) {
   const [inventory, setInventory] = useState<ConnectorInventoryResponse | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
+  const [editDescription, setEditDescription] = useState("");
+  const [editError, setEditError] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editingType, setEditingType] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(true);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [isScaffolding, setIsScaffolding] = useState(false);
   const [isTypeDirty, setIsTypeDirty] = useState(false);
   const [lastAction, setLastAction] = useState("Loading connector inventory");
@@ -70,6 +75,10 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
   const sortedConnectors = useMemo(
     () => [...(inventory?.connectors ?? [])].sort((left, right) => left.name.localeCompare(right.name)),
     [inventory?.connectors]
+  );
+  const editingConnector = useMemo(
+    () => sortedConnectors.find((connector) => connector.type_name === editingType) ?? null,
+    [editingType, sortedConnectors]
   );
 
   useEffect(function loadConnectorInventoryOnMountEffect() {
@@ -163,6 +172,50 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
       setLastAction(`Connector test failed for ${connector.name}`);
     } finally {
       setTestingType(null);
+    }
+  }
+
+  function handleEdit(connector: ConnectorInventoryItem) {
+    if (editingType && editingType !== connector.type_name) {
+      return;
+    }
+    setEditingType(connector.type_name);
+    setEditName(connector.name);
+    setEditDescription(connector.description);
+    setEditError(null);
+  }
+
+  function handleCancelEdit() {
+    setEditingType(null);
+    setEditName("");
+    setEditDescription("");
+    setEditError(null);
+  }
+
+  async function handleSaveEdit() {
+    if (!editingConnector || isSavingEdit) {
+      return;
+    }
+
+    setIsSavingEdit(true);
+    setEditError(null);
+    try {
+      await fetchEngineJson(`/api/connectors/${editingConnector.type_name}`, {
+        body: JSON.stringify({
+          description: editDescription.trim(),
+          name: editName.trim()
+        }),
+        headers: {
+          "content-type": "application/json"
+        },
+        method: "PUT"
+      });
+      await refreshInventory();
+      handleCancelEdit();
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "Failed to save connector");
+    } finally {
+      setIsSavingEdit(false);
     }
   }
 
@@ -289,6 +342,12 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
             ) : (
               sortedConnectors.map((connector) => {
                 const testResult = testResults[connector.type_name];
+                const isEditing = editingType === connector.type_name;
+                const isEditLockedByAnotherConnector =
+                  editingType !== null && editingType !== connector.type_name;
+                const hasUpdate =
+                  !!connector.app_record?.available_version &&
+                  connector.app_record.available_version !== connector.app_record.installed_version;
 
                 return (
                   <article
@@ -306,6 +365,12 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
                           </span>
                           {connector.version ? (
                             <span className="ui-badge font-mono">{connector.version}</span>
+                          ) : null}
+                          {connector.app_record?.is_locally_modified ? (
+                            <span className="ui-badge">Locally modified</span>
+                          ) : null}
+                          {hasUpdate ? (
+                            <span className="ui-badge">Update available</span>
                           ) : null}
                           {connectorSourceLabel(connector) ? (
                             <span className="ui-badge">{connectorSourceLabel(connector)}</span>
@@ -327,16 +392,90 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
                         <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
                           {connector.type_name}
                         </p>
+                        <p className="mt-2 max-w-[60ch] text-sm leading-6 text-slate">
+                          {connector.description}
+                        </p>
                       </div>
-                      <button
-                        className="ui-button"
-                        disabled={testingType === connector.type_name || !connector.sample_input_path}
-                        onClick={() => void handleRunSample(connector)}
-                        type="button"
-                      >
-                        {testingType === connector.type_name ? "Testing..." : "Run sample"}
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="ui-button"
+                          disabled={isEditLockedByAnotherConnector}
+                          onClick={() => handleEdit(connector)}
+                          type="button"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="ui-button"
+                          disabled={testingType === connector.type_name || !connector.sample_input_path}
+                          onClick={() => void handleRunSample(connector)}
+                          type="button"
+                        >
+                          {testingType === connector.type_name ? "Testing..." : "Run sample"}
+                        </button>
+                      </div>
                     </div>
+
+                    {isEditing ? (
+                      <div className="mt-4 rounded-[12px] border border-black/10 bg-[#fbfbfa] p-3">
+                        <div className="mb-3 flex items-start justify-between gap-3">
+                          <div>
+                            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/58">
+                              Edit connector
+                            </div>
+                            <div className="mt-1 text-[14px] font-medium tracking-tight text-ink">
+                              {connector.type_name}
+                            </div>
+                          </div>
+                          <button
+                            className="ui-button"
+                            onClick={handleCancelEdit}
+                            type="button"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+
+                        <div className="grid gap-3">
+                          <label className="grid gap-1.5">
+                            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/58">
+                              Name
+                            </span>
+                            <input
+                              className="ui-input"
+                              onChange={(event) => setEditName(event.target.value)}
+                              value={editName}
+                            />
+                          </label>
+
+                          <label className="grid gap-1.5">
+                            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/58">
+                              Description
+                            </span>
+                            <textarea
+                              className="ui-input min-h-[92px] resize-y"
+                              onChange={(event) => setEditDescription(event.target.value)}
+                              value={editDescription}
+                            />
+                          </label>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              className="ui-button ui-button-primary"
+                              disabled={isSavingEdit || !editName.trim() || !editDescription.trim()}
+                              onClick={() => void handleSaveEdit()}
+                              type="button"
+                            >
+                              {isSavingEdit ? "Saving…" : "Save changes"}
+                            </button>
+                          </div>
+
+                          {editError ? (
+                            <p className="text-[12px] leading-5 text-[#c65a72]">{editError}</p>
+                          ) : null}
+                        </div>
+                      </div>
+                    ) : null}
 
                     <div className="mt-3 grid gap-2 text-sm leading-6 text-slate">
                       <p>Entry: <code className="rounded bg-sand px-1.5 py-0.5 font-mono text-ink">{connector.entry}</code></p>

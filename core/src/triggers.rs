@@ -176,6 +176,12 @@ struct CreateConnectorRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct UpdateConnectorRecordRequest {
+    description: String,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct UpsertNodeRecordRequest {
     #[serde(default)]
     base_type_name: Option<String>,
@@ -328,6 +334,7 @@ struct ConnectorView {
     app_record: Option<ConnectorRecordView>,
     connector_dir: String,
     connector_state: ProductConnectorState,
+    description: String,
     entry: String,
     inputs: Vec<String>,
     manifest_path: String,
@@ -361,6 +368,11 @@ struct InvalidConnectorView {
 
 #[derive(Debug, Clone, Serialize)]
 struct ConnectorRecordView {
+    available_version: Option<String>,
+    description: Option<String>,
+    installed_version: Option<String>,
+    is_locally_modified: bool,
+    name: Option<String>,
     source_kind: String,
     source_ref: Option<String>,
 }
@@ -524,6 +536,7 @@ pub async fn serve(
             post(install_starter_connector_pack_endpoint),
         )
         .route("/api/connectors/scaffold", post(create_connector))
+        .route("/api/connectors/{connector_type}", axum::routing::put(update_connector_record))
         .route("/api/node-records", get(list_node_records).post(upsert_node_record))
         .route("/api/connectors/{connector_type}/test", post(test_connector))
         .route("/api/imports/n8n", post(import_n8n_workflow))
@@ -884,6 +897,134 @@ async fn create_connector(
         }
         Err(error) => connector_error_response(TriggerError::Connector(error)),
     }
+}
+
+async fn update_connector_record(
+    State(state): State<AppState>,
+    AxumPath(connector_type): AxumPath<String>,
+    Json(request): Json<UpdateConnectorRecordRequest>,
+) -> Response {
+    let name = request.name.trim();
+    let description = request.description.trim();
+    if name.is_empty() || description.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "connector name and description are required" })),
+        )
+            .into_response();
+    }
+
+    let store = state.engine.store();
+    let connector_asset = match store.get_asset_record("connector", &connector_type).await {
+        Ok(record) => record,
+        Err(StorageError::AssetRecordNotFound(_, _)) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "error": format!("connector {} was not found", connector_type) })),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    };
+
+    if let Err(error) = store
+        .upsert_asset_record(NewAssetRecord {
+            asset_kind: "connector",
+            type_name: &connector_asset.type_name,
+            name,
+            description,
+            category: connector_asset.category.as_deref(),
+            runtime: connector_asset.runtime.as_deref(),
+            source_kind: &connector_asset.source_kind,
+            source_ref: connector_asset.source_ref.as_deref(),
+            definition_json: &connector_asset.definition_json,
+            installed_version: connector_asset.installed_version.as_deref(),
+            available_version: connector_asset.available_version.as_deref(),
+            is_locally_modified: true,
+        })
+        .await
+    {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+            .into_response();
+    }
+
+    match store.get_connector_record_by_type(&connector_type).await {
+        Ok(record) => {
+            if let Err(error) = store
+                .upsert_connector_record(NewConnectorRecord {
+                    type_name: &record.type_name,
+                    name,
+                    runtime: &record.runtime,
+                    source_kind: &record.source_kind,
+                    source_ref: record.source_ref.as_deref(),
+                    connector_dir: &record.connector_dir,
+                    manifest_path: &record.manifest_path,
+                    manifest_json: &record.manifest_json,
+                })
+                .await
+            {
+                if let Err(rollback_error) = store
+                    .upsert_asset_record(NewAssetRecord {
+                        asset_kind: "connector",
+                        type_name: &connector_asset.type_name,
+                        name: &connector_asset.name,
+                        description: &connector_asset.description,
+                        category: connector_asset.category.as_deref(),
+                        runtime: connector_asset.runtime.as_deref(),
+                        source_kind: &connector_asset.source_kind,
+                        source_ref: connector_asset.source_ref.as_deref(),
+                        definition_json: &connector_asset.definition_json,
+                        installed_version: connector_asset.installed_version.as_deref(),
+                        available_version: connector_asset.available_version.as_deref(),
+                        is_locally_modified: connector_asset.is_locally_modified,
+                    })
+                    .await
+                {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({
+                            "error": format!(
+                                "{} (asset rollback failed: {})",
+                                error,
+                                rollback_error
+                            )
+                        })),
+                    )
+                        .into_response();
+                }
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({ "error": error.to_string() })),
+                )
+                    .into_response();
+            }
+        }
+        Err(StorageError::ConnectorRecordNotFound(_)) => {}
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string() })),
+            )
+                .into_response();
+        }
+    }
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "type_name": connector_type,
+            "name": name,
+            "description": description,
+            "is_locally_modified": true
+        })),
+    )
+        .into_response()
 }
 
 async fn upsert_node_record(
@@ -1897,16 +2038,34 @@ async fn connector_inventory(
 async fn connector_record_map(
     store: &RunStore,
 ) -> Result<HashMap<String, ConnectorRecordView>, TriggerError> {
+    let connector_assets = store
+        .list_asset_records()
+        .await?
+        .into_iter()
+        .filter(|record| record.asset_kind == "connector")
+        .map(|record| (record.type_name.clone(), record))
+        .collect::<HashMap<_, _>>();
+
     Ok(store
         .list_connector_records()
         .await?
         .into_iter()
         .map(|record| {
+            let asset = connector_assets.get(&record.type_name);
             (
-                record.type_name,
+                record.type_name.clone(),
                 ConnectorRecordView {
-                    source_kind: record.source_kind,
-                    source_ref: record.source_ref,
+                    available_version: asset.and_then(|item| item.available_version.clone()),
+                    description: asset.map(|item| item.description.clone()),
+                    installed_version: asset.and_then(|item| item.installed_version.clone()),
+                    is_locally_modified: asset.is_some_and(|item| item.is_locally_modified),
+                    name: asset.map(|item| item.name.clone()),
+                    source_kind: asset
+                        .map(|item| item.source_kind.clone())
+                        .unwrap_or(record.source_kind),
+                    source_ref: asset
+                        .and_then(|item| item.source_ref.clone())
+                        .or(record.source_ref),
                 },
             )
         })
@@ -2464,13 +2623,23 @@ fn connector_view(
     if !sample_input_path.exists() {
         notes.push("Add a sample input to enable one-click sample tests.".to_string());
     }
+    let app_record = connector_records.get(&connector.manifest.type_id).cloned();
+    let name = app_record
+        .as_ref()
+        .and_then(|record| record.name.clone())
+        .unwrap_or_else(|| connector.manifest.name.clone());
+    let description = app_record
+        .as_ref()
+        .and_then(|record| record.description.clone())
+        .unwrap_or_else(|| connector.manifest.name.clone());
 
     ConnectorView {
         allowed_env: connector.manifest.allowed_env.clone(),
         allowed_hosts: connector.manifest.allowed_hosts.clone(),
-        app_record: connector_records.get(&connector.manifest.type_id).cloned(),
+        app_record,
         connector_dir: state.install_validity.connector_dir.clone(),
         connector_state: state.clone(),
+        description,
         entry: connector.manifest.entry.clone(),
         inputs: connector.manifest.inputs.clone(),
         manifest_path: state
@@ -2478,7 +2647,7 @@ fn connector_view(
             .manifest_path
             .clone()
             .unwrap_or_else(|| connector.manifest_path.display().to_string()),
-        name: connector.manifest.name.clone(),
+        name,
         notes,
         outputs: connector.manifest.outputs.clone(),
         readme_path: readme_path.exists().then(|| readme_path.display().to_string()),
@@ -3449,10 +3618,11 @@ mod tests {
         parse_workflow_document_state, read_workflow_document, rename_workflow_document,
         request_has_engine_token, run_view, save_workflow_document,
         seed_workflows_from_directory_if_missing, serialize_workflow_yaml, slugify_workflow_name,
-        sync_repo_authored_connector_assets, validate_secret_value, validate_workflow_id,
-        workflow_inventory, AppState, CreateConnectorRequest, CreateWorkflowRequest,
-        EngineAccessControl, N8nImportRequest, RenameWorkflowRequest, RunDetailResponse,
-        RunPageResponse, TriggerError, WebhookSignatureAuth, WebhookWorkflow,
+        sync_repo_authored_connector_assets, update_connector_record, validate_secret_value,
+        validate_workflow_id, workflow_inventory, AppState, CreateConnectorRequest,
+        CreateWorkflowRequest, EngineAccessControl, N8nImportRequest, RenameWorkflowRequest,
+        RunDetailResponse, RunPageResponse, TriggerError, UpdateConnectorRecordRequest,
+        WebhookSignatureAuth, WebhookWorkflow,
     };
     use crate::{
         connectors::install_starter_connector_pack,
@@ -4016,6 +4186,57 @@ mod tests {
         assert_eq!(record.source_kind, "custom");
         assert_eq!(record.source_ref, None);
         assert!(record.manifest_json.contains("\"type\":\"sample_echo\""));
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[tokio::test]
+    async fn update_connector_record_updates_asset_metadata_and_marks_local_modification() {
+        let temp_dir = write_temp_directory("update-connector-record");
+        let state = starter_pack_test_state(&temp_dir).await;
+
+        let create_response = create_connector(
+            AxumState(state.clone()),
+            Json(CreateConnectorRequest {
+                name: "Sample Echo".to_string(),
+                runtime: "process".to_string(),
+                type_id: "sample_echo".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(create_response.status(), StatusCode::CREATED);
+
+        let update_response = update_connector_record(
+            AxumState(state.clone()),
+            AxumPath("sample_echo".to_string()),
+            Json(UpdateConnectorRecordRequest {
+                name: "Echo requests".to_string(),
+                description: "Echo a request payload back for testing.".to_string(),
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(update_response.status(), StatusCode::OK);
+
+        let connector_record = state
+            .engine
+            .store()
+            .get_connector_record_by_type("sample_echo")
+            .await
+            .expect("connector record should exist");
+        assert_eq!(connector_record.name, "Echo requests");
+
+        let asset_record = state
+            .engine
+            .store()
+            .get_asset_record("connector", "sample_echo")
+            .await
+            .expect("asset record should exist");
+        assert_eq!(asset_record.name, "Echo requests");
+        assert_eq!(asset_record.description, "Echo a request payload back for testing.");
+        assert!(asset_record.is_locally_modified);
 
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
     }
@@ -5043,6 +5264,90 @@ steps:
 
         assert_eq!(valid_payload["app_record"]["source_kind"], json!("starter_pack"));
         assert_eq!(valid_payload["app_record"]["source_ref"], json!("report-summary-pack"));
+        assert_eq!(valid_payload["app_record"]["is_locally_modified"], json!(false));
+
+        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
+    }
+
+    #[test]
+    fn connector_inventory_prefers_asset_metadata_and_exposes_update_state() {
+        let temp_dir = write_temp_directory("connector-inventory-asset-metadata");
+        let connectors_dir = temp_dir.join("connectors");
+        std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
+
+        let connector_dir = connectors_dir.join("report-summary");
+        std::fs::create_dir_all(&connector_dir).expect("connector dir should exist");
+        std::fs::write(
+            connector_dir.join("manifest.json"),
+            r#"{
+  "entry": "main.py",
+  "inputs": ["payload"],
+  "limits": { "timeout": 1000 },
+  "name": "Report Summary",
+  "outputs": ["summary"],
+  "runtime": "process",
+  "type": "report-summary",
+  "version": "1.0.0"
+}"#,
+        )
+        .expect("manifest should be written");
+        std::fs::write(connector_dir.join("main.py"), "print('{}')\n")
+            .expect("connector code should be written");
+
+        let db_path = temp_dir.join("runs.sqlite");
+        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
+        let inventory = runtime.block_on(async {
+            let store = RunStore::connect(&db_path).await.expect("store should connect");
+            store
+                .upsert_connector_record(NewConnectorRecord {
+                    type_name: "report-summary",
+                    name: "Report Summary",
+                    runtime: "process",
+                    source_kind: "starter_pack",
+                    source_ref: Some("report-summary-pack"),
+                    connector_dir: &connector_dir.display().to_string(),
+                    manifest_path: &connector_dir.join("manifest.json").display().to_string(),
+                    manifest_json: r#"{"type":"report-summary"}"#,
+                })
+                .await
+                .expect("connector record should persist");
+            store
+                .upsert_asset_record(NewAssetRecord {
+                    asset_kind: "connector",
+                    type_name: "report-summary",
+                    name: "Custom Report Summary",
+                    description: "Summarize the latest report payload.",
+                    category: Some("Apps"),
+                    runtime: Some("process"),
+                    source_kind: "starter_pack",
+                    source_ref: Some("report-summary-pack"),
+                    definition_json: r#"{"type":"report-summary"}"#,
+                    installed_version: Some("1.0.0"),
+                    available_version: Some("1.1.0"),
+                    is_locally_modified: true,
+                })
+                .await
+                .expect("asset record should persist");
+
+            connector_inventory(&store, &connectors_dir)
+                .await
+                .expect("connector inventory should build")
+        });
+
+        let payload = serde_json::to_value(
+            inventory
+                .connectors
+                .iter()
+                .find(|connector| connector.type_name == "report-summary")
+                .expect("connector should exist"),
+        )
+        .expect("connector should serialize");
+
+        assert_eq!(payload["name"], json!("Custom Report Summary"));
+        assert_eq!(payload["description"], json!("Summarize the latest report payload."));
+        assert_eq!(payload["app_record"]["installed_version"], json!("1.0.0"));
+        assert_eq!(payload["app_record"]["available_version"], json!("1.1.0"));
+        assert_eq!(payload["app_record"]["is_locally_modified"], json!(true));
 
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
     }

@@ -22,6 +22,11 @@ import type {
 export type ConnectorRuntime = "process" | "wasm";
 
 export type ConnectorAppRecord = {
+  available_version?: string | null;
+  description?: string | null;
+  installed_version?: string | null;
+  is_locally_modified: boolean;
+  name?: string | null;
   source_kind: string;
   source_ref?: string | null;
 };
@@ -32,6 +37,7 @@ export type ConnectorInventoryItem = ConnectorDependencyMetadata & {
   app_record?: ConnectorAppRecord | null;
   connector_dir: string;
   connector_state: ConnectorState;
+  description: string;
   entry: string;
   inputs: string[];
   manifest_path: string;
@@ -72,6 +78,11 @@ export type ConnectorTestResponse = {
   inputs: unknown;
   output: unknown;
   params: unknown;
+};
+
+export type UpdateConnectorRecordRequest = {
+  description: string;
+  name: string;
 };
 
 export type StarterConnectorPackInstallState =
