@@ -19,6 +19,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  type ApplyConnectorUpdateResponse,
   type ConnectorInventoryItem,
   type ConnectorInventoryResponse,
   type ConnectorRuntime,
@@ -61,6 +62,7 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
   const [editError, setEditError] = useState<string | null>(null);
   const [editName, setEditName] = useState("");
   const [editingType, setEditingType] = useState<string | null>(null);
+  const [isApplyingUpdate, setIsApplyingUpdate] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(true);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [isScaffolding, setIsScaffolding] = useState(false);
@@ -219,6 +221,30 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
     }
   }
 
+  async function handleApplyUpdate(connector: ConnectorInventoryItem) {
+    setIsApplyingUpdate(connector.type_name);
+    setGlobalError(null);
+    try {
+      await fetchEngineJson<ApplyConnectorUpdateResponse>(
+        `/api/connectors/${connector.type_name}/apply-update`,
+        {
+          body: JSON.stringify({}),
+          headers: {
+            "content-type": "application/json"
+          },
+          method: "POST"
+        }
+      );
+      setLastAction(`Updated ${connector.name}`);
+      await refreshInventory();
+    } catch (error) {
+      setGlobalError(error instanceof Error ? error.message : `Failed to update ${connector.name}`);
+      setLastAction(`Connector update failed for ${connector.name}`);
+    } finally {
+      setIsApplyingUpdate(null);
+    }
+  }
+
   return (
     <section className="space-y-4">
       <div className="flex items-center justify-between gap-4">
@@ -348,6 +374,10 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
                 const hasUpdate =
                   !!connector.app_record?.available_version &&
                   connector.app_record.available_version !== connector.app_record.installed_version;
+                const canApplyUpdate =
+                  connector.app_record?.source_kind === "shipped" &&
+                  hasUpdate &&
+                  !connector.app_record.is_locally_modified;
 
                 return (
                   <article
@@ -405,6 +435,16 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
                         >
                           Edit
                         </button>
+                        {canApplyUpdate ? (
+                          <button
+                            className="ui-button"
+                            disabled={isApplyingUpdate === connector.type_name}
+                            onClick={() => void handleApplyUpdate(connector)}
+                            type="button"
+                          >
+                            {isApplyingUpdate === connector.type_name ? "Updating..." : "Update"}
+                          </button>
+                        ) : null}
                         <button
                           className="ui-button"
                           disabled={testingType === connector.type_name || !connector.sample_input_path}

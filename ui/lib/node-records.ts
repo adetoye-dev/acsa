@@ -49,6 +49,21 @@ export async function upsertNodeRecord(request: UpsertNodeRecordRequest) {
   });
 }
 
+export async function applyNodeAssetUpdate(typeName: string) {
+  return fetchEngineJson<{
+    available_version?: string | null;
+    installed_version?: string | null;
+    is_locally_modified: boolean;
+    type_name: string;
+  }>(`/api/node-records/${encodeURIComponent(typeName)}/apply-update`, {
+    body: JSON.stringify({}),
+    headers: {
+      "content-type": "application/json"
+    },
+    method: "POST"
+  });
+}
+
 export function deriveGeneratedNodeIdentity(seed: string, fallbackLabel = "Generated node") {
   const compact = seed.replace(/\s+/g, " ").trim();
   const cleaned = compact.replace(/[.?!,:;]+$/g, "");

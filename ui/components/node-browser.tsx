@@ -22,7 +22,7 @@ import {
   semanticCategoryDescription,
   semanticCategoryLabel
 } from "../lib/semantic-labels";
-import { upsertNodeRecord } from "../lib/node-records";
+import { applyNodeAssetUpdate, upsertNodeRecord } from "../lib/node-records";
 import type { StepTypeEntry } from "../lib/workflow-editor";
 import { NodeGlyph } from "./node-visuals";
 
@@ -65,6 +65,7 @@ export function NodeBrowser({
   const [editingDescription, setEditingDescription] = useState("");
   const [editingBaseTypeName, setEditingBaseTypeName] = useState("noop");
   const [editError, setEditError] = useState<string | null>(null);
+  const [isApplyingUpdate, setIsApplyingUpdate] = useState<string | null>(null);
   const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [recentTypeNames, setRecentTypeNames] = useState<string[]>([]);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -255,6 +256,19 @@ export function NodeBrowser({
     }
   }
 
+  async function handleApplyUpdate(typeName: string) {
+    setIsApplyingUpdate(typeName);
+    setEditError(null);
+    try {
+      await applyNodeAssetUpdate(typeName);
+      await onNodeRecordSaved?.(typeName);
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "Failed to apply update");
+    } finally {
+      setIsApplyingUpdate(null);
+    }
+  }
+
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement | HTMLInputElement>) {
     if (event.key === "Escape") {
       if (!onClose) {
@@ -430,9 +444,12 @@ export function NodeBrowser({
             <div className="space-y-2">
               {recentEntries.map((entry) => (
                 <NodeOption
+                  applyUpdateDisabled={Boolean(isApplyingUpdate)}
+                  applyUpdateBusy={isApplyingUpdate === entry.type_name}
                   entry={entry}
                   highlighted={activeHighlightedTypeName === entry.type_name}
                   key={entry.type_name}
+                  onApplyUpdate={() => void handleApplyUpdate(entry.type_name)}
                   onEdit={() => handleEdit(entry)}
                   onHover={() => setHighlightedTypeName(entry.type_name)}
                   onSelect={() => handleSelect(entry.type_name)}
@@ -453,9 +470,12 @@ export function NodeBrowser({
             <div className="space-y-2">
               {suggestedEntries.map((entry) => (
                 <NodeOption
+                  applyUpdateDisabled={Boolean(isApplyingUpdate)}
+                  applyUpdateBusy={isApplyingUpdate === entry.type_name}
                   entry={entry}
                   highlighted={activeHighlightedTypeName === entry.type_name}
                   key={entry.type_name}
+                  onApplyUpdate={() => void handleApplyUpdate(entry.type_name)}
                   onEdit={() => handleEdit(entry)}
                   onHover={() => setHighlightedTypeName(entry.type_name)}
                   onSelect={() => handleSelect(entry.type_name)}
@@ -478,9 +498,12 @@ export function NodeBrowser({
               <div className="space-y-2">
                 {entries.map((entry) => (
                   <NodeOption
+                    applyUpdateDisabled={Boolean(isApplyingUpdate)}
+                    applyUpdateBusy={isApplyingUpdate === entry.type_name}
                     entry={entry}
                     highlighted={activeHighlightedTypeName === entry.type_name}
                     key={entry.type_name}
+                    onApplyUpdate={() => void handleApplyUpdate(entry.type_name)}
                     onEdit={() => handleEdit(entry)}
                     onHover={() => setHighlightedTypeName(entry.type_name)}
                     onSelect={() => handleSelect(entry.type_name)}
@@ -535,20 +558,33 @@ function SectionHeader({
 }
 
 function NodeOption({
+  applyUpdateDisabled,
+  applyUpdateBusy,
   entry,
   highlighted,
+  onApplyUpdate,
   onEdit,
   onHover,
   onSelect
 }: {
+  applyUpdateDisabled: boolean;
+  applyUpdateBusy: boolean;
   entry: StepTypeEntry;
   highlighted: boolean;
+  onApplyUpdate: () => void;
   onEdit: () => void;
   onHover: () => void;
   onSelect: () => void;
 }) {
   const isEditable =
     entry.app_record?.source_kind === "generated" || entry.app_record?.source_kind === "custom";
+  const hasUpdate =
+    !!entry.app_record?.available_version &&
+    entry.app_record.available_version !== entry.app_record.installed_version;
+  const canApplyUpdate =
+    entry.app_record?.source_kind === "shipped" &&
+    hasUpdate &&
+    !(entry.app_record.is_locally_modified ?? false);
 
   return (
     <div
@@ -584,7 +620,17 @@ function NodeOption({
                     ? "Generated"
                     : entry.app_record.source_kind === "custom"
                       ? "Custom"
-                      : "Saved"}
+                      : "Shipped"}
+                </span>
+              ) : null}
+              {entry.app_record?.is_locally_modified ? (
+                <span className="rounded-md bg-[#f7f2e8] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-[#8a6b2f]">
+                  Locally modified
+                </span>
+              ) : null}
+              {hasUpdate ? (
+                <span className="rounded-md bg-[#eef6ff] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-[#4b6fd8]">
+                  Update available
                 </span>
               ) : null}
             </div>
@@ -594,15 +640,27 @@ function NodeOption({
           </div>
         </div>
       </button>
-      {isEditable ? (
-        <button
-          className="ui-button !px-2.5 !py-1.5"
-          onClick={onEdit}
-          type="button"
-        >
-          Edit
-        </button>
-      ) : null}
+      <div className="flex items-center gap-2">
+        {canApplyUpdate ? (
+          <button
+            className="ui-button !px-2.5 !py-1.5"
+            disabled={applyUpdateDisabled}
+            onClick={onApplyUpdate}
+            type="button"
+          >
+            {applyUpdateBusy ? "Updating…" : "Update"}
+          </button>
+        ) : null}
+        {isEditable ? (
+          <button
+            className="ui-button !px-2.5 !py-1.5"
+            onClick={onEdit}
+            type="button"
+          >
+            Edit
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

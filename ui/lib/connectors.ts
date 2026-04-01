@@ -85,6 +85,10 @@ export type UpdateConnectorRecordRequest = {
   name: string;
 };
 
+export type ApplyConnectorUpdateResponse = {
+  connector: ConnectorInventoryItem;
+};
+
 export type StarterConnectorPackInstallState =
   | "available"
   | "invalid"
