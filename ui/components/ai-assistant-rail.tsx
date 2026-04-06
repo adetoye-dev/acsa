@@ -17,6 +17,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Sparkles, X } from "lucide-react";
 
 import type { StepTypeEntry } from "../lib/workflow-editor";
 import {
@@ -106,18 +108,24 @@ export function AiAssistantRail({
   }
 
   return (
-    <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] border-l border-black/10 bg-[rgba(252,252,253,0.96)]">
-      <div className="border-b border-black/10 px-4 py-3">
+    <motion.section 
+      initial={{ x: 300, opacity: 0 }}
+      animate={{ x: 0, opacity: 1 }}
+      exit={{ x: 300, opacity: 0 }}
+      transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+      className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] border-l border-black/5 bg-white/80 backdrop-blur-xl shadow-[-4px_0_24px_rgba(0,0,0,0.02)]"
+    >
+      <div className="border-b border-black/5 px-4 py-4 bg-white/40">
         <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className="flex h-7 w-7 items-center justify-center rounded-[10px] bg-[#f3f0ff] text-[#6f63ff]">
-              <AssistantIcon />
+          <div className="flex items-center gap-3">
+            <span className="flex h-9 w-9 items-center justify-center rounded-[12px] bg-gradient-to-br from-[#f3f0ff] to-[#e6dfff] text-[#6f63ff] shadow-sm">
+              <Sparkles size={18} strokeWidth={2} />
             </span>
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/58">
-                Assistant
+              <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-[#6f63ff]/80">
+                AI Assistant
               </div>
-              <div className="mt-0.5 text-[14px] font-medium tracking-tight text-ink">
+              <div className="mt-0.5 text-[15px] font-semibold tracking-tight text-ink">
                 Describe the workflow
               </div>
             </div>
@@ -125,24 +133,24 @@ export function AiAssistantRail({
           {onClose ? (
             <button
               aria-label="Close assistant"
-              className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-black/10 bg-white text-slate/70 transition hover:border-black/16 hover:bg-[#fafafb] hover:text-ink"
+              className="flex h-8 w-8 items-center justify-center rounded-[10px] border border-black/5 bg-white/50 text-slate/70 transition-all duration-200 hover:scale-105 hover:border-black/10 hover:bg-white hover:text-ink hover:shadow-sm"
               onClick={onClose}
               type="button"
             >
-              <CloseIcon />
+              <X size={16} strokeWidth={2} />
             </button>
           ) : null}
         </div>
       </div>
 
-      <div className="sleek-scroll min-h-0 overflow-y-auto px-4 py-4">
-        <div className="space-y-4">
-          <div className="rounded-[16px] border border-black/10 bg-white px-4 py-4">
-            <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/58" htmlFor="workflow-assistant-prompt">
+      <div className="sleek-scroll min-h-0 overflow-y-auto px-4 py-5">
+        <div className="space-y-5">
+          <div className="rounded-[16px] border border-[#6f63ff]/10 bg-gradient-to-b from-white to-[#faf9ff] px-4 py-4 shadow-sm">
+            <label className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/70" htmlFor="workflow-assistant-prompt">
               Workflow brief
             </label>
             <textarea
-              className="ui-input min-h-[118px] resize-none leading-6"
+              className="ui-input min-h-[118px] resize-none leading-6 w-full rounded-[12px] border-black/5 bg-white/80 shadow-[inset_0_1px_2px_rgba(0,0,0,0.02)] focus-visible:ring-[#6f63ff]/30 focus-visible:border-[#6f63ff]/40 transition-all"
               id="workflow-assistant-prompt"
               onChange={(event) => {
                 setPrompt(event.target.value);
@@ -152,9 +160,9 @@ export function AiAssistantRail({
               placeholder="Describe what should happen and the assistant will suggest likely steps from your installed library."
               value={prompt}
             />
-            <div className="mt-3 flex items-center gap-2">
+            <div className="mt-4 flex items-center gap-2">
               <button
-                className="ui-button"
+                className="inline-flex items-center justify-center rounded-[10px] bg-gradient-to-b from-[#6f63ff] to-[#5d52d8] px-4 py-2 text-[13px] font-semibold text-white shadow-[0_2px_4px_rgba(111,99,255,0.2)] transition-all hover:-translate-y-0.5 hover:shadow-[0_4px_8px_rgba(111,99,255,0.3)] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:transform-none"
                 disabled={isSavingNode || !prompt.trim()}
                 onClick={() => void handleSaveGeneratedNode()}
                 type="button"
@@ -173,13 +181,13 @@ export function AiAssistantRail({
           </div>
 
           <div>
-            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/58">
+            <div className="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/60">
               Try these prompts
             </div>
             <div className="space-y-2">
               {EXAMPLE_PROMPTS.map((example) => (
                 <button
-                  className="w-full rounded-[14px] border border-black/10 bg-white px-3 py-3 text-left text-sm leading-6 text-slate transition hover:border-black/16 hover:bg-[#fbfbfc]"
+                  className="w-full rounded-[14px] border border-black/5 bg-white/60 px-3.5 py-3 text-left text-[13px] leading-6 text-slate transition-all duration-200 hover:-translate-y-0.5 hover:border-[#6f63ff]/20 hover:bg-white hover:shadow-sm"
                   key={example}
                   onClick={() => setPrompt(example)}
                   type="button"
@@ -191,67 +199,81 @@ export function AiAssistantRail({
           </div>
 
           <div>
-            <div className="mb-2 flex items-center justify-between gap-3">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/58">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/60">
                 Suggested steps
               </div>
-              {suggestions.length > 0 ? (
-                <span className="ui-badge">{suggestions.length}</span>
-              ) : null}
+              <AnimatePresence>
+                {suggestions.length > 0 ? (
+                  <motion.span 
+                    initial={{ scale: 0 }} 
+                    animate={{ scale: 1 }} 
+                    exit={{ scale: 0 }} 
+                    className="flex h-5 w-5 items-center justify-center rounded-full bg-[#f3f0ff] text-[10px] font-bold text-[#6f63ff]"
+                  >
+                    {suggestions.length}
+                  </motion.span>
+                ) : null}
+              </AnimatePresence>
             </div>
 
             {suggestions.length > 0 ? (
               <div className="space-y-2">
-                {suggestions.map((entry) => (
-                  <div
-                    className="flex items-start gap-3 rounded-[14px] border border-black/10 bg-white px-3 py-3"
+                {suggestions.map((entry, index) => (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: index * 0.05 }}
+                    className="group"
                     key={entry.type_name}
                   >
-                    <NodeGlyph
-                      category={entry.category}
-                      className="shrink-0"
-                      kind="step"
-                      size="md"
-                      source={entry.source}
-                      typeName={entry.type_name}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <div className="text-sm font-medium text-ink">{entry.label}</div>
-                        {entry.app_record ? (
-                          <span className="rounded-md bg-[#f3f0ff] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-[#6f63ff]">
-                            {entry.app_record.source_kind === "generated"
-                              ? "Generated"
-                              : entry.app_record.source_kind === "custom"
-                                ? "Custom"
-                                : "Saved"}
-                          </span>
-                        ) : null}
+                    <div className="flex items-center gap-3 rounded-[14px] border border-black/5 bg-white/70 px-3 py-3 shadow-[0_1px_2px_rgba(0,0,0,0.01)] transition-all duration-200 hover:border-[#6f63ff]/20 hover:bg-white hover:shadow-md">
+                      <NodeGlyph
+                        category={entry.category}
+                        className="shrink-0 group-hover:scale-105 transition-transform"
+                        kind="step"
+                        size="md"
+                        source={entry.source}
+                        typeName={entry.type_name}
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <div className="truncate text-[13px] font-semibold text-ink">{entry.label}</div>
+                          {entry.app_record ? (
+                            <span className="rounded-md bg-[#f3f0ff] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.12em] text-[#6f63ff]">
+                              {entry.app_record.source_kind === "generated"
+                                ? "Gen"
+                                : entry.app_record.source_kind === "custom"
+                                  ? "Custom"
+                                  : "Saved"}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="mt-0.5 truncate text-[11px] leading-5 text-slate/80">
+                          {entry.description}
+                        </div>
                       </div>
-                      <div className="mt-1 text-[12px] leading-5 text-slate">
-                        {entry.description}
-                      </div>
+                      <button
+                        aria-label={`Add ${entry.type_name}`}
+                        className="flex h-7 items-center justify-center rounded-lg bg-black/5 px-3 text-[11px] font-semibold tracking-wide text-ink transition-all hover:bg-[#6f63ff] hover:text-white"
+                        onClick={() => onSelectType(entry.type_name)}
+                        type="button"
+                      >
+                        Add
+                      </button>
                     </div>
-                    <button
-                      aria-label={`Add ${entry.type_name}`}
-                      className="ui-button !px-2.5 !py-1.5"
-                      onClick={() => onSelectType(entry.type_name)}
-                      type="button"
-                    >
-                      Add
-                    </button>
-                  </div>
+                  </motion.div>
                 ))}
               </div>
             ) : (
-              <div className="rounded-[14px] border border-black/10 bg-white px-4 py-4 text-sm leading-6 text-slate">
+              <div className="rounded-[14px] border border-black/5 bg-white/40 px-4 py-5 text-center text-[13px] leading-6 text-slate/80">
                 Enter a workflow brief to get likely step suggestions from the capabilities you already have.
               </div>
             )}
           </div>
         </div>
       </div>
-    </section>
+    </motion.section>
   );
 }
 
@@ -276,31 +298,4 @@ function scoreStepSuggestion(entry: StepTypeEntry, tokens: string[]) {
     }
     return score;
   }, 0);
-}
-
-function AssistantIcon() {
-  return (
-    <svg aria-hidden="true" className="h-4 w-4" fill="none" viewBox="0 0 16 16">
-      <path
-        d="M8 2.5a2.2 2.2 0 0 1 2.2 2.2v.55a2.75 2.75 0 0 1 1.55 2.48v1.7c0 .9-.73 1.62-1.62 1.62H5.87c-.9 0-1.62-.73-1.62-1.62v-1.7A2.75 2.75 0 0 1 5.8 5.25V4.7A2.2 2.2 0 0 1 8 2.5Zm-1.35 9.45h2.7M6.3 7.6h.01m3.38 0h.01"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.2"
-      />
-    </svg>
-  );
-}
-
-function CloseIcon() {
-  return (
-    <svg aria-hidden="true" className="h-3.5 w-3.5" fill="none" viewBox="0 0 16 16">
-      <path
-        d="M4.5 4.5 11.5 11.5M11.5 4.5 4.5 11.5"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeWidth="1.25"
-      />
-    </svg>
-  );
 }

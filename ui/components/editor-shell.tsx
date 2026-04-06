@@ -18,6 +18,7 @@
 
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Plus, Sparkles } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 
 import {
@@ -1756,7 +1757,7 @@ export function EditorShell({
             </aside>
           ) : null}
 
-          <section className="min-h-0 overflow-hidden bg-white">
+          <section className="min-h-0 overflow-hidden bg-gradient-to-br from-[#f8f9fa] to-[#f2f3f7] shadow-[inset_0_2px_12px_rgba(0,0,0,0.03)]">
             {showCanvasView ? (
               <div className="h-full min-h-0 overflow-hidden">
                 {activeWorkflow ? (
@@ -1832,40 +1833,40 @@ export function EditorShell({
                         </button>
                       </div>
                     </div>
-                    <div className="absolute bottom-4 left-4 z-20">
-                      <div className="flex flex-col items-start gap-2">
+                    <div className="absolute bottom-6 left-6 z-20">
+                      <div className="flex flex-col items-start gap-3">
                         {embeddedInProductShell ? (
                           <button
                             aria-expanded={isAssistantRailOpen}
                             aria-label="Open assistant"
-                            className={`inline-flex h-10 items-center gap-2 rounded-[12px] border px-3 text-sm font-medium shadow-[0_4px_18px_rgba(16,20,20,0.08)] transition ${
+                            className={`group relative inline-flex h-11 items-center gap-2.5 rounded-[14px] border px-4 font-semibold shadow-[0_4px_16px_rgba(30,30,50,0.08)] transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgba(111,99,255,0.15)] ${
                               isAssistantRailOpen
-                                ? "border-[#6f63ff] bg-[#6f63ff] text-white"
-                                : "border-[#d9d2ff] bg-white text-[#5a4bc8] hover:border-[#6f63ff]/35 hover:bg-[#f7f5ff]"
+                                ? "border-[#6f63ff]/60 bg-gradient-to-br from-[#6f63ff] to-[#5d52d8] text-white shadow-[#6f63ff]/20"
+                                : "border-white/40 bg-white/70 text-[#5a4bc8] hover:border-[#6f63ff]/30 hover:bg-white backdrop-blur-xl"
                             }`}
                             onClick={() => toggleRightPanel("assistant")}
                             type="button"
                           >
                             <span
-                              className={`flex h-6 w-6 items-center justify-center rounded-[8px] ${
+                              className={`flex h-7 w-7 items-center justify-center rounded-[10px] transition-colors duration-300 ${
                                 isAssistantRailOpen
-                                  ? "bg-white/16 text-white"
-                                  : "bg-[#f3f0ff] text-[#6f63ff]"
+                                  ? "bg-white/20 text-white"
+                                  : "bg-gradient-to-br from-[#f3f0ff] to-[#e6e2ff] text-[#6f63ff] group-hover:bg-[#f3f0ff]"
                               }`}
                             >
-                              <AssistantToggleIcon />
+                              <Sparkles size={14} strokeWidth={2.5} />
                             </span>
-                            <span>Assistant</span>
+                            <span className="text-[13px] tracking-wide">AI Assistant</span>
                           </button>
                         ) : null}
                         <button
                           aria-expanded={isAddStepMenuOpen}
                           aria-haspopup="menu"
                           aria-label="Add step"
-                          className={`inline-flex h-10 items-center gap-2 rounded-[12px] border px-3 text-sm font-medium shadow-[0_4px_18px_rgba(16,20,20,0.08)] transition ${
+                          className={`group relative inline-flex h-11 items-center gap-2.5 rounded-[14px] border px-4 font-semibold shadow-[0_4px_16px_rgba(30,30,50,0.08)] transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_8px_24px_rgba(111,99,255,0.15)] ${
                             isAddStepMenuOpen
-                              ? "border-[#6f63ff] bg-[#6f63ff] text-white"
-                              : "border-[#d9d2ff] bg-white text-[#4d3fc7] hover:border-[#6f63ff]/35 hover:bg-[#f7f5ff]"
+                              ? "border-[#6f63ff]/60 bg-gradient-to-br from-[#6f63ff] to-[#5d52d8] text-white shadow-[#6f63ff]/20"
+                              : "border-white/40 bg-white/70 text-[#4d3fc7] hover:border-[#6f63ff]/30 hover:bg-white backdrop-blur-xl"
                           }`}
                           onClick={() => {
                             setAddStepIntent({ mode: "detached" });
@@ -1874,15 +1875,15 @@ export function EditorShell({
                           type="button"
                         >
                           <span
-                            className={`flex h-6 w-6 items-center justify-center rounded-[8px] text-lg leading-none ${
+                            className={`flex h-7 w-7 items-center justify-center rounded-[10px] transition-all duration-300 ${
                               isAddStepMenuOpen
-                                ? "bg-white/16 text-white"
-                                : "bg-[#f3f0ff] text-[#6f63ff]"
+                                ? "bg-white/20 text-white rotate-45"
+                                : "bg-gradient-to-br from-[#f3f0ff] to-[#e6e2ff] text-[#6f63ff] group-hover:bg-[#f3f0ff]"
                             }`}
                           >
-                            +
+                            <Plus size={16} strokeWidth={2.5} />
                           </span>
-                          <span>Add step</span>
+                          <span className="text-[13px] tracking-wide">Add Step</span>
                         </button>
                       </div>
                     </div>

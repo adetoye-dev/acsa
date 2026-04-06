@@ -149,7 +149,7 @@ export function ProductShell({
 
       <button
         aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        className={`absolute top-12 z-30 hidden xl:flex h-6 w-6 -translate-x-1/2 items-center justify-center rounded-md border border-black/10 bg-white text-slate shadow-[0_1px_2px_rgba(16,20,20,0.06)] transition hover:border-black/15 hover:bg-[#fbfbfc] hover:text-ink ${
+        className={`absolute top-12 z-50 hidden xl:flex h-6 w-6 -translate-x-1/2 items-center justify-center rounded-md border border-black/10 bg-white text-slate shadow-[0_1px_2px_rgba(16,20,20,0.06)] transition hover:border-black/15 hover:bg-[#fbfbfc] hover:text-ink ${
           collapsed ? "left-[84px] top-12" : "left-[236px] top-12"
         }`}
         onClick={() => setCollapsed((current) => !current)}

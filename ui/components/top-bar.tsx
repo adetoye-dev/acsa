@@ -15,6 +15,7 @@
  */
 
 import type { ReactNode } from "react";
+import { RefreshCw, Save, Play, FileText } from "lucide-react";
 
 export type WorkspaceView = "canvas" | "yaml";
 
@@ -52,20 +53,20 @@ export function TopBar({
   showBrand = true
 }: TopBarProps) {
   return (
-    <section className="overflow-hidden border-b border-black/10 bg-[rgba(255,255,255,0.84)]">
+    <section className="overflow-hidden border-b border-black/5 bg-white/80 backdrop-blur-xl z-50">
       <div className="flex h-[60px] items-center justify-between gap-4 px-4">
         {showBrand ? (
           <div className="flex min-w-0 items-center gap-3">
             <img
               alt="Acsa"
-              className="h-10 w-10 shrink-0"
+              className="h-9 w-9 shrink-0 drop-shadow-sm transition-transform hover:scale-105"
               src="/acsa-mark.svg"
             />
             <div className="min-w-0">
-              <div className="text-sm font-medium tracking-tight text-ink">
+              <div className="text-[14px] font-bold tracking-tight text-ink">
                 Acsa
               </div>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate/55">
+              <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-[#6f63ff]/80">
                 Workflow studio
               </div>
             </div>
@@ -77,16 +78,16 @@ export function TopBar({
             showBrand ? "justify-center" : "justify-start"
           }`}
         >
-            <div className="inline-flex min-w-0 max-w-[300px] items-center gap-2 rounded-[9px] bg-black/[0.04] px-3 py-1.5">
-              <FileIcon />
-              <div className="min-w-0 truncate text-sm font-medium text-ink">
+            <div className="inline-flex min-w-0 max-w-[300px] items-center gap-2 rounded-[10px] bg-black/[0.03] px-3 py-1.5 shadow-[inset_0_1px_1px_rgba(0,0,0,0.01)] border border-black/5 cursor-default hover:bg-black/[0.04] transition-colors">
+              <FileText size={15} strokeWidth={2} className="text-[#6f63ff]/70" />
+              <div className="min-w-0 truncate text-[13px] font-semibold text-ink">
                 {activeWorkflowFile}
               </div>
             </div>
           <div className="flex min-w-0 items-center flex-1 justify-center">
             <div
               aria-label="Workspace view"
-              className="flex items-center gap-0.5 rounded-[9px] bg-black/[0.06] p-0.5"
+              className="flex items-center gap-1 rounded-[10px] bg-black/[0.04] p-1 shadow-[inset_0_1px_2px_rgba(0,0,0,0.02)]"
               role="tablist"
             >
             {(["canvas", "yaml"] as WorkspaceView[]).map((view) => (
@@ -107,7 +108,7 @@ export function TopBar({
 
         <div className="flex items-center gap-2">
           <TopBarActionButton
-            icon={<RefreshIcon />}
+            icon={<RefreshCw size={14} strokeWidth={2.5} />}
             label="Refresh"
             onClick={onRefresh}
             variant="soft"
@@ -115,20 +116,20 @@ export function TopBar({
           {hasUnsavedChanges || isSaving ? (
             <TopBarActionButton
               disabled={saveDisabled || isSaving}
-              icon={<SaveIcon />}
+              icon={<Save size={14} strokeWidth={2.5} />}
               label={isSaving ? "Saving..." : "Save"}
               onClick={onSave}
               title={saveDisabledReason ?? undefined}
               variant="ghost"
             />
           ) : (
-            <div className="px-1 text-[13px] font-medium tracking-[-0.01em] text-black/42">
+            <div className="px-2 text-[12px] font-bold uppercase tracking-widest text-emerald-500/80">
               Saved
             </div>
           )}
           <TopBarActionButton
             disabled={runDisabled || isRunning}
-            icon={<RunIcon />}
+            icon={<Play size={14} strokeWidth={2.5} fill="currentColor" />}
             label={isRunning ? "Running..." : "Run"}
             onClick={onRun}
             title={runDisabledReason ?? undefined}
@@ -141,10 +142,10 @@ export function TopBar({
 }
 
 function workspaceTabClassName(active: boolean) {
-  return `inline-flex h-7 items-center rounded-[7px] px-2.5 text-[12.5px] font-medium tracking-[-0.01em] transition-colors duration-150 ${
+  return `inline-flex h-7 items-center rounded-[7px] px-3.5 text-[12px] font-bold tracking-wide transition-all duration-200 ${
     active
-      ? "bg-white text-[#12161b] shadow-[0_1px_2px_rgba(16,20,20,0.06)]"
-      : "text-black/58 hover:bg-white/55 hover:text-[#1c1f24]"
+      ? "bg-white text-ink shadow-sm"
+      : "text-slate hover:bg-white/50 hover:text-ink"
   }`;
 }
 
@@ -165,102 +166,21 @@ function TopBarActionButton({
 }) {
   const className =
     variant === "accent"
-      ? "bg-[#ddd4ff] text-[#4b3786] hover:bg-[#d2c7ff]"
+      ? "bg-gradient-to-br from-[#776cff] to-[#5d52d8] text-white shadow-[0_2px_4px_rgba(111,99,255,0.2)] hover:shadow-[0_4px_8px_rgba(111,99,255,0.3)] hover:-translate-y-0.5 border border-[#5d52d8]/20"
       : variant === "soft"
-        ? "bg-black/[0.04] text-[#1c1f24] hover:bg-black/[0.055]"
-        : "bg-transparent text-[#2a2e34] hover:bg-black/[0.032]";
+        ? "bg-black/[0.04] text-[#1c1f24] hover:bg-black/[0.06] border border-transparent shadow-[inset_0_1px_1px_rgba(0,0,0,0.01)]"
+        : "bg-transparent text-[#2a2e34] hover:bg-black/[0.04] border border-transparent";
 
   return (
     <button
-      className={`inline-flex h-8 items-center gap-1.5 rounded-[8px] px-3 text-[13px] font-medium tracking-[-0.01em] transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+      className={`inline-flex h-8 items-center gap-1.5 rounded-[9px] px-3.5 text-[12.5px] font-semibold tracking-wide transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:transform-none disabled:hover:shadow-none ${className}`}
       disabled={disabled}
       onClick={onClick}
       title={title}
       type="button"
     >
-      <span className="shrink-0 opacity-80">{icon}</span>
+      <span className={`shrink-0 ${variant === "accent" ? "opacity-100" : "opacity-80"}`}>{icon}</span>
       <span>{label}</span>
     </button>
-  );
-}
-
-function RefreshIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="h-3.5 w-3.5"
-      fill="none"
-      viewBox="0 0 16 16"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path
-        d="M12.75 5.5A5.25 5.25 0 1 0 13 8m-.25-4v2.5H10.25"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.35"
-      />
-    </svg>
-  );
-}
-
-function SaveIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="h-3.5 w-3.5"
-      fill="none"
-      viewBox="0 0 16 16"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path
-        d="M3 3.25h7.4l2.35 2.35v7.15H3V3.25Zm2.25 0V6h4V3.25m-4 7.5h5.5"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.35"
-      />
-    </svg>
-  );
-}
-
-function RunIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="h-3.5 w-3.5"
-      fill="none"
-      viewBox="0 0 16 16"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.35" />
-      <path
-        d="M6.75 5.9 10.4 8l-3.65 2.1V5.9Z"
-        fill="currentColor"
-        stroke="currentColor"
-        strokeLinejoin="round"
-        strokeWidth="0.35"
-      />
-    </svg>
-  );
-}
-
-function FileIcon() {
-  return (
-    <svg
-      aria-hidden="true"
-      className="h-3.5 w-3.5 shrink-0 text-black/42"
-      fill="none"
-      viewBox="0 0 16 16"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path
-        d="M4 2.75h5l3 3v7.5H4v-10.5Zm5 0v3h3"
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.2"
-      />
-    </svg>
   );
 }

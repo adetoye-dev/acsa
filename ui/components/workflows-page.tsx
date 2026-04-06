@@ -292,7 +292,13 @@ export function WorkflowsPage() {
         ) : null}
 
         {showCenteredEmptyState ? (
-          <div className="flex h-full min-h-0 items-center justify-center bg-white px-6 py-10">
+          <div 
+            className="flex h-full min-h-0 items-center justify-center bg-gradient-to-br from-[#f8f9fb] to-[#f1f3f7] px-6 py-10 shadow-[inset_0_2px_12px_rgba(0,0,0,0.02)]"
+            style={{
+              backgroundImage: `radial-gradient(rgba(111, 99, 255, 0.08) 1.5px, transparent 1.5px)`,
+              backgroundSize: `24px 24px`,
+            }}
+          >
             <div className="flex max-w-md flex-col items-center text-center">
               <div className="flex h-14 w-14 items-center justify-center rounded-[18px] bg-[#f6f2ff] text-[#6f63ff]">
                 <StartAutomationIcon />
@@ -310,8 +316,14 @@ export function WorkflowsPage() {
           </div>
         ) : (
           <div className="grid h-full min-h-0 xl:grid-cols-[minmax(0,1fr)_372px]">
-            <section className="min-h-0 border-r border-black/10 bg-white">
-              <div className="sleek-scroll min-h-0 overflow-y-auto px-5 py-5">
+            <section 
+              className="min-h-0 border-r border-black/5 bg-gradient-to-br from-[#f8f9fb] to-[#f1f3f7] shadow-[inset_0_2px_12px_rgba(0,0,0,0.02)] relative"
+              style={{
+                backgroundImage: `radial-gradient(rgba(111, 99, 255, 0.08) 1.5px, transparent 1.5px)`,
+                backgroundSize: `24px 24px`,
+              }}
+            >
+              <div className="sleek-scroll min-h-0 overflow-y-auto px-5 py-6">
                 {inventory.invalid_files.length > 0 ? (
                   <div className="mb-4 rounded-[16px] border border-rose-400/18 bg-rose-50/70 px-4 py-3 text-sm leading-6 text-[#c65a72]">
                     {inventory.invalid_files.length} invalid workflow file

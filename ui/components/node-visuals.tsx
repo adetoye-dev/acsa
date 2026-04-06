@@ -16,6 +16,8 @@
  * limitations under the License.
  */
 
+import { Zap, Sparkles, User, Workflow, Blocks, Box } from "lucide-react";
+
 type NodeVisualKind = "step" | "trigger";
 
 type NodeGlyphProps = {
@@ -32,13 +34,13 @@ type NodeFamily = "ai" | "app" | "core" | "flow" | "human" | "trigger";
 const CONTAINER_SIZE_CLASS = {
   sm: "h-8 w-8 rounded-[10px]",
   md: "h-10 w-10 rounded-[11px]",
-  lg: "h-14 w-14 rounded-[13px]"
+  lg: "h-14 w-14 rounded-[14px]"
 } as const;
 
-const ICON_SIZE_CLASS = {
-  sm: "h-[17px] w-[17px]",
-  md: "h-[22px] w-[22px]",
-  lg: "h-[36px] w-[36px]"
+const ICON_SIZE = {
+  sm: 16,
+  md: 20,
+  lg: 26
 } as const;
 
 export function nodeAccentClassName({
@@ -49,18 +51,18 @@ export function nodeAccentClassName({
 }: Omit<NodeGlyphProps, "className">) {
   switch (resolveNodeFamily({ category, kind, source, typeName })) {
     case "trigger":
-      return "bg-[#eefaf3] text-[#2fa36b] border-[#caecd8]";
+      return "bg-gradient-to-br from-[#eefaf3] to-[#d8f4e2] text-[#2fa36b] border-[#caecd8] shadow-sm";
     case "ai":
-      return "bg-[#f3f0ff] text-[#6f63ff] border-[#ddd4ff]";
+      return "bg-gradient-to-br from-[#f3f0ff] to-[#e7e1ff] text-[#6f63ff] border-[#ddd4ff] shadow-sm";
     case "human":
-      return "bg-[#fff3e7] text-[#c98632] border-[#f3d9b5]";
+      return "bg-gradient-to-br from-[#fff3e7] to-[#ffe5cc] text-[#c98632] border-[#f3d9b5] shadow-sm";
     case "flow":
-      return "bg-[#eef6ff] text-[#4d78cc] border-[#d7e6ff]";
+      return "bg-gradient-to-br from-[#eef6ff] to-[#d9eaff] text-[#4d78cc] border-[#d7e6ff] shadow-sm";
     case "app":
-      return "bg-[#eef9f7] text-[#2f8f7b] border-[#cfe9e2]";
+      return "bg-gradient-to-br from-[#eef9f7] to-[#d8f3ec] text-[#2f8f7b] border-[#cfe9e2] shadow-sm";
     case "core":
     default:
-      return "bg-[#f5f6f8] text-[#5c6470] border-[#e1e4e8]";
+      return "bg-gradient-to-br from-[#f5f6f8] to-[#eaecf0] text-[#5c6470] border-[#e1e4e8] shadow-sm";
   }
 }
 
@@ -74,7 +76,7 @@ export function NodeGlyph({
 }: NodeGlyphProps) {
   const family = resolveNodeFamily({ category, kind, source, typeName });
   const containerSizeClass = CONTAINER_SIZE_CLASS[size];
-  const iconSizeClass = ICON_SIZE_CLASS[size];
+  const iconSize = ICON_SIZE[size];
 
   return (
     <span
@@ -83,41 +85,20 @@ export function NodeGlyph({
         kind,
         source,
         typeName
-      })} ${className}`}
+      })} ${className} transition-all duration-300 ease-out group-hover:scale-105 group-hover:shadow-md backdrop-blur-sm`}
     >
       {family === "trigger" ? (
-        <svg aria-hidden="true" className={iconSizeClass} fill="none" viewBox="0 0 20 20">
-          <path
-            d="M11.5 2.5L6.5 10h3l-1 7.5 5-7.5h-3l1-7.5Z"
-            fill="currentColor"
-            stroke="currentColor"
-            strokeLinejoin="round"
-            strokeWidth="0.6"
-          />
-        </svg>
+        <Zap size={iconSize} strokeWidth={1.8} className="drop-shadow-sm" />
       ) : family === "ai" ? (
-        <svg aria-hidden="true" className={iconSizeClass} fill="none" viewBox="0 0 20 20">
-          <rect x="5" y="6" width="10" height="8" rx="2" stroke="currentColor" strokeWidth="1.5" />
-          <path d="M10 3.5v2M7 15.5V17M13 15.5V17M3.5 10H5M15 10h1.5M7.5 9.5h.01M12.5 9.5h.01M8 12.25h4" stroke="currentColor" strokeLinecap="round" strokeWidth="1.5" />
-        </svg>
+        <Sparkles size={iconSize} strokeWidth={1.8} className="drop-shadow-sm" />
       ) : family === "human" ? (
-        <svg aria-hidden="true" className={iconSizeClass} fill="none" viewBox="0 0 20 20">
-          <path d="M10 10.5a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM4.5 16a5.5 5.5 0 0 1 11 0" stroke="currentColor" strokeLinecap="round" strokeWidth="1.6" />
-        </svg>
+        <User size={iconSize} strokeWidth={1.8} className="drop-shadow-sm" />
       ) : family === "flow" ? (
-        <svg aria-hidden="true" className={iconSizeClass} fill="none" viewBox="0 0 20 20">
-          <path d="M5 4.5h3v3H5zM12 4.5h3v3h-3zM12 12.5h3v3h-3z" stroke="currentColor" strokeWidth="1.4" />
-          <path d="M8 6h4M13.5 7.5v5M8 6v0" stroke="currentColor" strokeLinecap="round" strokeWidth="1.4" />
-        </svg>
+        <Workflow size={iconSize} strokeWidth={1.8} className="drop-shadow-sm" />
       ) : family === "app" ? (
-        <svg aria-hidden="true" className={iconSizeClass} fill="none" viewBox="0 0 20 20">
-          <circle cx="10" cy="10" r="5.5" stroke="currentColor" strokeWidth="1.5" />
-          <path d="M4.5 10h11M10 4.5c1.5 1.6 2.3 3.43 2.3 5.5 0 2.07-.8 3.9-2.3 5.5M10 4.5C8.5 6.1 7.7 7.93 7.7 10c0 2.07.8 3.9 2.3 5.5" stroke="currentColor" strokeLinecap="round" strokeWidth="1.3" />
-        </svg>
+        <Blocks size={iconSize} strokeWidth={1.8} className="drop-shadow-sm" />
       ) : (
-        <svg aria-hidden="true" className={iconSizeClass} fill="none" viewBox="0 0 20 20">
-          <path d="M7.25 5.5 4.5 10l2.75 4.5M12.75 5.5 15.5 10l-2.75 4.5" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.6" />
-        </svg>
+        <Box size={iconSize} strokeWidth={1.8} className="drop-shadow-sm" />
       )}
     </span>
   );
