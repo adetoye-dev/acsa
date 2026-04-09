@@ -21,8 +21,8 @@ export type RecentWorkflowEntry = {
   workflowId: string;
 };
 
-export const RECENT_WORKFLOWS_STORAGE_KEY = "acsa.workflows.recent";
-export const RECENT_WORKFLOWS_LIMIT = 6;
+const RECENT_WORKFLOWS_STORAGE_KEY = "acsa.workflows.recent";
+const RECENT_WORKFLOWS_LIMIT = 6;
 
 type RecentWorkflowStorage = Pick<Storage, "getItem" | "setItem">;
 

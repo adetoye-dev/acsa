@@ -126,16 +126,6 @@ export function formatTimestamp(value?: number | null) {
   return new Date(value * 1000).toLocaleString();
 }
 
-export function runProvenanceLabel(run: RunView) {
-  return run.run_provenance.mode === "exact" ? "Exact snapshot" : "Fallback rendering";
-}
-
-export function runProvenanceTone(run: RunView) {
-  return run.run_provenance.mode === "exact"
-    ? "bg-emerald-50 text-[#2e7b54]"
-    : "bg-amber-50 text-[#a76825]";
-}
-
 export function hasFallbackProvenance(run: RunView) {
   return run.run_provenance.mode === "fallback";
 }

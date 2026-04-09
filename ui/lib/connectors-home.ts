@@ -26,7 +26,7 @@ import { semanticConnectorCapabilities } from "./semantic-labels";
 type StarterConnectorPackInstallPriority = 0 | 1 | 2;
 type InstalledStarterPackPriority = 0 | 1 | 2 | 3;
 
-export type StarterConnectorPacksEmptyState =
+type StarterConnectorPacksEmptyState =
   | "empty"
   | "no_installed_packs"
   | "ready";
@@ -50,7 +50,7 @@ export type StarterConnectorPackRow = {
   name: string;
 };
 
-export function starterConnectorPackCtaLabel(
+function starterConnectorPackCtaLabel(
   pack: StarterConnectorPack
 ): "Install" | "Installed" | "Open" {
   if (!isStarterConnectorPackInstalled(pack)) {
@@ -60,7 +60,7 @@ export function starterConnectorPackCtaLabel(
   return pack.install_state === "satisfied" ? "Open" : "Installed";
 }
 
-export function orderStarterConnectorPacks(
+function orderStarterConnectorPacks(
   packs: StarterConnectorPack[]
 ): StarterConnectorPack[] {
   return [...packs].sort((left, right) => {
@@ -75,7 +75,7 @@ export function orderStarterConnectorPacks(
   });
 }
 
-export function installedStarterConnectorPackSecondaryMetadata(
+function installedStarterConnectorPackSecondaryMetadata(
   pack: StarterConnectorPack
 ): string[] {
   if (!isStarterConnectorPackInstalled(pack)) {
@@ -92,7 +92,7 @@ export function installedStarterConnectorPackSecondaryMetadata(
   return metadata;
 }
 
-export function resolveStarterConnectorPacksEmptyState(
+function resolveStarterConnectorPacksEmptyState(
   packs: StarterConnectorPack[]
 ): StarterConnectorPacksEmptyState {
   if (packs.length === 0) {
@@ -201,7 +201,7 @@ function installedConnectorSourceMetadata(
   return ["Managed in app"];
 }
 
-export function isStarterConnectorPackInstalled(pack: StarterConnectorPack): boolean {
+function isStarterConnectorPackInstalled(pack: StarterConnectorPack): boolean {
   return pack.install_state !== "available";
 }
 

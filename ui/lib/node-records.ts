@@ -17,7 +17,7 @@
 import { fetchEngineJson } from "./engine-client";
 import { slugifyIdentifier } from "./workflow-editor";
 
-export type UpsertNodeRecordRequest = {
+type UpsertNodeRecordRequest = {
   base_type_name?: string;
   category: string;
   description: string;
@@ -27,7 +27,7 @@ export type UpsertNodeRecordRequest = {
   type_name: string;
 };
 
-export type NodeRecordResponse = {
+type NodeRecordResponse = {
   base_type_name?: string | null;
   category: string;
   description: string;

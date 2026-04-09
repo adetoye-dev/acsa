@@ -106,7 +106,7 @@ export function selectDefaultStep(
   );
 }
 
-export function executionProvenanceNote(run: RunView | null) {
+function executionProvenanceNote(run: RunView | null) {
   if (!run || !hasFallbackProvenance(run)) {
     return null;
   }

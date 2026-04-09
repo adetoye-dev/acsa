@@ -126,12 +126,6 @@ export function workflowLifecycleLabel(workflowState: WorkflowState) {
   return workflowState.lifecycle === "draft" ? "Draft" : "Saved";
 }
 
-export function workflowLifecycleTone(workflowState: WorkflowState) {
-  return workflowState.lifecycle === "draft"
-    ? "bg-black/5 text-slate"
-    : "bg-white text-slate";
-}
-
 export function workflowReadinessLabel(workflowState: WorkflowState) {
   switch (workflowState.readiness.readiness_state) {
     case "ready":

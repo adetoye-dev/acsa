@@ -80,7 +80,7 @@ export type ConnectorTestResponse = {
   params: unknown;
 };
 
-export type UpdateConnectorRecordRequest = {
+type UpdateConnectorRecordRequest = {
   description: string;
   name: string;
 };

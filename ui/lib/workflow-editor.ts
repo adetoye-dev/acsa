@@ -26,8 +26,8 @@ import type { WorkflowState } from "./product-status";
 
 export const ENGINE_PROXY_BASE = "/engine";
 export const EDGE_STROKE = "rgba(121, 141, 242, 0.68)";
-export const TRIGGER_EDGE_STROKE = "rgba(244, 166, 97, 0.58)";
 export const TRIGGER_NODE_ID = "__trigger__";
+const TRIGGER_EDGE_STROKE = "rgba(244, 166, 97, 0.58)";
 
 export type RetryPolicy = {
   attempts: number;
@@ -320,39 +320,9 @@ export function defaultTriggerDetailsForType(
   }
 }
 
-export function describeWorkflow(workflow: WorkflowDefinition): string {
+function describeWorkflow(workflow: WorkflowDefinition): string {
   const stepLabel = workflow.steps.length === 1 ? "step" : "steps";
   return `${workflow.trigger.type} trigger, ${workflow.steps.length} ${stepLabel}`;
-}
-
-export function createLocalWorkflowDocument(workflowId: string): WorkflowDocument {
-  return createLocalWorkflowDocumentFromWorkflow(
-    workflowId,
-    createBlankWorkflow(workflowId)
-  );
-}
-
-export function createLocalWorkflowDocumentFromYaml(
-  workflowId: string,
-  yaml: string
-): WorkflowDocument {
-  return createLocalWorkflowDocumentFromWorkflow(workflowId, parseWorkflowYaml(yaml));
-}
-
-function createLocalWorkflowDocumentFromWorkflow(
-  workflowId: string,
-  workflow: WorkflowDefinition
-): WorkflowDocument {
-  const normalizedId = slugifyIdentifier(workflowId || workflow.name || "workflow");
-  return {
-    dirty: true,
-    id: normalizedId,
-    localDraft: true,
-    positions: {},
-    summary: summarizeWorkflow(normalizedId, workflow, { localDraft: true }),
-    workflow,
-    yaml: workflowToYaml(workflow)
-  };
 }
 
 export function extractTriggerDetails(trigger: TriggerDefinition): Record<string, unknown> {
@@ -532,17 +502,6 @@ export function updateWorkflowEdges(
           }
         }
       : {})
-  };
-}
-
-export function updateWorkflowPositions(
-  positions: Record<string, XYPosition>,
-  nodeId: string,
-  nextPosition: XYPosition
-): Record<string, XYPosition> {
-  return {
-    ...positions,
-    [nodeId]: nextPosition
   };
 }
 
