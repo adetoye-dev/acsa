@@ -1,0 +1,14 @@
+{
+  "name": "Lead Qualifier",
+  "type": "lead_qualifier",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "outputs": [
+    "qualified_leads",
+    "filtered_count",
+    "rejection_reasons"
+  ],
+  "limits": {
+    "timeout": 10000
+  }
+}

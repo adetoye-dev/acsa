@@ -1,0 +1,16 @@
+{
+  "name": "Output Formatter",
+  "type": "output_formatter",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "outputs": [
+    "rows",
+    "email_subject",
+    "email_body",
+    "email_body_html",
+    "total_rows"
+  ],
+  "limits": {
+    "timeout": 10000
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Startup Discovery",
+  "type": "startup_discovery",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "outputs": [
+    "companies",
+    "source_stats",
+    "total_discovered"
+  ],
+  "allowed_env": [
+    "CRUSTDATA_API_KEY"
+  ],
+  "limits": {
+    "timeout": 120000
+  }
+}

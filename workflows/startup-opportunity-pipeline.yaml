@@ -1,0 +1,258 @@
+version: v1
+name: startup-opportunity-pipeline
+trigger:
+  type: cron
+  schedule: "0 0 2 * * *"
+steps:
+  # ──────────────────────────────────────────────────────
+  # Step 1: Read existing entries from Google Sheets for dedup
+  # ──────────────────────────────────────────────────────
+  - id: read_existing_leads
+    type: gsheets_reader
+    params:
+      spreadsheet_name: "Startup Opportunity Pipeline"
+      worksheet_name: "Leads"
+      column_name: website_url
+    next: [discover_startups]
+    retry:
+      attempts: 2
+      backoff_ms: 2000
+    timeout_ms: 30000
+
+  # ──────────────────────────────────────────────────────
+  # Step 2: Discover startups from YC directory
+  # ──────────────────────────────────────────────────────
+  - id: discover_startups
+    type: startup_discovery
+    params:
+      sources:
+        - yc_directory
+      max_results: 50
+      filters:
+        hiring: true
+        batches:
+          - W25
+          - S24
+          - W24
+          - S25
+          - W26
+    next: [qualify_leads]
+    retry:
+      attempts: 2
+      backoff_ms: 3000
+    timeout_ms: 120000
+
+  # ──────────────────────────────────────────────────────
+  # Step 3: Filter, qualify, and deduplicate leads
+  # ──────────────────────────────────────────────────────
+  - id: qualify_leads
+    type: lead_qualifier
+    params:
+      max_leads: 2
+      required_hiring: true
+      batch_whitelist:
+        - W25
+        - S24
+        - W24
+        - S25
+        - W26
+      industry_blacklist: []
+    next: [scrape_websites]
+    timeout_ms: 10000
+
+  # ──────────────────────────────────────────────────────
+  # Step 4: Scrape company websites via Firecrawl
+  # ──────────────────────────────────────────────────────
+  - id: scrape_websites
+    type: website_scraper
+    params:
+      firecrawl_api_key_env: FIRECRAWL_API_KEY
+      delay_between_requests_ms: 2000
+      scrape_subpages: true
+      timeout_secs: 30
+    next: [analyze_pain_points]
+    retry:
+      attempts: 1
+      backoff_ms: 5000
+    timeout_ms: 300000
+
+  # ──────────────────────────────────────────────────────
+  # Step 5: AI Pain Point Analysis
+  # Uses scraped content to identify real business pain points
+  # ──────────────────────────────────────────────────────
+  - id: analyze_pain_points
+    type: llm_completion
+    params:
+      provider: openai
+      api_key_env: OPENAI_API_KEY
+      model_env: OPENAI_MODEL
+      max_tokens: 4000
+      prompt_path: scrape_websites.analysis_prompt
+      system_prompt: |-
+        You are a ruthless startup analyst and cynical enterprise buyer with 15 years
+        of experience evaluating B2B SaaS products. You are NOT a cheerleader.
+
+        For each company provided, analyze:
+        1. What they ACTUALLY do (cut through marketing fluff)
+        2. Their real target market and ideal customer profile
+        3. Visible product gaps and weaknesses in their messaging
+        4. Industry-specific bottlenecks they likely face
+        5. Tech stack signals (what they're building with, hiring for)
+        6. What competitors could exploit against them
+
+        Be SPECIFIC and ACTIONABLE. Generic pain points like "they need better UX"
+        are worthless. Instead say "their onboarding flow has no API documentation,
+        which means developer-focused customers will churn in week 1."
+
+        Output your analysis as a JSON array with one object per company:
+        [
+          {
+            "company_name": "...",
+            "what_they_do": "...",
+            "target_market": "...",
+            "pain_points": ["specific pain 1", "specific pain 2", ...],
+            "product_gaps": ["gap 1", "gap 2", ...],
+            "competitor_weaknesses": ["weakness 1", ...],
+            "tech_stack_signals": ["signal 1", ...],
+            "opportunity_summary": "one paragraph on the biggest opportunity"
+          }
+        ]
+    next: [generate_build_proposals]
+    retry:
+      attempts: 2
+      backoff_ms: 3000
+    timeout_ms: 120000
+
+  # ──────────────────────────────────────────────────────
+  # Step 6: Generate Build Proposals
+  # Creates specific, shippable tool ideas for each company
+  # ──────────────────────────────────────────────────────
+  - id: generate_build_proposals
+    type: llm_completion
+    params:
+      provider: openai
+      api_key_env: OPENAI_API_KEY
+      model_env: OPENAI_MODEL
+      max_tokens: 4000
+      prompt_path: analyze_pain_points.content
+      system_prompt: |-
+        You are a senior product engineer who specializes in building MVPs that
+        solve real business problems. You've built and shipped dozens of tools
+        that got you hired at top startups.
+
+        Given the pain point analysis for each company, propose ONE specific tool
+        to build for each company. This tool will be sent to their team as a
+        demonstration of your skills and understanding of their business.
+
+        REQUIREMENTS for each proposal:
+        - Must be buildable in a weekend (3-4 days max for MVP)
+        - Must solve a CRITICAL pain point (not a nice-to-have)
+        - Must be immediately demonstrable (live link, not slides)
+        - Should match their tech stack where possible
+        - Must make their company measurably better
+        - Could eventually be adopted as an internal tool OR standalone product
+
+        For each company, output a JSON object:
+        [
+          {
+            "company_name": "...",
+            "tool_name": "Catchy, descriptive tool name",
+            "problem_statement": "The specific problem this solves (2-3 sentences)",
+            "solution_description": "What the tool does and how it works (1-2 paragraphs)",
+            "mvp_tech_stack": "Recommended stack: e.g. Next.js + Supabase + Vercel",
+            "mvp_scope": "Exactly what to build in a weekend - bullet list of features",
+            "pitch_email_draft": "Draft email following this format: I built [tool] for you over a weekend because [specific reason tied to their pain point]. Here's the live link: [placeholder]. It [specific value prop]. Happy to walk you through what I found. If it's useful, great. If not, no worries.",
+            "estimated_build_time": "Weekend / 3 days / 1 week",
+            "business_impact": "Projected value: e.g. saves 5 hours/week, reduces churn by X%"
+          }
+        ]
+    next: [format_output]
+    retry:
+      attempts: 2
+      backoff_ms: 3000
+    timeout_ms: 120000
+
+  # ──────────────────────────────────────────────────────
+  # Step 7: Format output for Google Sheets
+  # ──────────────────────────────────────────────────────
+  - id: format_output
+    type: output_formatter
+    params: {}
+    next: [write_to_sheets, write_local_backup]
+    timeout_ms: 10000
+
+  # ──────────────────────────────────────────────────────
+  # Step 8: Write results to Google Sheets
+  # ──────────────────────────────────────────────────────
+  - id: write_to_sheets
+    type: gsheets_writer
+    params:
+      spreadsheet_name: "Startup Opportunity Pipeline"
+      worksheet_name: "Leads"
+    next: [send_summary_email]
+    retry:
+      attempts: 2
+      backoff_ms: 2000
+    timeout_ms: 60000
+
+  # ──────────────────────────────────────────────────────
+  # Step 9: Local backup of run results
+  # ──────────────────────────────────────────────────────
+  - id: write_local_backup
+    type: file_write
+    params:
+      path: data/pipeline-runs/latest-run.json
+      contents_path: format_output
+    next: []
+    timeout_ms: 1000
+
+  # ──────────────────────────────────────────────────────
+  # Step 10: Send summary email notification
+  # ──────────────────────────────────────────────────────
+  - id: send_summary_email
+    type: smtp_email_delivery
+    params:
+      subject_path: format_output.email_subject
+      body_path: format_output.email_body
+      body_html_path: format_output.email_body_html
+      secrets_env:
+        password: ACSA_SMTP_PASSWORD
+    next: []
+    retry: null
+    timeout_ms: 30000
+
+ui:
+  positions:
+    __trigger__:
+      x: -500.0
+      y: -400.0
+    read_existing_leads:
+      x: -100.0
+      y: -400.0
+    discover_startups:
+      x: 300.0
+      y: -400.0
+    qualify_leads:
+      x: 700.0
+      y: -400.0
+    scrape_websites:
+      x: 1100.0
+      y: -400.0
+    analyze_pain_points:
+      x: 1500.0
+      y: -400.0
+    generate_build_proposals:
+      x: 1900.0
+      y: -400.0
+    format_output:
+      x: 2300.0
+      y: -400.0
+    write_to_sheets:
+      x: 2700.0
+      y: -280.0
+    write_local_backup:
+      x: 2700.0
+      y: -520.0
+    send_summary_email:
+      x: 3100.0
+      y: -280.0

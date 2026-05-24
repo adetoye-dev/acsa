@@ -1,0 +1,9 @@
+{
+  "name": "Google Sheets Reader",
+  "type": "gsheets_reader",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "outputs": ["existing_entries", "total_existing"],
+  "allowed_env": ["GOOGLE_SHEETS_CREDENTIALS_JSON", "GOOGLE_SHEETS_CREDENTIALS_PATH"],
+  "limits": {"timeout": 30000}
+}
