@@ -60,8 +60,7 @@ def get_gspread_client() -> tuple[gspread.Client, str]:
             except Exception as exc:
                 raise SystemExit(f"Google auth failed with inline credentials: {exc}")
         print(
-            f"WARNING: GOOGLE_SHEETS_CREDENTIALS_JSON set but could not parse "
-            f"(length={len(creds_json)}, starts_with={creds_json[:20]!r}...)",
+            f"WARNING: GOOGLE_SHEETS_CREDENTIALS_JSON set but could not parse (length={len(creds_json)})",
             file=sys.stderr,
         )
 
