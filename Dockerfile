@@ -30,7 +30,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY core/Cargo.toml ./core/Cargo.toml
 
 # Create dummy source files to pre-compile and cache dependencies
-RUN mkdir -p core/src && echo "fn main() {}" > core/src/main.rs && touch core/build.rs
+RUN mkdir -p core/src && echo "fn main() {}" > core/src/main.rs && echo "fn main() {}" > core/build.rs
 RUN cargo build --release --locked -p acsa-core
 
 # Remove the dummy files to compile the actual source code
