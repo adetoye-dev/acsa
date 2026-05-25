@@ -42,10 +42,7 @@ jobs:
       - name: Audit dependencies
         uses: actions-rust-lang/audit@v1
         with:
-          # Optional: ignore specific advisories if desired, but we allow-fail the step
-          # so we still get the reports in PR logs without blocking builds.
           token: ${{ secrets.GITHUB_TOKEN }}
-        continue-on-error: true
 
   ui:
     name: UI checks
@@ -75,4 +72,3 @@ jobs:
 
       - name: Audit dependencies
         run: npm audit --audit-level=high
-        continue-on-error: true
