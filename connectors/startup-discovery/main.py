@@ -192,8 +192,20 @@ def main() -> None:
     params = payload.get("params", {}) or {}
 
     sources = params.get("sources", ["yc_directory"])
-    max_results = int(params.get("max_results", DEFAULT_MAX_RESULTS))
-    timeout_secs = int(params.get("timeout_secs", 15))
+    if isinstance(sources, str):
+        sources = [sources]
+    elif not isinstance(sources, (list, tuple)):
+        sources = ["yc_directory"]
+
+    try:
+        max_results = int(params.get("max_results", DEFAULT_MAX_RESULTS))
+    except (ValueError, TypeError):
+        max_results = DEFAULT_MAX_RESULTS
+
+    try:
+        timeout_secs = int(params.get("timeout_secs", 15))
+    except (ValueError, TypeError):
+        timeout_secs = 15
 
     filters = params.get("filters", {}) or {}
     hiring_only = bool(filters.get("hiring", True))

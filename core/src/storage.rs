@@ -974,7 +974,7 @@ impl RunStore {
     }
 
     pub async fn delete_node_record(&self, node_record_id: &str) -> Result<(), StorageError> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             DELETE FROM node_records
             WHERE id = ?
@@ -983,6 +983,10 @@ impl RunStore {
         .bind(node_record_id)
         .execute(&self.pool)
         .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StorageError::NodeRecordNotFound(node_record_id.to_string()));
+        }
 
         Ok(())
     }

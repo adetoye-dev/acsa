@@ -124,8 +124,27 @@ def main() -> None:
             exclude_domains.add(domain)
 
     # Get filter params
-    max_leads = int(params.get("max_leads", 10))
-    required_hiring = bool(params.get("required_hiring", True))
+
+    def _parse_int(value: object, default: int, minimum: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return max(parsed, minimum)
+
+    def _parse_bool(value: object, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+        return default
+
+    max_leads = _parse_int(params.get("max_leads", 10), 10, 0)
+    required_hiring = _parse_bool(params.get("required_hiring", True), True)
     batch_whitelist = params.get("batch_whitelist", [])
     if isinstance(batch_whitelist, str):
         batch_whitelist = [batch_whitelist]

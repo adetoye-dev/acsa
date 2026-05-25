@@ -286,7 +286,7 @@ def main() -> None:
     timeout_secs = int(params.get("timeout_secs", DEFAULT_TIMEOUT_SECS))
 
     scraped_companies: list[dict] = []
-    stats = {"total": len(qualified_leads), "succeeded": 0, "partial": 0, "failed": 0}
+    stats = {"total": len(qualified_leads), "succeeded": 0, "partial": 0, "failed": 0, "skipped": 0}
 
     if not api_key:
         print(
@@ -303,7 +303,7 @@ def main() -> None:
             skipped_company["scrape_status"] = "skipped"
             skipped_company["scrape_error"] = "Firecrawl API key not configured"
             scraped_companies.append(skipped_company)
-        stats["failed"] = len(scraped_companies)
+        stats["skipped"] = len(scraped_companies)
     else:
         for idx, company in enumerate(qualified_leads):
             if not isinstance(company, dict):

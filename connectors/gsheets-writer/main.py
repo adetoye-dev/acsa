@@ -168,19 +168,22 @@ def get_or_create_worksheet(
 
 def ensure_header_row(worksheet: gspread.Worksheet) -> None:
     """Write the header row if the worksheet is empty or lacks the correct header."""
-    existing = worksheet.get_all_values()
-    has_header = False
-    if existing:
-        first_row = existing[0]
-        if len(first_row) > 0 and first_row[0] == "run_date":
-            has_header = True
+    try:
+        first_row = worksheet.row_values(1)
+    except Exception:
+        first_row = []
 
-    if not has_header:
-        if not existing:
-            worksheet.append_row(HEADER_COLUMNS, value_input_option="USER_ENTERED")
-        else:
-            # Insert at the very top
-            worksheet.insert_row(HEADER_COLUMNS, index=1, value_input_option="USER_ENTERED")
+    first_row_cleaned = [str(val).strip() for val in first_row]
+    header_cleaned = [str(val).strip() for val in HEADER_COLUMNS]
+
+    if first_row_cleaned == header_cleaned:
+        return
+
+    if not first_row_cleaned:
+        worksheet.append_row(HEADER_COLUMNS, value_input_option="USER_ENTERED")
+    else:
+        # Insert at the very top to push existing data down
+        worksheet.insert_row(HEADER_COLUMNS, index=1, value_input_option="USER_ENTERED")
 
 
 def dict_to_row(row_dict: dict) -> list[str]:
