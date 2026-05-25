@@ -38,7 +38,7 @@ RUN rm -rf core/src core/build.rs
 COPY core ./core
 
 # Trigger build of our actual source
-RUN touch core/src/main.rs
+RUN touch core/src/main.rs core/build.rs
 RUN cargo build --release --locked -p acsa-core
 
 # ==========================================
