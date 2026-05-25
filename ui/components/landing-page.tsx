@@ -280,7 +280,7 @@ export function LandingPage() {
                 innerRef={setNodeRef("webhook")}
                 title="Webhook" 
                 subtitle="http_webhook"
-                icon={<Zap size={18} strokeWidth={1.8} />}
+                icon={<Zap size={16} strokeWidth={1.8} />}
                 familyClass="bg-gradient-to-br from-[#eefaf3] to-[#d8f4e2] text-[#2fa36b] border-[#caecd8] shadow-sm"
                 hasRightHandle={true}
                 rightHandleColor="bg-[#2fa36b]"
@@ -297,7 +297,7 @@ export function LandingPage() {
                 innerRef={setNodeRef("normalize")}
                 title="Normalize" 
                 subtitle="http_request"
-                icon={<Box size={18} strokeWidth={1.8} />}
+                icon={<Box size={16} strokeWidth={1.8} />}
                 familyClass="bg-gradient-to-br from-[#f5f6f8] to-[#eaecf0] text-[#5c6470] border-[#e1e4e8] shadow-sm"
                 hasLeftHandle={true}
                 hasRightHandle={true}
@@ -314,7 +314,7 @@ export function LandingPage() {
                 innerRef={setNodeRef("askai")}
                 title="Ask AI" 
                 subtitle="llm_completion"
-                icon={<Sparkles size={18} strokeWidth={1.8} />}
+                icon={<Sparkles size={16} strokeWidth={1.8} />}
                 familyClass="bg-gradient-to-br from-[#f3f0ff] to-[#e7e1ff] text-[#6f63ff] border-[#ddd4ff] shadow-sm"
                 hasLeftHandle={true}
                 hasRightHandle={true}
@@ -331,7 +331,7 @@ export function LandingPage() {
                 innerRef={setNodeRef("slack")}
                 title="Slack Alert" 
                 subtitle="slack_alert"
-                icon={<Blocks size={18} strokeWidth={1.8} />}
+                icon={<Blocks size={16} strokeWidth={1.8} />}
                 familyClass="bg-gradient-to-br from-[#eef9f7] to-[#d8f3ec] text-[#2f8f7b] border-[#cfe9e2] shadow-sm"
                 hasLeftHandle={true}
                 success={true}
@@ -347,7 +347,7 @@ export function LandingPage() {
                 innerRef={setNodeRef("approval")}
                 title="Approval" 
                 subtitle="human_approval"
-                icon={<User size={18} strokeWidth={1.8} />}
+                icon={<User size={16} strokeWidth={1.8} />}
                 familyClass="bg-gradient-to-br from-[#fff3e7] to-[#ffe5cc] text-[#c98632] border-[#f3d9b5] shadow-sm"
                 hasLeftHandle={true}
                 pending={true}
@@ -392,6 +392,13 @@ export function LandingPage() {
                   </div>
                   <h4 className="text-[13px] font-bold text-ink tracking-tight">{c.name}</h4>
                   <p className="mt-1.5 text-[11px] leading-relaxed text-[#757d88] font-medium">{c.desc}</p>
+                </div>
+                
+                <div className="mt-4 pt-2.5 border-t border-black/5 flex items-center justify-between text-[11px] font-mono">
+                  <span className="text-slate/60">npm i {c.package}</span>
+                  <div className="flex items-center gap-1 text-[9px] text-[#6f63ff] font-bold uppercase tracking-wider opacity-85 group-hover:opacity-100 transition-opacity">
+                    <span>Copy</span>
+                  </div>
                 </div>
               </div>
             ))}
@@ -503,7 +510,7 @@ function LandingCanvasNode({
 
         {/* Success badge */}
         {success && (
-          <div className="absolute -bottom-1 -right-1 h-4.5 w-4.5 rounded-full border border-white bg-emerald-500 flex items-center justify-center text-white text-[9px] font-bold shadow-sm z-10">
+          <div className="absolute -bottom-1 -right-1 h-4.5 w-4.5 rounded-full border border-white bg-emerald-500 flex items-center justify-center text-white text-[9px] font-bold shadow-sm z-10 animate-none">
             ✓
           </div>
         )}
@@ -515,7 +522,8 @@ function LandingCanvasNode({
           </div>
         )}
 
-        <span className={`inline-flex items-center justify-center border h-8.5 w-8.5 rounded-[10px] shadow-sm ${familyClass}`}>
+        {/* Tight Circular Colored Icon Box wrapping tightly around size-16 icon */}
+        <span className={`inline-flex items-center justify-center border h-8 w-8 rounded-full shadow-sm shrink-0 ${familyClass}`}>
           {icon}
         </span>
       </div>
