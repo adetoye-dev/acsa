@@ -2,7 +2,7 @@
 # Secure a free persistent SQLite storage volume on Fly.io
 
 app = "acsa-engine"
-primary_region = "bos"
+primary_region = "lhr"
 
 [build]
   dockerfile = "Dockerfile"
@@ -29,3 +29,4 @@ primary_region = "bos"
   PORT = "8080"
   ACSA_WORKFLOWS_DIR = "workflows"
   ACSA_DB_PATH = "/data/acsa.db"
+  ACSA_ALLOW_REMOTE_ENGINE = "1"
