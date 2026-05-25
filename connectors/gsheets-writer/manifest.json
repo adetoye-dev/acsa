@@ -1,0 +1,9 @@
+{
+  "name": "Google Sheets Writer",
+  "type": "gsheets_writer",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "outputs": ["rows_written", "spreadsheet_url", "worksheet_name"],
+  "allowed_env": ["GOOGLE_SHEETS_CREDENTIALS_JSON", "GOOGLE_SHEETS_CREDENTIALS_PATH"],
+  "limits": {"timeout": 60000}
+}

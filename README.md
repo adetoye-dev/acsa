@@ -133,6 +133,7 @@ Included distribution assets:
 - `deploy/kubernetes/` manifests for cluster deployment
 - `packaging/homebrew/acsa.rb` and `packaging/scoop/acsa.json` release manifests
 - `.github/workflows/release.yml` for tagged release artifacts and checksums
+- `docs/deployment.md` for Vercel, Koyeb, Fly.io, and Neon Cloud Hosting
 
 ### UI
 
@@ -163,6 +164,7 @@ The production UI is configured for Next.js standalone output so it can ship ins
   - [docs/dev/architecture.md](docs/dev/architecture.md)
   - [docs/dev/observability.md](docs/dev/observability.md)
   - [docs/dev/self-hosting.md](docs/dev/self-hosting.md)
+  - [docs/deployment.md](docs/deployment.md)
 - Community and release:
   - [CONTRIBUTING.md](CONTRIBUTING.md)
   - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)

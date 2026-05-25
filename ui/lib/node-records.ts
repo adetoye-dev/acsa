@@ -17,7 +17,7 @@
 import { fetchEngineJson } from "./engine-client";
 import { slugifyIdentifier } from "./workflow-editor";
 
-export type UpsertNodeRecordRequest = {
+type UpsertNodeRecordRequest = {
   base_type_name?: string;
   category: string;
   description: string;
@@ -27,7 +27,8 @@ export type UpsertNodeRecordRequest = {
   type_name: string;
 };
 
-export type NodeRecordResponse = {
+type NodeRecordResponse = {
+  base_type_name?: string | null;
   category: string;
   description: string;
   id: string;
@@ -41,6 +42,21 @@ export type NodeRecordResponse = {
 export async function upsertNodeRecord(request: UpsertNodeRecordRequest) {
   return fetchEngineJson<NodeRecordResponse>("/api/node-records", {
     body: JSON.stringify(request),
+    headers: {
+      "content-type": "application/json"
+    },
+    method: "POST"
+  });
+}
+
+export async function applyNodeAssetUpdate(typeName: string) {
+  return fetchEngineJson<{
+    available_version?: string | null;
+    installed_version?: string | null;
+    is_locally_modified: boolean;
+    type_name: string;
+  }>(`/api/node-records/${encodeURIComponent(typeName)}/apply-update`, {
+    body: JSON.stringify({}),
     headers: {
       "content-type": "application/json"
     },

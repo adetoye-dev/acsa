@@ -1,0 +1,17 @@
+{
+  "name": "Website Scraper",
+  "type": "website_scraper",
+  "runtime": "process",
+  "entry": "python3 main.py",
+  "outputs": [
+    "scraped_companies",
+    "scrape_stats",
+    "analysis_prompt"
+  ],
+  "allowed_env": [
+    "FIRECRAWL_API_KEY"
+  ],
+  "limits": {
+    "timeout": 300000
+  }
+}

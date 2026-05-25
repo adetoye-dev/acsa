@@ -329,10 +329,10 @@ export function WorkflowCanvas({
           <Controls className="!rounded-[10px] !border !border-black/10 !bg-white" />
         ) : null}
         <Background
-          color="rgba(16, 20, 20, 0.045)"
-          gap={26}
-          size={1}
-          variant={BackgroundVariant.Lines}
+          color="rgba(111, 99, 255, 0.15)"
+          gap={20}
+          size={2}
+          variant={BackgroundVariant.Dots}
         />
       </ReactFlow>
     </ReactFlowProvider>

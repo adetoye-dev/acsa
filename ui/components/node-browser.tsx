@@ -22,6 +22,7 @@ import {
   semanticCategoryDescription,
   semanticCategoryLabel
 } from "../lib/semantic-labels";
+import { applyNodeAssetUpdate, upsertNodeRecord } from "../lib/node-records";
 import type { StepTypeEntry } from "../lib/workflow-editor";
 import { NodeGlyph } from "./node-visuals";
 
@@ -29,6 +30,7 @@ type NodeBrowserProps = {
   autoFocusSearch?: boolean;
   contextHint?: string | null;
   onClose?: () => void;
+  onNodeRecordSaved?: (typeName: string) => Promise<void> | void;
   onSelectType: (typeName: string) => void;
   stepCatalog: StepTypeEntry[];
   subtitle?: string;
@@ -50,6 +52,7 @@ export function NodeBrowser({
   autoFocusSearch = true,
   contextHint,
   onClose,
+  onNodeRecordSaved,
   onSelectType,
   stepCatalog,
   subtitle = "Choose what this step should do",
@@ -57,6 +60,13 @@ export function NodeBrowser({
 }: NodeBrowserProps) {
   const [search, setSearch] = useState("");
   const [highlightedTypeName, setHighlightedTypeName] = useState<string | null>(null);
+  const [editingTypeName, setEditingTypeName] = useState<string | null>(null);
+  const [editingLabel, setEditingLabel] = useState("");
+  const [editingDescription, setEditingDescription] = useState("");
+  const [editingBaseTypeName, setEditingBaseTypeName] = useState("noop");
+  const [editError, setEditError] = useState<string | null>(null);
+  const [isApplyingUpdate, setIsApplyingUpdate] = useState<string | null>(null);
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
   const [recentTypeNames, setRecentTypeNames] = useState<string[]>([]);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -139,6 +149,16 @@ export function NodeBrowser({
       : visibleTypeNames[0];
   }, [highlightedTypeName, visibleTypeNames]);
 
+  const editingEntry = useMemo(
+    () => stepCatalog.find((entry) => entry.type_name === editingTypeName) ?? null,
+    [editingTypeName, stepCatalog]
+  );
+
+  const baseTypeOptions = useMemo(
+    () => stepCatalog.filter((entry) => entry.type_name !== editingTypeName),
+    [editingTypeName, stepCatalog]
+  );
+
   useEffect(function hydrateRecentStepTypesEffect() {
     try {
       const raw = window.localStorage.getItem(RECENT_STEP_TYPES_KEY);
@@ -192,6 +212,61 @@ export function NodeBrowser({
   function handleSelect(typeName: string) {
     rememberRecentType(typeName);
     onSelectType(typeName);
+  }
+
+  function handleEdit(entry: StepTypeEntry) {
+    setEditingTypeName(entry.type_name);
+    setEditingLabel(entry.label);
+    setEditingDescription(entry.description);
+    setEditingBaseTypeName(entry.app_record?.base_type_name ?? "noop");
+    setEditError(null);
+  }
+
+  function handleCancelEdit() {
+    setEditingTypeName(null);
+    setEditingLabel("");
+    setEditingDescription("");
+    setEditingBaseTypeName("noop");
+    setEditError(null);
+  }
+
+  async function handleSaveEdit() {
+    if (!editingEntry || isSavingEdit || !editingEntry.app_record) {
+      return;
+    }
+
+    setIsSavingEdit(true);
+    setEditError(null);
+    try {
+      await upsertNodeRecord({
+        base_type_name: editingBaseTypeName,
+        category: editingEntry.category,
+        description: editingDescription.trim(),
+        label: editingLabel.trim(),
+        source_kind: editingEntry.app_record.source_kind,
+        source_ref: editingEntry.app_record.source_ref,
+        type_name: editingEntry.type_name
+      });
+      await onNodeRecordSaved?.(editingEntry.type_name);
+      handleCancelEdit();
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "Failed to save node");
+    } finally {
+      setIsSavingEdit(false);
+    }
+  }
+
+  async function handleApplyUpdate(typeName: string) {
+    setIsApplyingUpdate(typeName);
+    setEditError(null);
+    try {
+      await applyNodeAssetUpdate(typeName);
+      await onNodeRecordSaved?.(typeName);
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "Failed to apply update");
+    } finally {
+      setIsApplyingUpdate(null);
+    }
   }
 
   function handleKeyDown(event: React.KeyboardEvent<HTMLDivElement | HTMLInputElement>) {
@@ -273,6 +348,90 @@ export function NodeBrowser({
         />
       </div>
 
+      {editingEntry ? (
+        <div className="border-b border-black/10 bg-[#fbfbfa] px-4 py-3">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/58">
+                Edit node
+              </div>
+              <div className="mt-1 text-[14px] font-medium tracking-tight text-ink">
+                {editingEntry.type_name}
+              </div>
+            </div>
+            <button
+              className="ui-button"
+              onClick={handleCancelEdit}
+              type="button"
+            >
+              Cancel
+            </button>
+          </div>
+
+          <div className="grid gap-3">
+            <label className="grid gap-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/58">
+                Label
+              </span>
+              <input
+                className="ui-input"
+                onChange={(event) => setEditingLabel(event.target.value)}
+                value={editingLabel}
+              />
+            </label>
+
+            <label className="grid gap-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/58">
+                Description
+              </span>
+              <textarea
+                className="ui-input min-h-[92px] resize-y"
+                onChange={(event) => setEditingDescription(event.target.value)}
+                value={editingDescription}
+              />
+            </label>
+
+            <label className="grid gap-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/58">
+                Base step
+              </span>
+              <select
+                className="ui-input"
+                onChange={(event) => setEditingBaseTypeName(event.target.value)}
+                value={editingBaseTypeName}
+              >
+                <option value="noop">Pass through</option>
+                {baseTypeOptions.map((entry) => (
+                  <option key={entry.type_name} value={entry.type_name}>
+                    {entry.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="flex items-center gap-2">
+              <button
+                className="ui-button ui-button-primary"
+                disabled={
+                  isSavingEdit ||
+                  !editingLabel.trim() ||
+                  !editingDescription.trim() ||
+                  !editingBaseTypeName.trim()
+                }
+                onClick={() => void handleSaveEdit()}
+                type="button"
+              >
+                {isSavingEdit ? "Saving…" : "Save changes"}
+              </button>
+            </div>
+
+            {editError ? (
+              <p className="text-[12px] leading-5 text-[#c65a72]">{editError}</p>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       <div className="sleek-scroll min-h-0 overflow-y-auto px-2.5 py-2.5">
         {search.trim().length === 0 && recentEntries.length > 0 ? (
           <section className="mb-4">
@@ -285,9 +444,13 @@ export function NodeBrowser({
             <div className="space-y-2">
               {recentEntries.map((entry) => (
                 <NodeOption
+                  applyUpdateDisabled={Boolean(isApplyingUpdate)}
+                  applyUpdateBusy={isApplyingUpdate === entry.type_name}
                   entry={entry}
                   highlighted={activeHighlightedTypeName === entry.type_name}
                   key={entry.type_name}
+                  onApplyUpdate={() => void handleApplyUpdate(entry.type_name)}
+                  onEdit={() => handleEdit(entry)}
                   onHover={() => setHighlightedTypeName(entry.type_name)}
                   onSelect={() => handleSelect(entry.type_name)}
                 />
@@ -307,9 +470,13 @@ export function NodeBrowser({
             <div className="space-y-2">
               {suggestedEntries.map((entry) => (
                 <NodeOption
+                  applyUpdateDisabled={Boolean(isApplyingUpdate)}
+                  applyUpdateBusy={isApplyingUpdate === entry.type_name}
                   entry={entry}
                   highlighted={activeHighlightedTypeName === entry.type_name}
                   key={entry.type_name}
+                  onApplyUpdate={() => void handleApplyUpdate(entry.type_name)}
+                  onEdit={() => handleEdit(entry)}
                   onHover={() => setHighlightedTypeName(entry.type_name)}
                   onSelect={() => handleSelect(entry.type_name)}
                 />
@@ -331,9 +498,13 @@ export function NodeBrowser({
               <div className="space-y-2">
                 {entries.map((entry) => (
                   <NodeOption
+                    applyUpdateDisabled={Boolean(isApplyingUpdate)}
+                    applyUpdateBusy={isApplyingUpdate === entry.type_name}
                     entry={entry}
                     highlighted={activeHighlightedTypeName === entry.type_name}
                     key={entry.type_name}
+                    onApplyUpdate={() => void handleApplyUpdate(entry.type_name)}
+                    onEdit={() => handleEdit(entry)}
                     onHover={() => setHighlightedTypeName(entry.type_name)}
                     onSelect={() => handleSelect(entry.type_name)}
                   />
@@ -387,56 +558,110 @@ function SectionHeader({
 }
 
 function NodeOption({
+  applyUpdateDisabled,
+  applyUpdateBusy,
   entry,
   highlighted,
+  onApplyUpdate,
+  onEdit,
   onHover,
   onSelect
 }: {
+  applyUpdateDisabled: boolean;
+  applyUpdateBusy: boolean;
   entry: StepTypeEntry;
   highlighted: boolean;
+  onApplyUpdate: () => void;
+  onEdit: () => void;
   onHover: () => void;
   onSelect: () => void;
 }) {
+  const isEditable =
+    entry.app_record?.source_kind === "generated" || entry.app_record?.source_kind === "custom";
+  const hasUpdate =
+    !!entry.app_record?.available_version &&
+    entry.app_record.available_version !== entry.app_record.installed_version;
+  const canApplyUpdate =
+    entry.app_record?.source_kind === "shipped" &&
+    hasUpdate &&
+    !(entry.app_record.is_locally_modified ?? false);
+
   return (
-    <button
-      className={`group flex w-full items-start gap-3 rounded-[12px] border px-3 py-3 text-left transition ${
+    <div
+      className={`group flex items-start gap-2 rounded-[12px] border px-2 py-2 transition ${
         highlighted
           ? "border-[#171b20]/18 bg-[#f5f5f2]"
           : "border-black/10 bg-white hover:border-black/20 hover:bg-[#fafaf8]"
       }`}
-      id={optionId(entry.type_name)}
-      onClick={onSelect}
-      onFocus={onHover}
       onMouseEnter={onHover}
-      type="button"
     >
-      <NodeGlyph
-        category={entry.category}
-        className="shrink-0"
-        kind="step"
-        source={entry.source}
-        typeName={entry.type_name}
-      />
-      <div className="min-w-0 flex-1">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <div className="truncate text-sm font-medium text-ink">{entry.label}</div>
-            {entry.app_record ? (
-              <span className="rounded-md bg-[#f3f0ff] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-[#6f63ff]">
-                {entry.app_record.source_kind === "generated"
-                  ? "Generated"
-                  : entry.app_record.source_kind === "custom"
-                    ? "Custom"
-                    : "Saved"}
-              </span>
-            ) : null}
-          </div>
-          <div className="mt-0.5 truncate text-[12px] leading-5 text-slate">
-            {entry.description}
+      <button
+        className="flex min-w-0 flex-1 items-start gap-3 rounded-[10px] px-1 py-1 text-left"
+        id={optionId(entry.type_name)}
+        onClick={onSelect}
+        onFocus={onHover}
+        type="button"
+      >
+        <NodeGlyph
+          category={entry.category}
+          className="shrink-0"
+          kind="step"
+          size="sm"
+          source={entry.source}
+          typeName={entry.type_name}
+        />
+        <div className="min-w-0 flex-1">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <div className="truncate text-sm font-medium text-ink">{entry.label}</div>
+              {entry.app_record ? (
+                <span className="rounded-md bg-[#f3f0ff] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-[#6f63ff]">
+                  {entry.app_record.source_kind === "generated"
+                    ? "Generated"
+                    : entry.app_record.source_kind === "custom"
+                      ? "Custom"
+                      : "Shipped"}
+                </span>
+              ) : null}
+              {entry.app_record?.is_locally_modified ? (
+                <span className="rounded-md bg-[#f7f2e8] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-[#8a6b2f]">
+                  Locally modified
+                </span>
+              ) : null}
+              {hasUpdate ? (
+                <span className="rounded-md bg-[#eef6ff] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-[#4b6fd8]">
+                  Update available
+                </span>
+              ) : null}
+            </div>
+            <div className="mt-0.5 truncate text-[12px] leading-5 text-slate">
+              {entry.description}
+            </div>
           </div>
         </div>
+      </button>
+      <div className="flex items-center gap-2">
+        {canApplyUpdate ? (
+          <button
+            className="ui-button !px-2.5 !py-1.5"
+            disabled={applyUpdateDisabled}
+            onClick={onApplyUpdate}
+            type="button"
+          >
+            {applyUpdateBusy ? "Updating…" : "Update"}
+          </button>
+        ) : null}
+        {isEditable ? (
+          <button
+            className="ui-button !px-2.5 !py-1.5"
+            onClick={onEdit}
+            type="button"
+          >
+            Edit
+          </button>
+        ) : null}
       </div>
-    </button>
+    </div>
   );
 }
 

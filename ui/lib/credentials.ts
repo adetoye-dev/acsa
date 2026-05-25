@@ -22,7 +22,7 @@ export type CredentialItem = {
   updated_at: number;
 };
 
-export type CredentialsResponse = {
+type CredentialsResponse = {
   credentials: CredentialItem[];
 };
 

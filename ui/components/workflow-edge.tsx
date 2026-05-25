@@ -69,9 +69,9 @@ export function WorkflowEdge({
         <marker
           className="react-flow__arrowhead"
           id={markerId}
-          markerHeight="18"
+          markerHeight="11"
           markerUnits="strokeWidth"
-          markerWidth="18"
+          markerWidth="11"
           orient="auto-start-reverse"
           refX="0"
           refY="0"

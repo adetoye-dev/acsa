@@ -973,6 +973,24 @@ impl RunStore {
         self.get_node_record_by_type(record.type_name).await
     }
 
+    pub async fn delete_node_record(&self, node_record_id: &str) -> Result<(), StorageError> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM node_records
+            WHERE id = ?
+            "#,
+        )
+        .bind(node_record_id)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(StorageError::NodeRecordNotFound(node_record_id.to_string()));
+        }
+
+        Ok(())
+    }
+
     pub fn queued_plaintext_credential_names(&self) -> Vec<String> {
         match plaintext_credential_migration_queue().read() {
             Ok(queue) => queue.iter().filter_map(Clone::clone).collect(),

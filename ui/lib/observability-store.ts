@@ -70,7 +70,3 @@ export function useObservabilityActions() {
     }))
   );
 }
-
-export function observabilityStoreState() {
-  return useObservabilityStore.getState();
-}

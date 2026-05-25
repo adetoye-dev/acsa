@@ -161,17 +161,11 @@ impl WorkflowEngine {
             .map_err(|error| EngineError::ConnectorLoad(error.to_string()))?;
 
         for connector in inspection.connectors {
-            match self.store.get_asset_record("connector", &connector.manifest.type_id).await {
-                Ok(existing_asset) => {
-                    if existing_asset.source_kind != "shipped" || existing_asset.is_locally_modified
-                    {
-                        continue;
-                    }
-                }
-                Err(StorageError::AssetRecordNotFound(_, _)) => {}
-                Err(error) => return Err(error.into()),
-            }
-
+            let manifest_json = serde_json::to_string(&connector.manifest)?;
+            let runtime = match connector.manifest.runtime {
+                crate::connectors::ConnectorRuntime::Process => "process",
+                crate::connectors::ConnectorRuntime::Wasm => "wasm",
+            };
             let dir_name =
                 connector.connector_dir.file_name().and_then(|value| value.to_str()).ok_or_else(
                     || {
@@ -181,14 +175,60 @@ impl WorkflowEngine {
                         ))
                     },
                 )?;
+
+            match self.store.get_asset_record("connector", &connector.manifest.type_id).await {
+                Ok(existing_asset) => {
+                    if existing_asset.source_kind != "shipped" {
+                        continue;
+                    }
+                    if existing_asset.is_locally_modified {
+                        self.store
+                            .upsert_asset_record(NewAssetRecord {
+                                asset_kind: "connector",
+                                type_name: &existing_asset.type_name,
+                                name: &existing_asset.name,
+                                description: &existing_asset.description,
+                                category: existing_asset.category.as_deref(),
+                                runtime: existing_asset.runtime.as_deref(),
+                                source_kind: &existing_asset.source_kind,
+                                source_ref: existing_asset.source_ref.as_deref(),
+                                definition_json: &existing_asset.definition_json,
+                                installed_version: existing_asset.installed_version.as_deref(),
+                                available_version: connector.manifest.version.as_deref(),
+                                is_locally_modified: true,
+                            })
+                            .await?;
+                        continue;
+                    }
+                    if existing_asset.installed_version.as_deref()
+                        != connector.manifest.version.as_deref()
+                    {
+                        self.store
+                            .upsert_asset_record(NewAssetRecord {
+                                asset_kind: "connector",
+                                type_name: &existing_asset.type_name,
+                                name: &existing_asset.name,
+                                description: &existing_asset.description,
+                                category: existing_asset.category.as_deref(),
+                                runtime: Some(runtime),
+                                source_kind: &existing_asset.source_kind,
+                                source_ref: existing_asset.source_ref.as_deref().or(Some(dir_name)),
+                                definition_json: &existing_asset.definition_json,
+                                installed_version: existing_asset.installed_version.as_deref(),
+                                available_version: connector.manifest.version.as_deref(),
+                                is_locally_modified: false,
+                            })
+                            .await?;
+                        continue;
+                    }
+                }
+                Err(StorageError::AssetRecordNotFound(_, _)) => {}
+                Err(error) => return Err(error.into()),
+            }
+
             let stored_bundle = asset_store
                 .store_connector_bundle(dir_name, &connector.connector_dir)
                 .map_err(|error| EngineError::ConnectorLoad(error.to_string()))?;
-            let manifest_json = serde_json::to_string(&connector.manifest)?;
-            let runtime = match connector.manifest.runtime {
-                crate::connectors::ConnectorRuntime::Process => "process",
-                crate::connectors::ConnectorRuntime::Wasm => "wasm",
-            };
             let connector_dir = stored_bundle.connector_dir.display().to_string();
             let manifest_path = stored_bundle.manifest_path.display().to_string();
 

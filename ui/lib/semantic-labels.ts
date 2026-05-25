@@ -61,14 +61,14 @@ export function semanticCategoryDescription(category: string): string {
   );
 }
 
-export function semanticStepTypeLabel(typeName: string): string {
+function semanticStepTypeLabel(typeName: string): string {
   const normalizedTypeName = typeName.toLowerCase();
   return (
     SEMANTIC_STEP_TYPE_LABELS[normalizedTypeName] ?? titleCaseWords(typeName)
   );
 }
 
-export function semanticStepTypeSummary(typeNames: string[]): string {
+function semanticStepTypeSummary(typeNames: string[]): string {
   const labels = typeNames.map((typeName) => semanticStepTypeLabel(typeName));
   return labels.length === 0
     ? ""

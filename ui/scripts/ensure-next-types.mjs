@@ -12,6 +12,7 @@ const requiredFiles = [
   ".next/types/app/(product)/credentials/page.ts",
   ".next/types/app/(product)/executions/page.ts",
   ".next/types/app/(product)/workflows/page.ts",
+  ".next/types/app/(studio)/layout.ts",
   ".next/types/app/(studio)/workflows/[workflowId]/page.ts",
   ".next/types/app/(studio)/workflows/new/page.ts",
   ".next/types/validator.ts",

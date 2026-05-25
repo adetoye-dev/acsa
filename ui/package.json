@@ -10,10 +10,14 @@
   },
   "dependencies": {
     "@codemirror/lang-yaml": "^6.1.2",
+    "@codemirror/language": "^6.12.2",
+    "@codemirror/view": "^6.39.17",
+    "@lezer/highlight": "^1.2.3",
     "@uiw/react-codemirror": "^4.23.10",
     "@xyflow/react": "12.4.2",
-    "axios": "1.13.6",
-    "next": "^15.5.14",
+    "framer-motion": "^12.38.0",
+    "lucide-react": "^1.7.0",
+    "next": "^16.2.6",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "yaml": "^2.8.3",
@@ -24,7 +28,7 @@
     "@types/react": "18.3.12",
     "@types/react-dom": "18.3.1",
     "autoprefixer": "10.4.20",
-    "postcss": "8.4.49",
+    "postcss": "^8.5.15",
     "tailwindcss": "3.4.16",
     "typescript": "5.7.2"
   }
