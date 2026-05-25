@@ -197,12 +197,19 @@ def match_proposals_to_companies(
         pain_points = pain.get("pain_points", pain.get("product_gaps", []))
         competitor_gaps = pain.get("competitor_weaknesses", pain.get("competitor_gaps", []))
 
+        # Merge AI extracted funding round and raised details
+        funding_raised = pain.get("funding_raised", company.get("funding_raised", "Unknown"))
+        if not funding_raised or funding_raised == "Unknown":
+            funding_raised = company.get("funding_raised", "Unknown")
+        funding_stage = pain.get("funding_stage", "Unknown")
+
         row = {
             "run_date": run_date,
             "company_name": company_name,
             "website_url": clean_value(company.get("url", "")),
             "industry": clean_value(industry),
-            "funding_raised": clean_value(company.get("funding_raised", "Unknown")),
+            "funding_raised": clean_value(funding_raised),
+            "funding_stage": clean_value(funding_stage),
             "batch": clean_value(company.get("batch", "")),
             "team_size": clean_value(company.get("team_size", "Unknown")),
             "value_proposition": clean_value(
@@ -323,9 +330,38 @@ def generate_email_summary(rows: list[dict], run_date: str, spreadsheet_url: str
     return subject, body, body_html
 
 
+def parse_funding_to_usd(funding_str: str) -> float:
+    """Parse a funding string like '$2.5M', '$500,000', or '$1.2 Billion' to raw USD float."""
+    if not funding_str or not isinstance(funding_str, str):
+        return 0.0
+    text = funding_str.strip().lower().replace(",", "")
+    # Find all digits and possible decimal point
+    match = re.search(r"([\d\.]+)", text)
+    if not match:
+        return 0.0
+    try:
+        val = float(match.group(1))
+    except ValueError:
+        return 0.0
+    if "k" in text:
+        val *= 1000
+    elif "m" in text or "million" in text:
+        val *= 1000000
+    elif "b" in text or "billion" in text:
+        val *= 1000000000
+    return val
+
+
 def main() -> None:
     payload = load_payload()
     inputs = payload.get("inputs", {}) or {}
+    params = payload.get("params", {}) or {}
+
+    min_funding_usd = float(params.get("min_funding_usd", 0.0))
+    funding_round_whitelist = params.get("funding_round_whitelist", [])
+    if isinstance(funding_round_whitelist, str):
+        funding_round_whitelist = [funding_round_whitelist]
+    max_rows_to_output = int(params.get("max_rows_to_output", 0))
 
     # ACSA inputs are keyed by upstream step_id:
     #   {"generate_build_proposals": {"content": "...", ...},
@@ -381,6 +417,46 @@ def main() -> None:
     # Match and merge both pain points and proposals to companies
     rows = match_proposals_to_companies(scraped_companies, pain_points_data, proposals_data)
 
+    # Filter rows based on funding criteria
+    filtered_rows = []
+    for r in rows:
+        funding_str = r.get("funding_raised", "")
+        funding_val = parse_funding_to_usd(funding_str)
+
+        # Fallback: YC backed startups have a standard deal of at least $500k
+        if funding_val == 0.0:
+            batch = r.get("batch", "").strip()
+            if batch and (batch.startswith("W") or batch.startswith("S")) and len(batch) >= 3 and batch[1:].isdigit():
+                funding_val = 500000.0
+
+        # Check minimum funding
+        if min_funding_usd > 0 and funding_val < min_funding_usd:
+            print(
+                f"FILTER REJECTION: {r.get('company_name')} excluded. "
+                f"Funding {funding_str!r} (parsed: {funding_val}) below minimum {min_funding_usd}",
+                file=sys.stderr
+            )
+            continue
+
+        # Check funding round whitelist
+        funding_stage = r.get("funding_stage", "Unknown").lower()
+        if funding_round_whitelist:
+            whitelist_lower = [round_name.lower().strip() for round_name in funding_round_whitelist]
+            if not any(wl in funding_stage for wl in whitelist_lower):
+                print(
+                    f"FILTER REJECTION: {r.get('company_name')} excluded. "
+                    f"Funding stage {funding_stage!r} not in whitelist {funding_round_whitelist}",
+                    file=sys.stderr
+                )
+                continue
+
+        filtered_rows.append(r)
+
+    if max_rows_to_output > 0:
+        filtered_rows = filtered_rows[:max_rows_to_output]
+
+    rows = filtered_rows
+
     # Get spreadsheet URL if available
     spreadsheet_url = find_in_inputs("spreadsheet_url", "")
 
@@ -401,3 +477,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

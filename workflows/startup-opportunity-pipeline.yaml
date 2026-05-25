@@ -48,7 +48,7 @@ steps:
   - id: qualify_leads
     type: lead_qualifier
     params:
-      max_leads: 2
+      max_leads: 5
       required_hiring: true
       batch_whitelist:
         - W25
@@ -99,6 +99,7 @@ steps:
         4. Industry-specific bottlenecks they likely face
         5. Tech stack signals (what they're building with, hiring for)
         6. What competitors could exploit against them
+        7. How much funding they have raised and their round stage (Pre-Seed, Seed, Series A, Series B, YC, or Unknown) by scanning their homepage, about page, press releases, news pages, or estimating from team size and batch.
 
         Be SPECIFIC and ACTIONABLE. Generic pain points like "they need better UX"
         are worthless. Instead say "their onboarding flow has no API documentation,
@@ -114,7 +115,9 @@ steps:
             "product_gaps": ["gap 1", "gap 2", ...],
             "competitor_weaknesses": ["weakness 1", ...],
             "tech_stack_signals": ["signal 1", ...],
-            "opportunity_summary": "one paragraph on the biggest opportunity"
+            "opportunity_summary": "one paragraph on the biggest opportunity",
+            "funding_raised": "$2,500,000",
+            "funding_stage": "Seed"
           }
         ]
     next: [generate_build_proposals]
@@ -177,7 +180,10 @@ steps:
   # ──────────────────────────────────────────────────────
   - id: format_output
     type: output_formatter
-    params: {}
+    params:
+      min_funding_usd: 500000.0
+      funding_round_whitelist: []
+      max_rows_to_output: 2
     next: [write_to_sheets, write_local_backup]
     timeout_ms: 10000
 

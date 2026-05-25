@@ -23,7 +23,7 @@ MAX_HOMEPAGE_CHARS = 3000
 MAX_SUBPAGE_CHARS = 1500
 MAX_PRICING_CHARS = 1000
 MAX_CAREERS_CHARS = 1000
-SUBPAGE_PATHS = ["about", "pricing", "careers"]
+SUBPAGE_PATHS = ["about", "pricing", "careers", "press", "news"]
 
 
 def load_payload() -> dict:
@@ -191,6 +191,8 @@ def build_analysis_prompt(scraped_companies: list[dict]) -> str:
         about = truncate(subpages.get("about", ""), MAX_SUBPAGE_CHARS)
         pricing = truncate(subpages.get("pricing", ""), MAX_PRICING_CHARS)
         careers = truncate(subpages.get("careers", ""), MAX_CAREERS_CHARS)
+        press = truncate(subpages.get("press", ""), MAX_SUBPAGE_CHARS)
+        news = truncate(subpages.get("news", ""), MAX_SUBPAGE_CHARS)
 
         lines.append(f"=== COMPANY {idx}: {name} ===")
         lines.append(f"URL: {url}")
@@ -224,6 +226,16 @@ def build_analysis_prompt(scraped_companies: list[dict]) -> str:
         if careers:
             lines.append("--- Careers Page ---")
             lines.append(careers)
+            lines.append("")
+
+        if press:
+            lines.append("--- Press Page ---")
+            lines.append(press)
+            lines.append("")
+
+        if news:
+            lines.append("--- News Page ---")
+            lines.append(news)
             lines.append("")
 
         lines.append("")
