@@ -45,8 +45,8 @@ def _try_parse_credentials_json(raw: str) -> dict | None:
     return None
 
 
-def get_gspread_client() -> gspread.Client:
-    """Authenticate and return a gspread client.
+def get_gspread_client() -> tuple[gspread.Client, str]:
+    """Authenticate and return a gspread client and the service account email.
 
     Resolution order:
     1. GOOGLE_SHEETS_CREDENTIALS_JSON env var (base64-encoded or raw JSON)
@@ -62,7 +62,7 @@ def get_gspread_client() -> gspread.Client:
         if info:
             try:
                 credentials = Credentials.from_service_account_info(info, scopes=SCOPES)
-                return gspread.authorize(credentials)
+                return gspread.authorize(credentials), credentials.service_account_email
             except Exception as exc:
                 raise SystemExit(f"Google auth failed with inline credentials: {exc}")
         # Could not parse — print debug info and continue to other methods
@@ -78,7 +78,7 @@ def get_gspread_client() -> gspread.Client:
         if resolved.is_file():
             try:
                 credentials = Credentials.from_service_account_file(str(resolved), scopes=SCOPES)
-                return gspread.authorize(credentials)
+                return gspread.authorize(credentials), credentials.service_account_email
             except Exception as exc:
                 raise SystemExit(f"Google auth failed with credentials file: {exc}")
         print(
@@ -93,7 +93,7 @@ def get_gspread_client() -> gspread.Client:
             try:
                 credentials = Credentials.from_service_account_file(str(resolved), scopes=SCOPES)
                 print(f"Using auto-discovered credentials: {resolved}", file=sys.stderr)
-                return gspread.authorize(credentials)
+                return gspread.authorize(credentials), credentials.service_account_email
             except Exception as exc:
                 raise SystemExit(f"Google auth failed with {resolved}: {exc}")
 
@@ -163,7 +163,7 @@ def main() -> None:
     if not worksheet_name:
         raise SystemExit("Missing required param 'worksheet_name'.")
 
-    client = get_gspread_client()
+    client, service_account_email = get_gspread_client()
 
     # Attempt to open (or create) the spreadsheet to get the URL
     spreadsheet_url = ""
@@ -186,7 +186,7 @@ def main() -> None:
                     f"\nWARNING: Spreadsheet '{spreadsheet_name}' does not exist, and the Google Service Account "
                     f"cannot create it (Drive storage quota exceeded).\n"
                     f"Please create a spreadsheet named '{spreadsheet_name}' in your Google Drive and share it with:\n"
-                    f"google-sheets-service-account@acsa-workflow-studio.iam.gserviceaccount.com as an Editor.\n",
+                    f"   {service_account_email} as an Editor.\n",
                     file=sys.stderr
                 )
             else:

@@ -39,8 +39,8 @@ def _try_parse_credentials_json(raw: str) -> dict | None:
     return None
 
 
-def get_gspread_client() -> gspread.Client:
-    """Authenticate and return a gspread client.
+def get_gspread_client() -> tuple[gspread.Client, str]:
+    """Authenticate and return a gspread client and the service account email.
 
     Resolution order:
     1. GOOGLE_SHEETS_CREDENTIALS_JSON env var (base64-encoded or raw JSON)
@@ -56,7 +56,7 @@ def get_gspread_client() -> gspread.Client:
         if info:
             try:
                 credentials = Credentials.from_service_account_info(info, scopes=SCOPES)
-                return gspread.authorize(credentials)
+                return gspread.authorize(credentials), credentials.service_account_email
             except Exception as exc:
                 raise SystemExit(f"Google auth failed with inline credentials: {exc}")
         print(
@@ -71,7 +71,7 @@ def get_gspread_client() -> gspread.Client:
         if resolved.is_file():
             try:
                 credentials = Credentials.from_service_account_file(str(resolved), scopes=SCOPES)
-                return gspread.authorize(credentials)
+                return gspread.authorize(credentials), credentials.service_account_email
             except Exception as exc:
                 raise SystemExit(f"Google auth failed with credentials file: {exc}")
         print(
@@ -86,7 +86,7 @@ def get_gspread_client() -> gspread.Client:
             try:
                 credentials = Credentials.from_service_account_file(str(resolved), scopes=SCOPES)
                 print(f"Using auto-discovered credentials: {resolved}", file=sys.stderr)
-                return gspread.authorize(credentials)
+                return gspread.authorize(credentials), credentials.service_account_email
             except Exception as exc:
                 raise SystemExit(f"Google auth failed with {resolved}: {exc}")
 
@@ -126,7 +126,7 @@ HEADER_COLUMNS = [
 
 
 def open_or_create_spreadsheet(
-    client: gspread.Client, spreadsheet_name: str
+    client: gspread.Client, spreadsheet_name: str, service_account_email: str
 ) -> gspread.Spreadsheet:
     """Open an existing spreadsheet by name, or create a new one."""
     try:
@@ -145,7 +145,7 @@ def open_or_create_spreadsheet(
                     f"1. Open Google Sheets (https://sheets.google.com)\n"
                     f"2. Create a new sheet named exactly: {spreadsheet_name}\n"
                     f"3. Share it with your Service Account email as an Editor:\n"
-                    f"   google-sheets-service-account@acsa-workflow-studio.iam.gserviceaccount.com\n"
+                    f"   {service_account_email}\n"
                     f"======================================================================\n"
                 )
             raise exc
@@ -217,8 +217,8 @@ def main() -> None:
         )
         return
 
-    client = get_gspread_client()
-    spreadsheet = open_or_create_spreadsheet(client, spreadsheet_name)
+    client, service_account_email = get_gspread_client()
+    spreadsheet = open_or_create_spreadsheet(client, spreadsheet_name, service_account_email)
     worksheet = get_or_create_worksheet(spreadsheet, worksheet_name)
 
     ensure_header_row(worksheet)
