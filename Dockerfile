@@ -47,12 +47,17 @@ RUN cargo build --release --locked -p acsa-core
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
 
-# Install runtime dependencies (ca-certificates for API outbound calls, sqlite3 for health check, tini)
+# Install runtime dependencies (ca-certificates for API outbound calls, sqlite3 for health check, tini, python3, pip)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     sqlite3 \
     tini \
+    python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install required python libraries globally for process connectors
+RUN pip3 install --break-system-packages --no-cache-dir gspread google-auth defusedxml
 
 # Create dedicated data directory for SQLite persistent database
 RUN mkdir -p /data /app/workflows
@@ -60,9 +65,10 @@ RUN mkdir -p /data /app/workflows
 # Copy compiled engine binary
 COPY --from=builder /app/target/release/acsa-core /usr/local/bin/acsa-core
 
-# Copy default workflows and starter packs into the image
+# Copy default workflows, starter packs, and connectors into the image
 COPY workflows /app/workflows
 COPY starter-packs /app/starter-packs
+COPY connectors /app/connectors
 
 # Configure default runtime environment variables
 ENV PORT=8080
