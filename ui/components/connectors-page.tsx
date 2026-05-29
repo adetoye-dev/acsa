@@ -16,7 +16,7 @@
 
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { SVGProps, useEffect, useMemo, useState } from "react";
 import { 
   Sparkles, 
   FileText, 
@@ -29,11 +29,11 @@ import {
   ExternalLink 
 } from "lucide-react";
 
-const SlackIcon = (props: React.SVGProps<SVGSVGElement>) => (
+const SlackIcon = ({ size, ...props }: SVGProps<SVGSVGElement> & { size?: number | string }) => (
   <svg
     viewBox="0 0 24 24"
-    width="24"
-    height="24"
+    width={size || "24"}
+    height={size || "24"}
     stroke="currentColor"
     strokeWidth="2"
     fill="none"
@@ -130,7 +130,7 @@ export function ConnectorsPage() {
       <header className="flex h-[60px] items-center justify-between gap-4 border-b border-black/10 bg-white px-5">
         <div>
           <h1 className="section-title mt-2">Connectors</h1>
-          <p className="mt-0.5 text-sm text-[#68707a]">Explore, search, and install modular connectors published by the community.</p>
+          <p className="mt-0.5 text-sm text-[#68707a]">Preview modular connectors published by the community (install functionality coming soon).</p>
         </div>
       </header>
 
@@ -141,11 +141,11 @@ export function ConnectorsPage() {
             <div>
               <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-[#767b81]">Global Ecosystem</div>
               <h2 className="font-display text-xl font-bold tracking-tight text-[#101a1d] mt-1">Community Connector Marketplace</h2>
-              <p className="text-sm text-[#68707a] mt-0.5">Explore ready-to-publish connectors built by the community. Easily install with one click.</p>
+              <p className="text-sm text-[#68707a] mt-0.5">Explore ready-to-publish connectors built by the community. One-click install is coming soon.</p>
             </div>
             <div>
               <a 
-                href="https://github.com/achsah-systems/acsa" 
+                href="https://github.com/adetoye-dev/acsa" 
                 target="_blank" 
                 rel="noreferrer"
                 className="inline-flex items-center gap-2 rounded-[12px] border border-[#6f63ff]/20 bg-[#6f63ff]/5 px-4 py-2.5 text-[12px] font-bold text-[#6f63ff] transition hover:bg-[#6f63ff]/10 hover:border-[#6f63ff]/30 shadow-sm"

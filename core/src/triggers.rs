@@ -4010,32 +4010,25 @@ pub enum TriggerError {
 
 // --- Built-in Pure Rust Authentication Layer ---
 
-fn hash_password(password: &str, salt: &str) -> String {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(salt.as_bytes()).expect("HMAC can take key of any size");
-    mac.update(password.as_bytes());
-    let mut result = mac.finalize().into_bytes();
+use argon2::{
+    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
+    Argon2,
+};
 
-    for _ in 0..5000 {
-        let mut inner_mac =
-            Hmac::<Sha256>::new_from_slice(salt.as_bytes()).expect("HMAC can take key of any size");
-        inner_mac.update(&result);
-        result = inner_mac.finalize().into_bytes();
-    }
-
-    BASE64.encode(result)
+fn hash_password(password: &str) -> Result<String, String> {
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    let password_hash =
+        argon2.hash_password(password.as_bytes(), &salt).map_err(|e| e.to_string())?.to_string();
+    Ok(password_hash)
 }
 
 fn verify_password(password: &str, stored: &str) -> bool {
-    let parts: Vec<&str> = stored.split('$').collect();
-    if parts.len() != 2 {
-        return false;
-    }
-    let salt = parts[0];
-    let expected_hash = parts[1];
-    let computed_hash = hash_password(password, salt);
-    bool::from(computed_hash.as_bytes().ct_eq(expected_hash.as_bytes()))
+    let parsed_hash = match PasswordHash::new(stored) {
+        Ok(hash) => hash,
+        Err(_) => return false,
+    };
+    Argon2::default().verify_password(password.as_bytes(), &parsed_hash).is_ok()
 }
 
 fn get_token_master_key() -> Vec<u8> {
@@ -4144,9 +4137,16 @@ async fn signup_handler(
         }
     }
 
-    let salt = uuid::Uuid::new_v4().to_string();
-    let hashed = hash_password(password, &salt);
-    let stored_hash = format!("{}${}", salt, hashed);
+    let stored_hash = match hash_password(password) {
+        Ok(h) => h,
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to hash password: {}", err) })),
+            )
+                .into_response();
+        }
+    };
 
     match store.create_user(&email, &stored_hash).await {
         Ok(user_id) => {
