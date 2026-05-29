@@ -1969,8 +1969,11 @@ async fn handle_webhook(
     }
 }
 
-async fn list_pending_human_tasks(State(state): State<AppState>) -> impl IntoResponse {
-    match state.engine.store().list_pending_human_tasks().await {
+async fn list_pending_human_tasks(
+    State(state): State<AppState>,
+    axum::Extension(UserId(user_id)): axum::Extension<UserId>,
+) -> impl IntoResponse {
+    match state.engine.store().list_pending_human_tasks(&user_id).await {
         Ok(tasks) => (
             StatusCode::OK,
             Json(json!({
@@ -1985,6 +1988,7 @@ async fn list_pending_human_tasks(State(state): State<AppState>) -> impl IntoRes
 
 async fn resolve_human_task(
     State(state): State<AppState>,
+    axum::Extension(UserId(user_id)): axum::Extension<UserId>,
     AxumPath(task_id): AxumPath<String>,
     body: Bytes,
 ) -> impl IntoResponse {
@@ -2002,7 +2006,7 @@ async fn resolve_human_task(
         }
     };
 
-    match state.engine.resume_human_task(&task_id, payload).await {
+    match state.engine.resume_human_task(&user_id, &task_id, payload).await {
         Ok(summary) => (
             StatusCode::OK,
             Json(json!({

@@ -1623,16 +1623,21 @@ impl RunStore {
         map_human_task_row(row)
     }
 
-    pub async fn list_pending_human_tasks(&self) -> Result<Vec<HumanTaskRecord>, StorageError> {
+    pub async fn list_pending_human_tasks(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<HumanTaskRecord>, StorageError> {
         let rows = sqlx::query(
             r#"
-            SELECT id, run_id, step_run_id, step_id, kind, status, prompt, field, details, response, created_at, completed_at
-            FROM human_tasks
-            WHERE status = ?
-            ORDER BY created_at ASC
+            SELECT h.id, h.run_id, h.step_run_id, h.step_id, h.kind, h.status, h.prompt, h.field, h.details, h.response, h.created_at, h.completed_at
+            FROM human_tasks h
+            JOIN runs r ON h.run_id = r.id
+            WHERE h.status = ? AND r.user_id = ?
+            ORDER BY h.created_at ASC
             "#,
         )
         .bind(HumanTaskStatus::Pending.as_str())
+        .bind(user_id)
         .fetch_all(&self.pool)
         .await?;
 

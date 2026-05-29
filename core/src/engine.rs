@@ -499,6 +499,7 @@ impl WorkflowEngine {
 
     pub async fn resume_human_task(
         &self,
+        user_id: &str,
         task_id: &str,
         response: Value,
     ) -> Result<ExecutionSummary, EngineError> {
@@ -509,6 +510,9 @@ impl WorkflowEngine {
         }
 
         let run = self.store.get_run(&task.run_id).await?;
+        if run.user_id != user_id {
+            return Err(EngineError::RunNotFound { run_id: run.id });
+        }
         if run.status != "paused" {
             return Err(EngineError::RunNotPaused { run_id: run.id });
         }
@@ -1077,6 +1081,8 @@ pub enum EngineError {
     ParseRunWorkflowSnapshot { run_id: String, message: String },
     #[error("human task {task_id} is no longer pending")]
     HumanTaskNotPending { task_id: String },
+    #[error("Run {run_id} was not found or access was denied")]
+    RunNotFound { run_id: String },
     #[error("run {run_id} is not paused")]
     RunNotPaused { run_id: String },
     #[error("human task {task_id} has unsupported kind {kind}")]
@@ -2109,12 +2115,12 @@ steps:
             .starts_with("sha256:"));
 
         let resumed = engine
-            .resume_human_task(&paused.pending_tasks[0].id, json!({ "approved": true }))
+            .resume_human_task("local", &paused.pending_tasks[0].id, json!({ "approved": true }))
             .await
             .expect("workflow should resume");
         let runs = store.list_runs("local").await.expect("runs should be queryable");
         let pending_tasks = store
-            .list_pending_human_tasks()
+            .list_pending_human_tasks("local")
             .await
             .expect("pending human tasks should be queryable");
 
@@ -2177,7 +2183,7 @@ steps:
             .expect("legacy workflow snapshot should update");
 
         let resumed = engine
-            .resume_human_task(&paused.pending_tasks[0].id, json!({ "approved": true }))
+            .resume_human_task("local", &paused.pending_tasks[0].id, json!({ "approved": true }))
             .await
             .expect("legacy workflow snapshot should resume");
 
