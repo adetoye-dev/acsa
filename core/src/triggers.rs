@@ -4036,9 +4036,8 @@ fn verify_password(password: &str, stored: &str) -> bool {
 }
 
 fn get_token_master_key() -> Vec<u8> {
-    env::var("ACSA_CREDENTIAL_MASTER_KEY")
-        .or_else(|_| env::var("ACSA_ENGINE_AUTH_TOKEN"))
-        .unwrap_or_else(|_| "acsa-fallback-master-key-should-be-changed-in-production".to_string())
+    env::var("ACSA_SESSION_SECRET")
+        .expect("ACSA_SESSION_SECRET environment variable is required to sign sessions")
         .into_bytes()
 }
 
