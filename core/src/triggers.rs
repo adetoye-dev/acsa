@@ -33,7 +33,7 @@ use axum::{
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
+    Extension, Json, Router,
 };
 use chrono::Utc;
 use cron::Schedule;
@@ -535,6 +535,7 @@ pub async fn serve(
     };
     let protected_routes = Router::new()
         .route("/metrics", get(export_metrics))
+        .route("/api/auth/me", get(me_handler))
         .route("/api/credentials", get(list_credentials).post(upsert_credential))
         .route("/api/credentials/{credential_name}", axum::routing::delete(delete_credential))
         .route("/api/connectors", get(list_connectors))
@@ -565,9 +566,12 @@ pub async fn serve(
         .route("/api/workflows/{workflow_id}/run-async", post(run_workflow_async))
         .route("/human-tasks", get(list_pending_human_tasks))
         .route("/human-tasks/{task_id}/resolve", post(resolve_human_task))
+        .route_layer(middleware::from_fn_with_state(state.clone(), authenticate_user))
         .route_layer(middleware::from_fn_with_state(state.clone(), enforce_engine_access));
     let app = Router::new()
         .route("/healthz", get(health))
+        .route("/api/auth/signup", post(signup_handler))
+        .route("/api/auth/login", post(login_handler))
         .merge(protected_routes)
         .route("/{*hook}", post(handle_webhook))
         .with_state(state);
@@ -735,8 +739,11 @@ async fn list_node_catalog(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
-async fn list_connectors(State(state): State<AppState>) -> impl IntoResponse {
-    match connector_inventory(state.engine.store(), &state.connectors_dir).await {
+async fn list_connectors(
+    Extension(UserId(user_id)): Extension<UserId>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    match connector_inventory(state.engine.store(), &state.connectors_dir, &user_id).await {
         Ok(inventory) => (StatusCode::OK, Json(json!(inventory))),
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
@@ -744,12 +751,15 @@ async fn list_connectors(State(state): State<AppState>) -> impl IntoResponse {
     }
 }
 
-async fn list_starter_connector_packs(State(state): State<AppState>) -> impl IntoResponse {
+async fn list_starter_connector_packs(
+    Extension(UserId(user_id)): Extension<UserId>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
     if let Err(error) = ensure_shipped_asset_records(state.engine.store()).await {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })));
     }
 
-    match starter_connector_pack_views(state.engine.store(), &state.connectors_dir).await {
+    match starter_connector_pack_views(state.engine.store(), &state.connectors_dir, &user_id).await {
         Ok(views) => (StatusCode::OK, Json(json!(views))),
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
@@ -786,6 +796,7 @@ async fn list_node_records(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 async fn install_starter_connector_pack_endpoint(
+    Extension(UserId(user_id)): Extension<UserId>,
     State(state): State<AppState>,
     AxumPath(pack_id): AxumPath<String>,
 ) -> Response {
@@ -824,7 +835,7 @@ async fn install_starter_connector_pack_endpoint(
                 return connector_error_response(error);
             }
             let pack_states =
-                match starter_pack_install_state_map(state.engine.store(), &state.connectors_dir)
+                match starter_pack_install_state_map(state.engine.store(), &state.connectors_dir, &user_id)
                     .await
                 {
                     Ok(states) => states,
@@ -844,6 +855,7 @@ async fn install_starter_connector_pack_endpoint(
 }
 
 async fn create_connector(
+    Extension(UserId(user_id)): Extension<UserId>,
     State(state): State<AppState>,
     Json(request): Json<CreateConnectorRequest>,
 ) -> Response {
@@ -874,7 +886,7 @@ async fn create_connector(
             {
                 return connector_error_response(error);
             }
-            match connector_inventory(state.engine.store(), &state.connectors_dir).await {
+            match connector_inventory(state.engine.store(), &state.connectors_dir, &user_id).await {
                 Ok(inventory) => match inventory
                     .connectors
                     .into_iter()
@@ -1038,6 +1050,7 @@ async fn update_connector_record(
 }
 
 async fn apply_connector_update(
+    Extension(UserId(user_id)): Extension<UserId>,
     State(state): State<AppState>,
     AxumPath(connector_type): AxumPath<String>,
     Json(_request): Json<ApplyAssetUpdateRequest>,
@@ -1077,7 +1090,7 @@ async fn apply_connector_update(
     }
 
     match install_shipped_connector_asset(store, &state.connectors_dir, &asset).await {
-        Ok(()) => match connector_inventory(store, &state.connectors_dir).await {
+        Ok(()) => match connector_inventory(store, &state.connectors_dir, &user_id).await {
             Ok(inventory) => {
                 let Some(updated) =
                     inventory.connectors.into_iter().find(|item| item.type_name == connector_type)
@@ -1339,8 +1352,11 @@ async fn test_connector(
     }
 }
 
-async fn list_workflows(State(state): State<AppState>) -> impl IntoResponse {
-    match workflow_inventory(state.engine.store(), &state.connectors_dir, &state.workflows_dir)
+async fn list_workflows(
+    State(state): State<AppState>,
+    Extension(UserId(user_id)): Extension<UserId>,
+) -> impl IntoResponse {
+    match workflow_inventory(state.engine.store(), &state.connectors_dir, &state.workflows_dir, &user_id)
         .await
     {
         Ok(inventory) => (StatusCode::OK, Json(json!(inventory))),
@@ -1543,7 +1559,11 @@ pub async fn sync_repo_authored_connector_assets(
     Ok(())
 }
 
-async fn list_runs(State(state): State<AppState>, Query(query): Query<RunsQuery>) -> Response {
+async fn list_runs(
+    State(state): State<AppState>,
+    Extension(UserId(user_id)): Extension<UserId>,
+    Query(query): Query<RunsQuery>,
+) -> Response {
     let page = query.page.unwrap_or(1).max(1);
     let page_size = query.page_size.unwrap_or(12).clamp(1, 100);
     let run_query = RunQuery {
@@ -1553,6 +1573,7 @@ async fn list_runs(State(state): State<AppState>, Query(query): Query<RunsQuery>
         started_before: None,
         status: query.status,
         workflow_name: query.workflow_name,
+        user_id: Some(user_id),
     };
 
     match state.engine.store().list_runs_page(&run_query).await {
@@ -1575,8 +1596,19 @@ async fn list_runs(State(state): State<AppState>, Query(query): Query<RunsQuery>
 
 async fn get_run_detail(
     State(state): State<AppState>,
+    Extension(UserId(user_id)): Extension<UserId>,
     AxumPath(run_id): AxumPath<String>,
 ) -> Response {
+    match state.engine.store().get_run_user_id(&run_id).await {
+        Ok(run_owner) if run_owner == user_id => {}
+        Ok(_) => {
+            return (StatusCode::FORBIDDEN, Json(json!({ "error": "access denied" }))).into_response();
+        }
+        Err(_) => {
+            return (StatusCode::NOT_FOUND, Json(json!({ "error": "run not found" }))).into_response();
+        }
+    }
+
     match state.engine.store().get_run_detail(&run_id).await {
         Ok((run, step_runs, human_tasks)) => (
             StatusCode::OK,
@@ -1604,9 +1636,20 @@ async fn get_run_detail(
 
 async fn get_run_logs(
     State(state): State<AppState>,
+    Extension(UserId(user_id)): Extension<UserId>,
     AxumPath(run_id): AxumPath<String>,
     Query(query): Query<RunLogsQuery>,
 ) -> Response {
+    match state.engine.store().get_run_user_id(&run_id).await {
+        Ok(run_owner) if run_owner == user_id => {}
+        Ok(_) => {
+            return (StatusCode::FORBIDDEN, Json(json!({ "error": "access denied" }))).into_response();
+        }
+        Err(_) => {
+            return (StatusCode::NOT_FOUND, Json(json!({ "error": "run not found" }))).into_response();
+        }
+    }
+
     let page = query.page.unwrap_or(1).max(1);
     let page_size = query.page_size.unwrap_or(50).clamp(1, 200);
     let log_query = LogQuery {
@@ -1631,12 +1674,14 @@ async fn get_run_logs(
 
 async fn get_workflow(
     State(state): State<AppState>,
+    Extension(UserId(user_id)): Extension<UserId>,
     AxumPath(workflow_id): AxumPath<String>,
 ) -> axum::response::Response {
     match read_workflow_document(
         state.engine.store(),
         &state.connectors_dir,
         &state.workflows_dir,
+        &user_id,
         &workflow_id,
     )
     .await
@@ -1648,12 +1693,14 @@ async fn get_workflow(
 
 async fn create_workflow(
     State(state): State<AppState>,
+    Extension(UserId(user_id)): Extension<UserId>,
     Json(request): Json<CreateWorkflowRequest>,
 ) -> axum::response::Response {
     match create_workflow_document(
         state.engine.store(),
         &state.connectors_dir,
         &state.workflows_dir,
+        &user_id,
         request,
     )
     .await
@@ -1665,6 +1712,7 @@ async fn create_workflow(
 
 async fn save_workflow(
     State(state): State<AppState>,
+    Extension(UserId(user_id)): Extension<UserId>,
     AxumPath(workflow_id): AxumPath<String>,
     Json(request): Json<SaveWorkflowRequest>,
 ) -> axum::response::Response {
@@ -1672,6 +1720,7 @@ async fn save_workflow(
         state.engine.store(),
         &state.connectors_dir,
         &state.workflows_dir,
+        &user_id,
         &workflow_id,
         &request.yaml,
     )
@@ -1684,9 +1733,10 @@ async fn save_workflow(
 
 async fn delete_workflow(
     State(state): State<AppState>,
+    Extension(UserId(user_id)): Extension<UserId>,
     AxumPath(workflow_id): AxumPath<String>,
 ) -> axum::response::Response {
-    match delete_workflow_document(state.engine.store(), &workflow_id).await {
+    match delete_workflow_document(state.engine.store(), &user_id, &workflow_id).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => workflow_error_response(error),
     }
@@ -1694,6 +1744,7 @@ async fn delete_workflow(
 
 async fn duplicate_workflow(
     State(state): State<AppState>,
+    Extension(UserId(user_id)): Extension<UserId>,
     AxumPath(workflow_id): AxumPath<String>,
     Json(request): Json<DuplicateWorkflowRequest>,
 ) -> axum::response::Response {
@@ -1701,6 +1752,7 @@ async fn duplicate_workflow(
         state.engine.store(),
         &state.connectors_dir,
         &state.workflows_dir,
+        &user_id,
         &workflow_id,
         &request.target_id,
     )
@@ -1713,6 +1765,7 @@ async fn duplicate_workflow(
 
 async fn rename_workflow(
     State(state): State<AppState>,
+    Extension(UserId(user_id)): Extension<UserId>,
     AxumPath(workflow_id): AxumPath<String>,
     Json(request): Json<RenameWorkflowRequest>,
 ) -> axum::response::Response {
@@ -1720,6 +1773,7 @@ async fn rename_workflow(
         state.engine.store(),
         &state.connectors_dir,
         &state.workflows_dir,
+        &user_id,
         &workflow_id,
         request,
     )
@@ -1732,10 +1786,11 @@ async fn rename_workflow(
 
 async fn run_workflow(
     State(state): State<AppState>,
+    Extension(UserId(user_id)): Extension<UserId>,
     AxumPath(workflow_id): AxumPath<String>,
     Json(request): Json<RunWorkflowRequest>,
 ) -> axum::response::Response {
-    let record = match load_persisted_workflow_record(state.engine.store(), &workflow_id).await {
+    let record = match load_persisted_workflow_record(state.engine.store(), &user_id, &workflow_id).await {
         Ok(record) => record,
         Err(error) => return workflow_error_response(error),
     };
@@ -1757,11 +1812,15 @@ async fn run_workflow(
         "source": "ui",
         "workflow_id": workflow_id
     });
-    match state
-        .engine
-        .execute_plan_with_editor_snapshot(&plan, initial_payload, record.yaml.clone())
-        .await
-    {
+    let user_id_clone = user_id.clone();
+    let result = crate::storage::CURRENT_USER_ID.scope(user_id_clone, async move {
+        state
+            .engine
+            .execute_plan_with_editor_snapshot(&plan, initial_payload, record.yaml.clone())
+            .await
+    }).await;
+
+    match result {
         Ok(summary) => (
             StatusCode::ACCEPTED,
             Json(json!({
@@ -1784,10 +1843,11 @@ async fn run_workflow(
 
 async fn run_workflow_async(
     State(state): State<AppState>,
+    Extension(UserId(user_id)): Extension<UserId>,
     AxumPath(workflow_id): AxumPath<String>,
     Json(request): Json<RunWorkflowRequest>,
 ) -> axum::response::Response {
-    let record = match load_persisted_workflow_record(state.engine.store(), &workflow_id).await {
+    let record = match load_persisted_workflow_record(state.engine.store(), &user_id, &workflow_id).await {
         Ok(record) => record,
         Err(error) => return workflow_error_response(error),
     };
@@ -1809,11 +1869,15 @@ async fn run_workflow_async(
         "source": "ui",
         "workflow_id": workflow_id
     });
-    match state
-        .engine
-        .start_plan_with_editor_snapshot(plan, initial_payload, record.yaml.clone())
-        .await
-    {
+    let user_id_clone = user_id.clone();
+    let result = crate::storage::CURRENT_USER_ID.scope(user_id_clone, async move {
+        state
+            .engine
+            .start_plan_with_editor_snapshot(plan, initial_payload, record.yaml.clone())
+            .await
+    }).await;
+
+    match result {
         Ok(started) => (
             StatusCode::ACCEPTED,
             Json(json!({
@@ -2005,6 +2069,7 @@ async fn workflow_summary_context(
     store: &RunStore,
     connectors_dir: &Path,
     _workflows_dir: &Path,
+    user_id: &str,
 ) -> Result<WorkflowSummaryContext, TriggerError> {
     let connector_inspection = inspect_connectors(connectors_dir)?;
     let mut connector_states = connector_inspection
@@ -2022,7 +2087,7 @@ async fn workflow_summary_context(
     }
 
     let mut workflow_name_counts = BTreeMap::<String, usize>::new();
-    for record in store.list_workflows().await? {
+    for record in store.list_workflows(user_id).await? {
         let Ok(workflow) = parse_workflow_yaml(&record.yaml) else {
             continue;
         };
@@ -2035,7 +2100,7 @@ async fn workflow_summary_context(
         .map(|(workflow_name, _)| workflow_name.clone())
         .collect();
     let latest_runs =
-        latest_workflow_telemetry(store.latest_runs_for_workflows(&workflow_names).await?);
+        latest_workflow_telemetry(store.latest_runs_for_workflows(user_id, &workflow_names).await?);
 
     Ok(WorkflowSummaryContext { connector_states, latest_runs, workflow_name_counts })
 }
@@ -2074,10 +2139,11 @@ async fn workflow_summary_after_write(
     store: &RunStore,
     connectors_dir: &Path,
     workflows_dir: &Path,
+    user_id: &str,
     workflow_id: String,
     workflow: &Workflow,
 ) -> WorkflowSummary {
-    match workflow_summary_context(store, connectors_dir, workflows_dir).await {
+    match workflow_summary_context(store, connectors_dir, workflows_dir, user_id).await {
         Ok(context) => workflow_summary_from_context(workflow_id, workflow, &context),
         Err(error) => {
             warn!(
@@ -2114,6 +2180,7 @@ async fn create_workflow_document(
     store: &RunStore,
     connectors_dir: &Path,
     workflows_dir: &Path,
+    user_id: &str,
     request: CreateWorkflowRequest,
 ) -> Result<WorkflowDocumentResponse, TriggerError> {
     let document_state = parse_workflow_document_state(&request.yaml)?;
@@ -2128,7 +2195,7 @@ async fn create_workflow_document(
         &document_state.ui_detached_steps,
     )?;
     let response = match store
-        .create_workflow(&workflow_id, &document_state.workflow.name, &response_yaml)
+        .create_workflow(user_id, &workflow_id, &document_state.workflow.name, &response_yaml)
         .await
     {
         Ok(record) => WorkflowWriteResult { id: record.id, yaml: record.yaml },
@@ -2143,6 +2210,7 @@ async fn create_workflow_document(
             store,
             connectors_dir,
             workflows_dir,
+            user_id,
             workflow_id,
             &document_state.workflow,
         )
@@ -2151,9 +2219,9 @@ async fn create_workflow_document(
     })
 }
 
-async fn delete_workflow_document(store: &RunStore, workflow_id: &str) -> Result<(), TriggerError> {
+async fn delete_workflow_document(store: &RunStore, user_id: &str, workflow_id: &str) -> Result<(), TriggerError> {
     validate_workflow_id(workflow_id)?;
-    match store.delete_workflow(workflow_id).await {
+    match store.delete_workflow(user_id, workflow_id).await {
         Ok(()) => Ok(()),
         Err(crate::storage::StorageError::WorkflowNotFound(_)) => {
             Err(TriggerError::WorkflowNotFound { workflow_id: workflow_id.to_string() })
@@ -2166,11 +2234,12 @@ async fn duplicate_workflow_document(
     store: &RunStore,
     connectors_dir: &Path,
     workflows_dir: &Path,
+    user_id: &str,
     workflow_id: &str,
     target_id: &str,
 ) -> Result<WorkflowDocumentResponse, TriggerError> {
     let source_document =
-        read_workflow_document(store, connectors_dir, workflows_dir, workflow_id).await?;
+        read_workflow_document(store, connectors_dir, workflows_dir, user_id, workflow_id).await?;
     let mut document_state = parse_workflow_document_state(&source_document.yaml)?;
     document_state.workflow.name = format!("{} copy", document_state.workflow.name);
     validate_workflow_id(target_id)?;
@@ -2180,7 +2249,7 @@ async fn duplicate_workflow_document(
         &document_state.ui_detached_steps,
     )?;
     let response = match store
-        .create_workflow(target_id, &document_state.workflow.name, &response_yaml)
+        .create_workflow(user_id, target_id, &document_state.workflow.name, &response_yaml)
         .await
     {
         Ok(record) => WorkflowWriteResult { id: record.id, yaml: record.yaml },
@@ -2195,6 +2264,7 @@ async fn duplicate_workflow_document(
             store,
             connectors_dir,
             workflows_dir,
+            user_id,
             target_id.to_string(),
             &document_state.workflow,
         )
@@ -2207,6 +2277,7 @@ async fn rename_workflow_document(
     store: &RunStore,
     connectors_dir: &Path,
     workflows_dir: &Path,
+    user_id: &str,
     workflow_id: &str,
     request: RenameWorkflowRequest,
 ) -> Result<WorkflowDocumentResponse, TriggerError> {
@@ -2221,7 +2292,7 @@ async fn rename_workflow_document(
         Some(yaml) => parse_workflow_document_state(yaml)?,
         None => {
             let source_document =
-                read_workflow_document(store, connectors_dir, workflows_dir, workflow_id).await?;
+                read_workflow_document(store, connectors_dir, workflows_dir, user_id, workflow_id).await?;
             parse_workflow_document_state(&source_document.yaml)?
         }
     };
@@ -2235,6 +2306,7 @@ async fn rename_workflow_document(
     )?;
     let response = match store
         .rename_workflow(
+            user_id,
             workflow_id,
             &request.target_id,
             &document_state.workflow.name,
@@ -2258,6 +2330,7 @@ async fn rename_workflow_document(
             store,
             connectors_dir,
             workflows_dir,
+            user_id,
             response.id,
             &document_state.workflow,
         )
@@ -2269,11 +2342,12 @@ async fn rename_workflow_document(
 async fn connector_inventory(
     store: &RunStore,
     connectors_dir: &Path,
+    user_id: &str,
 ) -> Result<ConnectorInventoryResponse, TriggerError> {
     let asset_store_connectors_dir = store.asset_store_connectors_dir();
     let inspection =
         inspect_connectors_from_dirs(&[connectors_dir, asset_store_connectors_dir.as_path()])?;
-    let workflow_dependencies = connector_usage_by_workflow(store).await?;
+    let workflow_dependencies = connector_usage_by_workflow(store, user_id).await?;
     let connector_records = connector_record_map(store).await?;
     Ok(ConnectorInventoryResponse {
         connectors: inspection
@@ -2403,8 +2477,9 @@ fn parse_node_asset_base_type(record: &AssetRecord) -> Option<String> {
 async fn starter_connector_pack_views(
     store: &RunStore,
     connectors_dir: &Path,
+    user_id: &str,
 ) -> Result<Vec<StarterConnectorPackView>, TriggerError> {
-    let pack_states = starter_pack_install_state_map(store, connectors_dir).await?;
+    let pack_states = starter_pack_install_state_map(store, connectors_dir, user_id).await?;
     let packs = crate::starter_connector_packs::starter_connector_packs()
         .map_err(TriggerError::StarterPack)?;
     Ok(packs
@@ -2416,8 +2491,9 @@ async fn starter_connector_pack_views(
 async fn starter_pack_install_state_map(
     store: &RunStore,
     connectors_dir: &Path,
+    user_id: &str,
 ) -> Result<HashMap<String, ProductConnectorState>, TriggerError> {
-    let inventory = connector_inventory(store, connectors_dir).await?;
+    let inventory = connector_inventory(store, connectors_dir, user_id).await?;
     let mut states = HashMap::new();
 
     for connector in inventory.connectors {
@@ -2636,10 +2712,11 @@ async fn asset_record_map(
 
 async fn connector_usage_by_workflow(
     store: &RunStore,
+    user_id: &str,
 ) -> Result<HashMap<String, Vec<String>>, TriggerError> {
     let mut usage = HashMap::<String, HashSet<String>>::new();
 
-    for record in store.list_workflows().await? {
+    for record in store.list_workflows(user_id).await? {
         let Ok(workflow) = parse_workflow_yaml(&record.yaml) else {
             continue;
         };
@@ -3029,10 +3106,11 @@ fn parse_workflow_document_state(yaml: &str) -> Result<WorkflowDocumentState, Tr
 
 async fn load_persisted_workflow_record(
     store: &RunStore,
+    user_id: &str,
     workflow_id: &str,
 ) -> Result<WorkflowRecord, TriggerError> {
     validate_workflow_id(workflow_id)?;
-    match store.get_workflow(workflow_id).await {
+    match store.get_workflow(user_id, workflow_id).await {
         Ok(record) => Ok(record),
         Err(crate::storage::StorageError::WorkflowNotFound(_)) => {
             Err(TriggerError::WorkflowNotFound { workflow_id: workflow_id.to_string() })
@@ -3079,7 +3157,7 @@ async fn seed_workflows_from_directory_if_missing(
             &document_state.ui_detached_steps,
         )?;
         store
-            .create_workflow_if_missing(workflow_id, &document_state.workflow.name, &persisted_yaml)
+            .create_workflow_if_missing("local", workflow_id, &document_state.workflow.name, &persisted_yaml)
             .await?;
     }
 
@@ -3090,11 +3168,12 @@ async fn read_workflow_document(
     store: &RunStore,
     connectors_dir: &Path,
     workflows_dir: &Path,
+    user_id: &str,
     workflow_id: &str,
 ) -> Result<WorkflowDocumentResponse, TriggerError> {
-    let record = load_persisted_workflow_record(store, workflow_id).await?;
+    let record = load_persisted_workflow_record(store, user_id, workflow_id).await?;
     let document_state = parse_workflow_document_state(&record.yaml)?;
-    let context = workflow_summary_context(store, connectors_dir, workflows_dir).await?;
+    let context = workflow_summary_context(store, connectors_dir, workflows_dir, user_id).await?;
 
     Ok(WorkflowDocumentResponse {
         id: workflow_id.to_string(),
@@ -3115,6 +3194,7 @@ async fn save_workflow_document(
     store: &RunStore,
     connectors_dir: &Path,
     workflows_dir: &Path,
+    user_id: &str,
     workflow_id: &str,
     yaml: &str,
 ) -> Result<WorkflowDocumentResponse, TriggerError> {
@@ -3126,7 +3206,7 @@ async fn save_workflow_document(
         &document_state.ui_detached_steps,
     )?;
     let response = match store
-        .update_workflow(workflow_id, &document_state.workflow.name, &response_yaml)
+        .update_workflow(user_id, workflow_id, &document_state.workflow.name, &response_yaml)
         .await
     {
         Ok(record) => WorkflowWriteResult { id: record.id, yaml: record.yaml },
@@ -3141,6 +3221,7 @@ async fn save_workflow_document(
             store,
             connectors_dir,
             workflows_dir,
+            user_id,
             workflow_id.to_string(),
             &document_state.workflow,
         )
@@ -3450,10 +3531,11 @@ async fn workflow_inventory(
     store: &RunStore,
     connectors_dir: &Path,
     workflows_dir: &Path,
+    user_id: &str,
 ) -> Result<WorkflowInventoryResponse, TriggerError> {
     let mut invalid_files = Vec::new();
     let mut parsed_workflows = Vec::new();
-    for record in store.list_workflows().await? {
+    for record in store.list_workflows(user_id).await? {
         match parse_workflow_yaml(&record.yaml) {
             Ok(workflow) => parsed_workflows.push((record.id, workflow)),
             Err(error) => invalid_files.push(InvalidWorkflowFile {
@@ -3464,7 +3546,7 @@ async fn workflow_inventory(
         };
     }
 
-    let context = workflow_summary_context(store, connectors_dir, workflows_dir).await?;
+    let context = workflow_summary_context(store, connectors_dir, workflows_dir, user_id).await?;
 
     let mut workflows = Vec::new();
     for (workflow_id, workflow) in parsed_workflows {
@@ -3695,8 +3777,11 @@ fn build_webhook_workflow(plan: WorkflowPlan) -> Result<WebhookWorkflow, Trigger
     Ok(WebhookWorkflow { path, plan, signature_auth, token_auth })
 }
 
-async fn list_credentials(State(state): State<AppState>) -> Response {
-    match state.engine.store().list_credentials().await {
+async fn list_credentials(
+    State(state): State<AppState>,
+    Extension(UserId(user_id)): Extension<UserId>,
+) -> Response {
+    match state.engine.store().list_credentials(&user_id).await {
         Ok(records) => {
             let credentials = records.into_iter().map(credential_view).collect::<Vec<_>>();
             (StatusCode::OK, Json(json!(CredentialsResponse { credentials }))).into_response()
@@ -3710,6 +3795,7 @@ async fn list_credentials(State(state): State<AppState>) -> Response {
 
 async fn upsert_credential(
     State(state): State<AppState>,
+    Extension(UserId(user_id)): Extension<UserId>,
     Json(request): Json<UpsertCredentialRequest>,
 ) -> Response {
     let trimmed_name = request.name.trim();
@@ -3725,7 +3811,7 @@ async fn upsert_credential(
         });
     }
 
-    match state.engine.store().upsert_credential(trimmed_name, trimmed_value).await {
+    match state.engine.store().upsert_credential(&user_id, trimmed_name, trimmed_value).await {
         Ok(record) => (StatusCode::OK, Json(json!(credential_view(record)))).into_response(),
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
@@ -3736,13 +3822,14 @@ async fn upsert_credential(
 
 async fn delete_credential(
     State(state): State<AppState>,
+    Extension(UserId(user_id)): Extension<UserId>,
     AxumPath(credential_name): AxumPath<String>,
 ) -> Response {
     if let Err(error) = validate_credential_name(&credential_name) {
         return credential_validation_error_response(error);
     }
 
-    match state.engine.store().delete_credential(credential_name.trim()).await {
+    match state.engine.store().delete_credential(&user_id, credential_name.trim()).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
@@ -3892,8 +3979,260 @@ pub enum TriggerError {
     RemoteBindingRequiresExplicitOptIn { bind_addr: SocketAddr },
 }
 
+// --- Built-in Pure Rust Authentication Layer ---
+
+fn hash_password(password: &str, salt: &str) -> String {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    let mut mac = Hmac::<Sha256>::new_from_slice(salt.as_bytes())
+        .expect("HMAC can take key of any size");
+    mac.update(password.as_bytes());
+    let mut result = mac.finalize().into_bytes();
+
+    for _ in 0..5000 {
+        let mut inner_mac = Hmac::<Sha256>::new_from_slice(salt.as_bytes())
+            .expect("HMAC can take key of any size");
+        inner_mac.update(&result);
+        result = inner_mac.finalize().into_bytes();
+    }
+
+    BASE64.encode(result)
+}
+
+fn verify_password(password: &str, stored: &str) -> bool {
+    let parts: Vec<&str> = stored.split('$').collect();
+    if parts.len() != 2 {
+        return false;
+    }
+    let salt = parts[0];
+    let expected_hash = parts[1];
+    let computed_hash = hash_password(password, salt);
+    bool::from(computed_hash.as_bytes().ct_eq(expected_hash.as_bytes()))
+}
+
+fn get_token_master_key() -> Vec<u8> {
+    env::var("ACSA_CREDENTIAL_MASTER_KEY")
+        .or_else(|_| env::var("ACSA_ENGINE_AUTH_TOKEN"))
+        .unwrap_or_else(|_| "acsa-fallback-master-key-should-be-changed-in-production".to_string())
+        .into_bytes()
+}
+
+fn generate_session_token(user_id: &str) -> String {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    let expiry = Utc::now().timestamp() + 30 * 24 * 60 * 60; // 30 days
+    let payload = format!("{}.{}", BASE64.encode(user_id), expiry);
+    
+    let key = get_token_master_key();
+    let mut mac = Hmac::<Sha256>::new_from_slice(&key)
+        .expect("HMAC can take key of any size");
+    mac.update(payload.as_bytes());
+    let signature = BASE64.encode(mac.finalize().into_bytes());
+    
+    format!("{}.{}", payload, signature)
+}
+
+fn verify_session_token(token: &str) -> Result<String, String> {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return Err("invalid token format".to_string());
+    }
+    let user_id_b64 = parts[0];
+    let expiry_str = parts[1];
+    let signature = parts[2];
+    
+    let payload = format!("{}.{}", user_id_b64, expiry_str);
+    
+    let key = get_token_master_key();
+    let mut mac = Hmac::<Sha256>::new_from_slice(&key)
+        .expect("HMAC can take key of any size");
+    mac.update(payload.as_bytes());
+    let expected_signature = BASE64.encode(mac.finalize().into_bytes());
+    
+    if !bool::from(signature.as_bytes().ct_eq(expected_signature.as_bytes())) {
+        return Err("invalid token signature".to_string());
+    }
+    
+    let expiry = expiry_str.parse::<i64>().map_err(|_| "invalid expiry timestamp".to_string())?;
+    if Utc::now().timestamp() > expiry {
+        return Err("session expired".to_string());
+    }
+    
+    let user_id_bytes = BASE64.decode(user_id_b64).map_err(|_| "invalid user_id encoding".to_string())?;
+    let user_id = String::from_utf8(user_id_bytes).map_err(|_| "invalid utf8 user_id".to_string())?;
+    
+    Ok(user_id)
+}
+
+#[derive(Debug, Deserialize)]
+struct AuthPayload {
+    email: String,
+    password: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct UserId(pub String);
+
+async fn signup_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<AuthPayload>,
+) -> impl IntoResponse {
+    let email = payload.email.trim().to_lowercase();
+    let password = payload.password.trim();
+
+    if email.is_empty() || password.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "email and password must not be empty" })),
+        ).into_response();
+    }
+
+    if password.len() < 8 {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "password must be at least 8 characters long" })),
+        ).into_response();
+    }
+
+    let store = state.engine.store();
+
+    match store.get_user_by_email(&email).await {
+        Ok(Some(_)) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({ "error": "a user with this email already exists" })),
+            ).into_response();
+        }
+        Ok(None) => {}
+        Err(err) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("database error: {}", err) })),
+            ).into_response();
+        }
+    }
+
+    let salt = uuid::Uuid::new_v4().to_string();
+    let hashed = hash_password(password, &salt);
+    let stored_hash = format!("{}${}", salt, hashed);
+
+    match store.create_user(&email, &stored_hash).await {
+        Ok(user_id) => {
+            let token = generate_session_token(&user_id);
+            (
+                StatusCode::CREATED,
+                Json(json!({ "token": token, "email": email, "id": user_id })),
+            ).into_response()
+        }
+        Err(err) => {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("failed to create user: {}", err) })),
+            ).into_response()
+        }
+    }
+}
+
+async fn login_handler(
+    State(state): State<AppState>,
+    Json(payload): Json<AuthPayload>,
+) -> impl IntoResponse {
+    let email = payload.email.trim().to_lowercase();
+    let password = payload.password.trim();
+
+    let store = state.engine.store();
+
+    match store.get_user_by_email(&email).await {
+        Ok(Some((user_id, stored_hash))) => {
+            if verify_password(password, &stored_hash) {
+                let token = generate_session_token(&user_id);
+                (
+                    StatusCode::OK,
+                    Json(json!({ "token": token, "email": email, "id": user_id })),
+                ).into_response()
+            } else {
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({ "error": "invalid email or password" })),
+                ).into_response()
+            }
+        }
+        Ok(None) => {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": "invalid email or password" })),
+            ).into_response()
+        }
+        Err(err) => {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("database error: {}", err) })),
+            ).into_response()
+        }
+    }
+}
+
+async fn me_handler(
+    axum::Extension(UserId(user_id)): axum::Extension<UserId>,
+) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        Json(json!({ "id": user_id })),
+    ).into_response()
+}
+
+async fn authenticate_user(
+    State(_state): State<AppState>,
+    mut request: Request<axum::body::Body>,
+    next: Next,
+) -> Response {
+    if env_flag("ACSA_DISABLE_AUTH") {
+        request.extensions_mut().insert(UserId("local".to_string()));
+        return next.run(request).await;
+    }
+
+    let auth_header = request.headers()
+        .get(AUTHORIZATION)
+        .and_then(|val| val.to_str().ok());
+
+    let token = auth_header
+        .and_then(|val| val.strip_prefix("Bearer "))
+        .map(str::trim)
+        .or_else(|| {
+            request.headers()
+                .get(axum::http::header::COOKIE)
+                .and_then(|val| val.to_str().ok())
+                .and_then(|cookie_str| {
+                    cookie_str.split(';')
+                        .map(str::trim)
+                        .find(|cookie| cookie.starts_with("acsa_session="))
+                        .map(|cookie| cookie["acsa_session=".len()..].trim())
+                })
+        });
+
+    let Some(token) = token else {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "unauthorized: missing session token" })),
+        ).into_response();
+    };
+
+    match verify_session_token(token) {
+        Ok(user_id) => {
+            request.extensions_mut().insert(UserId(user_id));
+            next.run(request).await
+        }
+        Err(err) => {
+            (
+                StatusCode::UNAUTHORIZED,
+                Json(json!({ "error": format!("unauthorized: invalid session token: {}", err) })),
+            ).into_response()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::triggers::UserId;
     use std::collections::{BTreeMap, HashMap};
 
     use axum::{
@@ -4422,7 +4761,12 @@ mod tests {
         install_starter_connector_pack(&state.engine.store().asset_store_connectors_dir(), &pack)
             .expect("starter pack should install");
 
-        let response = list_starter_connector_packs(AxumState(state.clone())).await.into_response();
+        let response = list_starter_connector_packs(
+            axum::Extension(UserId("local".to_string())),
+            AxumState(state.clone()),
+        )
+        .await
+        .into_response();
 
         assert_eq!(response.status(), StatusCode::OK);
         let payload =
@@ -4454,6 +4798,7 @@ mod tests {
         let state = starter_pack_test_state(&temp_dir).await;
 
         let response = install_starter_connector_pack_endpoint(
+            axum::Extension(UserId("local".to_string())),
             AxumState(state.clone()),
             AxumPath("github-issue-create".to_string()),
         )
@@ -4477,6 +4822,7 @@ mod tests {
             .exists());
 
         let second_response = install_starter_connector_pack_endpoint(
+            axum::Extension(UserId("local".to_string())),
             AxumState(state.clone()),
             AxumPath("github-issue-create".to_string()),
         )
@@ -4501,6 +4847,7 @@ mod tests {
         let state = starter_pack_test_state(&temp_dir).await;
 
         let response = install_starter_connector_pack_endpoint(
+            axum::Extension(UserId("local".to_string())),
             AxumState(state.clone()),
             AxumPath("github-issue-create".to_string()),
         )
@@ -4528,6 +4875,7 @@ mod tests {
         let state = starter_pack_test_state(&temp_dir).await;
 
         let response = create_connector(
+            axum::Extension(UserId("local".to_string())),
             AxumState(state.clone()),
             Json(CreateConnectorRequest {
                 name: "Sample Echo".to_string(),
@@ -4559,6 +4907,7 @@ mod tests {
         let state = starter_pack_test_state(&temp_dir).await;
 
         let create_response = create_connector(
+            axum::Extension(UserId("local".to_string())),
             AxumState(state.clone()),
             Json(CreateConnectorRequest {
                 name: "Sample Echo".to_string(),
@@ -4650,6 +4999,7 @@ mod tests {
             .expect("update sync should succeed");
 
         let response = apply_connector_update(
+            axum::Extension(UserId("local".to_string())),
             AxumState(state.clone()),
             AxumPath("ship_demo".to_string()),
             Json(ApplyAssetUpdateRequest),
@@ -5067,6 +5417,7 @@ steps:
                 .expect("workflows should seed");
             let run = store
                 .start_run(
+                    "local",
                     "customer intake",
                     "sha256:exact-workflow",
                     "exact workflow snapshot",
@@ -5077,7 +5428,7 @@ steps:
                 .expect("run should start");
             store.complete_run_success(&run.id).await.expect("run should complete");
 
-            workflow_inventory(&store, &connectors_dir, &workflows_dir)
+            workflow_inventory(&store, &connectors_dir, &workflows_dir, "local")
                 .await
                 .expect("inventory should build")
         });
@@ -5132,6 +5483,7 @@ steps:
                 .expect("workflows should seed");
             let run = store
                 .start_run(
+                    "local",
                     "customer intake",
                     "sha256:exact-workflow",
                     "exact workflow snapshot",
@@ -5142,11 +5494,11 @@ steps:
                 .expect("run should start");
             store.complete_run_success(&run.id).await.expect("run should complete");
 
-            let inventory = workflow_inventory(&store, &connectors_dir, &workflows_dir)
+            let inventory = workflow_inventory(&store, &connectors_dir, &workflows_dir, "local")
                 .await
                 .expect("inventory should build");
             let document =
-                read_workflow_document(&store, &connectors_dir, &workflows_dir, "customer-intake")
+                read_workflow_document(&store, &connectors_dir, &workflows_dir, "local", "customer-intake")
                     .await
                     .expect("workflow document should read");
             (inventory, document)
@@ -5191,6 +5543,7 @@ steps:
                 &store,
                 &connectors_dir,
                 &workflows_dir,
+                "local",
                 CreateWorkflowRequest {
                     id: Some("customer-intake".to_string()),
                     yaml: r#"
@@ -5240,6 +5593,7 @@ steps:
                 &store,
                 &connectors_dir,
                 &workflows_dir,
+                "local",
                 CreateWorkflowRequest {
                     id: Some("blank-workflow".to_string()),
                     yaml: r#"
@@ -5315,7 +5669,7 @@ steps:
             seed_workflows_from_directory_if_missing(&store, &workflows_dir)
                 .await
                 .expect("workflows should seed");
-            workflow_inventory(&store, &connectors_dir, &workflows_dir)
+            workflow_inventory(&store, &connectors_dir, &workflows_dir, "local")
                 .await
                 .expect("inventory should build")
         });
@@ -5407,7 +5761,7 @@ steps:
             seed_workflows_from_directory_if_missing(&store, &workflows_dir)
                 .await
                 .expect("workflows should seed");
-            workflow_inventory(&store, &connectors_dir, &workflows_dir)
+            workflow_inventory(&store, &connectors_dir, &workflows_dir, "local")
                 .await
                 .expect("inventory should build")
         });
@@ -5480,6 +5834,7 @@ steps:
                 .expect("workflows should seed");
             let run = store
                 .start_run(
+                    "local",
                     "customer intake",
                     "sha256:exact-workflow",
                     "exact workflow snapshot",
@@ -5490,7 +5845,7 @@ steps:
                 .expect("run should start");
             store.complete_run_success(&run.id).await.expect("run should complete");
 
-            let inventory = workflow_inventory(&store, &connectors_dir, &workflows_dir)
+            let inventory = workflow_inventory(&store, &connectors_dir, &workflows_dir, "local")
                 .await
                 .expect("inventory should build");
 
@@ -5498,6 +5853,7 @@ steps:
                 &store,
                 &connectors_dir,
                 &workflows_dir,
+                "local",
                 "customer-intake",
                 r#"
 version: v1
@@ -5523,6 +5879,7 @@ steps:
                 &store,
                 &connectors_dir,
                 &workflows_dir,
+                "local",
                 "customer-intake",
                 RenameWorkflowRequest {
                     name: "customer intake".to_string(),
@@ -5656,7 +6013,7 @@ steps:
             seed_workflows_from_directory_if_missing(&store, &workflows_dir)
                 .await
                 .expect("workflows should seed");
-            connector_inventory(&store, &connectors_dir)
+            connector_inventory(&store, &connectors_dir, "local")
                 .await
                 .expect("connector inventory should build")
         });
@@ -5734,7 +6091,7 @@ steps:
                 .await
                 .expect("connector record should persist");
 
-            connector_inventory(&store, &connectors_dir)
+            connector_inventory(&store, &connectors_dir, "local")
                 .await
                 .expect("connector inventory should build")
         });
@@ -5815,7 +6172,7 @@ steps:
                 .await
                 .expect("asset record should persist");
 
-            connector_inventory(&store, &connectors_dir)
+            connector_inventory(&store, &connectors_dir, "local")
                 .await
                 .expect("connector inventory should build")
         });
@@ -5853,6 +6210,7 @@ steps:
                 &store,
                 &connectors_dir,
                 &workflows_dir,
+                "local",
                 CreateWorkflowRequest {
                     id: Some("customer-intake".to_string()),
                     yaml: r#"
@@ -5877,7 +6235,7 @@ steps:
         assert_eq!(response.id, "customer-intake");
         let persisted = runtime.block_on(async {
             let store = RunStore::connect(&db_path).await.expect("store should reconnect");
-            store.get_workflow("customer-intake").await.expect("workflow should persist in db")
+            store.get_workflow("local", "customer-intake").await.expect("workflow should persist in db")
         });
         assert_eq!(persisted.name, "customer intake");
         let payload = serde_json::to_value(response).expect("response should serialize");
@@ -5925,6 +6283,7 @@ steps:
                 .expect("workflows should seed");
             let run = store
                 .start_run(
+                    "local",
                     "duplicate workflow",
                     "sha256:exact-workflow",
                     "exact workflow snapshot",
@@ -5935,7 +6294,7 @@ steps:
                 .expect("run should start");
             store.complete_run_success(&run.id).await.expect("run should complete");
 
-            workflow_inventory(&store, &connectors_dir, &workflows_dir)
+            workflow_inventory(&store, &connectors_dir, &workflows_dir, "local")
                 .await
                 .expect("inventory should build")
         });
@@ -5976,6 +6335,7 @@ steps:
                 workflow_snapshot: Some("saved workflow".to_string()),
                 initial_payload: None,
                 state_json: None,
+                user_id: "local".to_string(),
             },
             RunRecord {
                 id: "newer".to_string(),
@@ -5989,6 +6349,7 @@ steps:
                 workflow_snapshot: Some("saved workflow".to_string()),
                 initial_payload: None,
                 state_json: None,
+                user_id: "local".to_string(),
             },
         ]);
 
@@ -6012,6 +6373,7 @@ steps:
                 workflow_snapshot: None,
                 initial_payload: None,
                 state_json: None,
+                user_id: "local".to_string(),
             },
             RunRecord {
                 id: "run-b".to_string(),
@@ -6025,6 +6387,7 @@ steps:
                 workflow_snapshot: Some("workflow snapshot".to_string()),
                 initial_payload: None,
                 state_json: Some("{\"state\":\"paused\"}".to_string()),
+                user_id: "local".to_string(),
             },
         ]);
 
@@ -6146,7 +6509,7 @@ steps:
             .await
             .expect("target run should insert");
 
-            workflow_inventory(&store, &connectors_dir, &workflows_dir)
+            workflow_inventory(&store, &connectors_dir, &workflows_dir, "local")
                 .await
                 .expect("inventory should build")
         });
@@ -6285,6 +6648,7 @@ steps:
             workflow_snapshot: None,
             initial_payload: None,
             state_json: None,
+            user_id: "local".to_string(),
         });
         let exact_payload = serde_json::to_value(exact).expect("run view should serialize");
         assert_eq!(exact_payload["run_provenance"]["mode"], json!("exact"));
@@ -6302,6 +6666,7 @@ steps:
             workflow_snapshot: Some("saved workflow snapshot".to_string()),
             initial_payload: None,
             state_json: None,
+            user_id: "local".to_string(),
         });
         let fallback_payload = serde_json::to_value(fallback).expect("run view should serialize");
         assert_eq!(fallback_payload["run_provenance"]["mode"], json!("fallback"));
@@ -6331,6 +6696,7 @@ steps: []
             ),
             initial_payload: None,
             state_json: None,
+            user_id: "local".to_string(),
         };
 
         let payload = serde_json::to_value(RunDetailResponse {
@@ -6371,6 +6737,7 @@ steps: []
             ),
             initial_payload: None,
             state_json: None,
+            user_id: "local".to_string(),
         });
         let fallback = run_view(RunRecord {
             id: "run-fallback".to_string(),
@@ -6387,6 +6754,7 @@ steps: []
             ),
             initial_payload: None,
             state_json: None,
+            user_id: "local".to_string(),
         });
 
         let payload = serde_json::to_value(RunPageResponse {
@@ -6458,6 +6826,7 @@ ui:
                 &store,
                 &connectors_dir,
                 &temp_dir,
+                "local",
                 CreateWorkflowRequest {
                     id: Some("draft".to_string()),
                     yaml: r#"
@@ -6481,6 +6850,7 @@ steps:
                 &store,
                 &connectors_dir,
                 &temp_dir,
+                "local",
                 "draft",
                 RenameWorkflowRequest {
                     name: "Customer intake".to_string(),
@@ -6497,7 +6867,7 @@ steps:
         assert_eq!(response.summary.name, "Customer intake");
         let renamed_yaml = runtime.block_on(async {
             let store = RunStore::connect(&db_path).await.expect("store should reconnect");
-            store.get_workflow("customer-intake").await.expect("renamed workflow should exist").yaml
+            store.get_workflow("local", "customer-intake").await.expect("renamed workflow should exist").yaml
         });
         assert!(renamed_yaml.contains("name: Customer intake"));
 
@@ -6518,6 +6888,7 @@ steps:
                 &store,
                 &connectors_dir,
                 &temp_dir,
+                "local",
                 CreateWorkflowRequest {
                     id: Some("draft".to_string()),
                     yaml: r#"
@@ -6541,6 +6912,7 @@ steps:
                 &store,
                 &connectors_dir,
                 &temp_dir,
+                "local",
                 "draft",
                 RenameWorkflowRequest {
                     name: "Updated draft".to_string(),
@@ -6605,6 +6977,7 @@ steps:
                 .expect("workflows should seed");
             let run = store
                 .start_run(
+                    "local",
                     "customer intake",
                     "sha256:exact-workflow",
                     "exact workflow snapshot",
@@ -6619,6 +6992,7 @@ steps:
                 &store,
                 &connectors_dir,
                 &workflows_dir,
+                "local",
                 "draft",
                 RenameWorkflowRequest {
                     name: "customer intake".to_string(),

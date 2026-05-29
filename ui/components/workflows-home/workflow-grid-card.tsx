@@ -18,7 +18,16 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Zap, ArrowRight } from "lucide-react";
+import { 
+  Zap, 
+  ArrowRight, 
+  MoreVertical, 
+  Edit2, 
+  Copy, 
+  Download, 
+  Play, 
+  Trash2 
+} from "lucide-react";
 
 import {
   workflowLastRunLabel,
@@ -32,14 +41,25 @@ type WorkflowGridCardProps = {
   href: string;
   recentOpenedAt?: number | null;
   workflow: WorkflowSummary;
+  onRename?: (id: string, name: string) => void;
+  onDuplicate?: (id: string) => void;
+  onExport?: (id: string, name: string) => void;
+  onRun?: (id: string, name: string) => void;
+  onDelete?: (id: string, name: string) => void;
 };
 
 export function WorkflowGridCard({
   href,
   recentOpenedAt,
-  workflow
+  workflow,
+  onRename,
+  onDuplicate,
+  onExport,
+  onRun,
+  onDelete
 }: WorkflowGridCardProps) {
   const [lastOpened, setLastOpened] = useState<string | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     if (recentOpenedAt) {
@@ -54,15 +74,114 @@ export function WorkflowGridCard({
 
   return (
     <Link
-      className="group flex min-h-[156px] flex-col rounded-[16px] border border-black/5 bg-white/95 p-4 shadow-sm backdrop-blur-md transition-all duration-300 hover:-translate-y-1 hover:border-[#6f63ff]/20 hover:bg-white hover:shadow-[0_12px_32px_rgba(111,99,255,0.08)]"
+      className="group relative flex min-h-[168px] flex-col rounded-[16px] border border-black/5 bg-white/95 p-4 shadow-sm backdrop-blur-md transition-all duration-300 hover:-translate-y-1 hover:border-[#6f63ff]/20 hover:bg-white hover:shadow-[0_12px_32px_rgba(111,99,255,0.08)]"
       href={href}
     >
+      {/* Background click capture overlay to dismiss dropdown */}
+      {menuOpen && (
+        <div 
+          className="fixed inset-0 z-40 bg-transparent" 
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setMenuOpen(false);
+          }}
+        />
+      )}
+
+      {/* Floating Card Actions Button & Dropdown Menu */}
+      <div className="absolute top-4 right-4 z-50">
+        <button
+          type="button"
+          aria-label="Workflow actions"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setMenuOpen(!menuOpen);
+          }}
+          className="flex h-8 w-8 items-center justify-center rounded-[8px] border border-black/5 bg-white text-slate/75 hover:bg-black/[0.04] hover:text-ink transition-colors shadow-sm"
+        >
+          <MoreVertical size={15} strokeWidth={2.5} />
+        </button>
+
+        {menuOpen && (
+          <div className="absolute right-0 mt-1.5 w-[160px] rounded-[12px] border border-black/6 bg-white p-1.5 shadow-lg z-50">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setMenuOpen(false);
+                onRename?.(workflow.id, workflow.name);
+              }}
+              className="flex w-full items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-[12.5px] font-semibold text-slate hover:bg-black/[0.04] hover:text-ink transition-colors"
+            >
+              <Edit2 size={13} />
+              <span>Rename</span>
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setMenuOpen(false);
+                onDuplicate?.(workflow.id);
+              }}
+              className="flex w-full items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-[12.5px] font-semibold text-slate hover:bg-black/[0.04] hover:text-ink transition-colors"
+            >
+              <Copy size={13} />
+              <span>Duplicate</span>
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setMenuOpen(false);
+                onExport?.(workflow.id, workflow.name);
+              }}
+              className="flex w-full items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-[12.5px] font-semibold text-slate hover:bg-black/[0.04] hover:text-ink transition-colors"
+            >
+              <Download size={13} />
+              <span>Export YAML</span>
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setMenuOpen(false);
+                onRun?.(workflow.id, workflow.name);
+              }}
+              className="flex w-full items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-[12.5px] font-semibold text-slate hover:bg-black/[0.04] hover:text-ink transition-colors"
+            >
+              <Play size={13} />
+              <span>Run Workflow</span>
+            </button>
+            <div className="my-1 border-b border-black/[0.04]" />
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setMenuOpen(false);
+                onDelete?.(workflow.id, workflow.name);
+              }}
+              className="flex w-full items-center gap-2 rounded-[8px] px-2.5 py-1.5 text-left text-[12.5px] font-semibold text-rose-500 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+            >
+              <Trash2 size={13} />
+              <span>Delete</span>
+            </button>
+          </div>
+        )}
+      </div>
+
       <div className="flex items-start justify-between gap-3">
         <div className="flex h-9 w-9 items-center justify-center rounded-[10px] bg-gradient-to-br from-[#f3f0ff] to-[#e6dfff] text-[#6f63ff] shadow-[inset_0_1px_2px_rgba(255,255,255,0.8)] transition-transform duration-300 group-hover:scale-110">
           <Zap size={16} strokeWidth={2.5} className="fill-current" />
         </div>
         <span
-          className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] shadow-sm ${readinessTone}`}
+          className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.14em] shadow-sm mr-9 ${readinessTone}`}
         >
           {workflowReadinessLabel(workflow.workflow_state)}
         </span>

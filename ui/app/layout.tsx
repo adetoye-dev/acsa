@@ -29,6 +29,8 @@ export const metadata: Metadata = {
   }
 };
 
+import { AuthProvider } from "../components/auth-context";
+
 type RootLayoutProps = Readonly<{
   children: ReactNode;
 }>;
@@ -36,7 +38,9 @@ type RootLayoutProps = Readonly<{
 export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <AuthProvider>{children}</AuthProvider>
+      </body>
     </html>
   );
 }

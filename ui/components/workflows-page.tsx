@@ -20,8 +20,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { Upload, X, Check } from "lucide-react";
 
-import { fetchEngineJson } from "../lib/engine-client";
+import { fetchEngineJson, fetchEngineNoContent } from "../lib/engine-client";
 import {
   readRecentWorkflows,
   recordRecentWorkflowOpen,
@@ -32,8 +33,10 @@ import {
   type HumanTask,
   type RunSummary,
   type WorkflowDocumentResponse,
-  type WorkflowSummary
+  type WorkflowSummary,
+  slugifyIdentifier
 } from "../lib/workflow-editor";
+import { CustomModal } from "./custom-modal";
 import {
   importHasOpenableDraft,
   nextImportedWorkflowId,
@@ -83,7 +86,174 @@ export function WorkflowsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isImportPanelOpen, setIsImportPanelOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [resolvingTaskIds, setResolvingTaskIds] = useState<Record<string, boolean>>({});
+  const [modalState, setModalState] = useState<{
+    type: "rename" | "delete" | null;
+    workflowId?: string;
+    workflowName?: string;
+  }>({ type: null });
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (successMessage) {
+      const timer = setTimeout(() => setSuccessMessage(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [successMessage]);
+
+  function generateRandomSuffix() {
+    return Math.random().toString(36).substring(2, 7);
+  }
+
+  const handleRenameWorkflow = (id: string, name: string) => {
+    setModalState({
+      type: "rename",
+      workflowId: id,
+      workflowName: name
+    });
+  };
+
+  const handleDeleteWorkflow = (id: string, name: string) => {
+    setModalState({
+      type: "delete",
+      workflowId: id,
+      workflowName: name
+    });
+  };
+
+  const executeRenameWorkflow = async (newName: string) => {
+    if (!modalState.workflowId) return;
+    const id = modalState.workflowId;
+    const trimmed = newName.trim();
+    if (!trimmed) {
+      setError("Workflow name cannot be empty.");
+      setModalState({ type: null });
+      return;
+    }
+    const targetId = slugifyIdentifier(trimmed);
+    if (availableWorkflows.some((w) => w.id === targetId && w.id !== id)) {
+      setError(`A workflow named "${targetId}" already exists.`);
+      setModalState({ type: null });
+      return;
+    }
+
+    try {
+      setError(null);
+      await fetchEngineJson<WorkflowDocumentResponse>(`/api/workflows/${id}/rename`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: trimmed,
+          target_id: targetId
+        })
+      });
+      
+      const currentRecents = readRecentWorkflows(window.localStorage);
+      const updatedRecents = currentRecents.map((entry) => 
+        entry.workflowId === id 
+          ? { ...entry, workflowId: targetId, name: trimmed } 
+          : entry
+      );
+      writeRecentWorkflows(window.localStorage, updatedRecents);
+      setRecentEntries(updatedRecents);
+
+      setSuccessMessage(`Workflow renamed to "${trimmed}" successfully!`);
+      await refreshLaunchpadData();
+    } catch (err: any) {
+      setError(err?.message || "Failed to rename workflow");
+    } finally {
+      setModalState({ type: null });
+    }
+  };
+
+  const executeDeleteWorkflow = async () => {
+    if (!modalState.workflowId) return;
+    const id = modalState.workflowId;
+    try {
+      setError(null);
+      await fetchEngineNoContent(`/api/workflows/${id}`, {
+        method: "DELETE"
+      });
+      
+      const currentRecents = readRecentWorkflows(window.localStorage);
+      const updatedRecents = currentRecents.filter((entry) => entry.workflowId !== id);
+      writeRecentWorkflows(window.localStorage, updatedRecents);
+      setRecentEntries(updatedRecents);
+
+      setSuccessMessage(`Workflow "${modalState.workflowName}" deleted successfully.`);
+      await refreshLaunchpadData();
+    } catch (err: any) {
+      setError(err?.message || "Failed to delete workflow");
+    } finally {
+      setModalState({ type: null });
+    }
+  };
+
+  const handleDuplicateWorkflow = async (id: string) => {
+    const targetId = slugifyIdentifier(`${id}-copy-${generateRandomSuffix()}`);
+    try {
+      setError(null);
+      const res = await fetchEngineJson<WorkflowDocumentResponse>(`/api/workflows/${id}/duplicate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target_id: targetId })
+      });
+      
+      const currentRecents = readRecentWorkflows(window.localStorage);
+      const updatedRecents = recordRecentWorkflowOpen(currentRecents, {
+        fileName: res.summary.file_name,
+        name: res.summary.name,
+        openedAt: Date.now(),
+        workflowId: res.id
+      });
+      writeRecentWorkflows(window.localStorage, updatedRecents);
+      setRecentEntries(updatedRecents);
+
+      setSuccessMessage(`Workflow duplicated successfully as "${res.summary.name}"!`);
+      await refreshLaunchpadData();
+    } catch (err: any) {
+      setError(err?.message || "Failed to duplicate workflow");
+    }
+  };
+
+  const handleExportWorkflow = async (id: string, name: string) => {
+    try {
+      setError(null);
+      const res = await fetchEngineJson<WorkflowDocumentResponse>(`/api/workflows/${id}`);
+      if (!res.yaml) {
+        throw new Error("Workflow does not contain YAML content.");
+      }
+      
+      const blob = new Blob([res.yaml], { type: "text/yaml;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${name || id}.yaml`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      setSuccessMessage(`Exported "${name}" successfully.`);
+    } catch (err: any) {
+      setError(err?.message || "Failed to export workflow YAML");
+    }
+  };
+
+  const handleRunWorkflow = async (id: string, name: string) => {
+    try {
+      setError(null);
+      await fetchEngineJson<RunSummary>(`/api/workflows/${id}/run-async`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      setSuccessMessage(`Workflow "${name}" triggered successfully in the background!`);
+    } catch (err: any) {
+      setError(err?.message || "Failed to trigger workflow run");
+    }
+  };
 
   useEffect(function loadLaunchpadDataOnMountEffect() {
     void refreshLaunchpadData();
@@ -153,6 +323,58 @@ export function WorkflowsPage() {
       setIsLoading(false);
     }
   }
+
+  const handleImportYaml = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setImporting(true);
+    setError(null);
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = event.target?.result as string;
+        
+        // Slugify the file name to generate a clean, safe workflow ID
+        const stemName = file.name.replace(/\.ya?ml$/i, "");
+        const workflowId = stemName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+
+        const res = await fetchEngineJson<WorkflowDocumentResponse>("/api/workflows", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: workflowId || "imported-workflow",
+            yaml: text
+          })
+        });
+
+        const currentRecents = readRecentWorkflows(window.localStorage);
+        const nextRecents = recordRecentWorkflowOpen(currentRecents, {
+          fileName: res.summary.file_name,
+          name: res.summary.name,
+          openedAt: Date.now(),
+          workflowId: res.id
+        });
+        writeRecentWorkflows(window.localStorage, nextRecents);
+        setRecentEntries(nextRecents);
+        setInventory((current) => ({
+          ...current,
+          workflows: [
+            res.summary,
+            ...current.workflows.filter((w) => w.id !== res.id)
+          ]
+        }));
+
+        router.push(`/workflows/${res.id}`);
+      } catch (err: any) {
+        setError(err?.message || "Failed to import workflow YAML");
+      } finally {
+        setImporting(false);
+      }
+    };
+    reader.readAsText(file);
+  };
 
   async function handleOpenImportedDraft(result: N8nImportResponse) {
     if (!importHasOpenableDraft(result)) {
@@ -264,6 +486,17 @@ export function WorkflowsPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          <label className="ui-button cursor-pointer flex items-center gap-1.5">
+            <Upload size={14} className="opacity-80" />
+            <span>{importing ? "Importing..." : "Import YAML"}</span>
+            <input
+              type="file"
+              accept=".yaml,.yml"
+              className="hidden"
+              onChange={handleImportYaml}
+              disabled={importing}
+            />
+          </label>
           <button
             className="ui-button"
             onClick={() => setIsImportPanelOpen((current) => !current)}
@@ -288,6 +521,18 @@ export function WorkflowsPage() {
         {error ? (
           <div className="border-b border-rose-400/18 bg-rose-50 px-5 py-3 text-sm leading-6 text-[#c65a72]">
             {error}
+          </div>
+        ) : null}
+
+        {successMessage ? (
+          <div className="border-b border-emerald-400/18 bg-emerald-50 px-5 py-3 text-sm leading-6 text-emerald-700 flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              <Check className="text-emerald-500" size={16} />
+              {successMessage}
+            </span>
+            <button onClick={() => setSuccessMessage(null)} className="text-emerald-500 hover:text-emerald-700" type="button">
+              <X size={16} />
+            </button>
           </div>
         ) : null}
 
@@ -343,6 +588,11 @@ export function WorkflowsPage() {
                         key={workflow.id}
                         recentOpenedAt={recentByWorkflowId.get(workflow.id) ?? null}
                         workflow={workflow}
+                        onRename={handleRenameWorkflow}
+                        onDuplicate={handleDuplicateWorkflow}
+                        onExport={handleExportWorkflow}
+                        onRun={handleRunWorkflow}
+                        onDelete={handleDeleteWorkflow}
                       />
                     ))}
                   </div>
@@ -368,6 +618,30 @@ export function WorkflowsPage() {
           </div>
         )}
       </div>
+
+      {modalState.type === "rename" && (
+        <CustomModal
+          type="prompt"
+          title="Rename Workflow"
+          message={`Enter a new name for "${modalState.workflowName}":`}
+          defaultValue={modalState.workflowName}
+          confirmText="Rename"
+          onConfirm={(value) => executeRenameWorkflow(value || "")}
+          onCancel={() => setModalState({ type: null })}
+        />
+      )}
+
+      {modalState.type === "delete" && (
+        <CustomModal
+          type="confirm"
+          title="Delete Workflow"
+          message={`Are you sure you want to delete workflow "${modalState.workflowName}"? This action is permanent and cannot be undone.`}
+          confirmText="Delete"
+          isWarning={true}
+          onConfirm={executeDeleteWorkflow}
+          onCancel={() => setModalState({ type: null })}
+        />
+      )}
     </div>
   );
 }

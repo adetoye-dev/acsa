@@ -338,9 +338,11 @@ impl WorkflowEngine {
     ) -> Result<ExecutionSummary, EngineError> {
         self.sync_connectors()?;
         let workflow_revision = workflow_revision_identity(&workflow_snapshot);
+        let user_id = crate::storage::CURRENT_USER_ID.try_with(|id| id.clone()).unwrap_or_else(|_| "local".to_string());
         let run = self
             .store
             .start_run(
+                &user_id,
                 &plan.workflow.name,
                 &workflow_revision,
                 &workflow_snapshot,
@@ -392,9 +394,11 @@ impl WorkflowEngine {
     ) -> Result<StartedExecution, EngineError> {
         self.sync_connectors()?;
         let workflow_revision = workflow_revision_identity(&workflow_snapshot);
+        let user_id = crate::storage::CURRENT_USER_ID.try_with(|id| id.clone()).unwrap_or_else(|_| "local".to_string());
         let run = self
             .store
             .start_run(
+                &user_id,
                 &plan.workflow.name,
                 &workflow_revision,
                 &workflow_snapshot,
@@ -586,8 +590,11 @@ impl WorkflowEngine {
 
                 join_set.spawn(async move {
                     let _permit = permit;
-                    execute_step_with_retries(&store, &registry, &run_id, &step, inputs, timeout_ms)
-                        .await
+                    let user_id = store.get_run_user_id(&run_id).await.unwrap_or_else(|_| "local".to_string());
+                    crate::storage::CURRENT_USER_ID.scope(user_id, async move {
+                        execute_step_with_retries(&store, &registry, &run_id, &step, inputs, timeout_ms)
+                            .await
+                    }).await
                 });
             }
 
@@ -1971,7 +1978,7 @@ steps:
             .await
             .expect("workflow should execute");
 
-        let runs = store.list_runs().await.expect("runs should be queryable");
+        let runs = store.list_runs("local").await.expect("runs should be queryable");
         let step_runs =
             store.list_step_runs(&summary.run_id).await.expect("step runs should be queryable");
 
@@ -2094,7 +2101,7 @@ steps:
             .resume_human_task(&paused.pending_tasks[0].id, json!({ "approved": true }))
             .await
             .expect("workflow should resume");
-        let runs = store.list_runs().await.expect("runs should be queryable");
+        let runs = store.list_runs("local").await.expect("runs should be queryable");
         let pending_tasks = store
             .list_pending_human_tasks()
             .await
