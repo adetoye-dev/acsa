@@ -759,7 +759,8 @@ async fn list_starter_connector_packs(
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })));
     }
 
-    match starter_connector_pack_views(state.engine.store(), &state.connectors_dir, &user_id).await {
+    match starter_connector_pack_views(state.engine.store(), &state.connectors_dir, &user_id).await
+    {
         Ok(views) => (StatusCode::OK, Json(json!(views))),
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
@@ -834,19 +835,22 @@ async fn install_starter_connector_pack_endpoint(
             {
                 return connector_error_response(error);
             }
-            let pack_states =
-                match starter_pack_install_state_map(state.engine.store(), &state.connectors_dir, &user_id)
-                    .await
-                {
-                    Ok(states) => states,
-                    Err(error) => {
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({ "error": error.to_string() })),
-                        )
-                            .into_response();
-                    }
-                };
+            let pack_states = match starter_pack_install_state_map(
+                state.engine.store(),
+                &state.connectors_dir,
+                &user_id,
+            )
+            .await
+            {
+                Ok(states) => states,
+                Err(error) => {
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({ "error": error.to_string() })),
+                    )
+                        .into_response();
+                }
+            };
             let view = starter_connector_pack_view(&pack, pack_states.get(pack.install_dir_name));
             (StatusCode::OK, Json(json!(view))).into_response()
         }
@@ -1356,8 +1360,13 @@ async fn list_workflows(
     State(state): State<AppState>,
     Extension(UserId(user_id)): Extension<UserId>,
 ) -> impl IntoResponse {
-    match workflow_inventory(state.engine.store(), &state.connectors_dir, &state.workflows_dir, &user_id)
-        .await
+    match workflow_inventory(
+        state.engine.store(),
+        &state.connectors_dir,
+        &state.workflows_dir,
+        &user_id,
+    )
+    .await
     {
         Ok(inventory) => (StatusCode::OK, Json(json!(inventory))),
         Err(error) => {
@@ -1602,10 +1611,12 @@ async fn get_run_detail(
     match state.engine.store().get_run_user_id(&run_id).await {
         Ok(run_owner) if run_owner == user_id => {}
         Ok(_) => {
-            return (StatusCode::FORBIDDEN, Json(json!({ "error": "access denied" }))).into_response();
+            return (StatusCode::FORBIDDEN, Json(json!({ "error": "access denied" })))
+                .into_response();
         }
         Err(_) => {
-            return (StatusCode::NOT_FOUND, Json(json!({ "error": "run not found" }))).into_response();
+            return (StatusCode::NOT_FOUND, Json(json!({ "error": "run not found" })))
+                .into_response();
         }
     }
 
@@ -1643,10 +1654,12 @@ async fn get_run_logs(
     match state.engine.store().get_run_user_id(&run_id).await {
         Ok(run_owner) if run_owner == user_id => {}
         Ok(_) => {
-            return (StatusCode::FORBIDDEN, Json(json!({ "error": "access denied" }))).into_response();
+            return (StatusCode::FORBIDDEN, Json(json!({ "error": "access denied" })))
+                .into_response();
         }
         Err(_) => {
-            return (StatusCode::NOT_FOUND, Json(json!({ "error": "run not found" }))).into_response();
+            return (StatusCode::NOT_FOUND, Json(json!({ "error": "run not found" })))
+                .into_response();
         }
     }
 
@@ -1790,10 +1803,11 @@ async fn run_workflow(
     AxumPath(workflow_id): AxumPath<String>,
     Json(request): Json<RunWorkflowRequest>,
 ) -> axum::response::Response {
-    let record = match load_persisted_workflow_record(state.engine.store(), &user_id, &workflow_id).await {
-        Ok(record) => record,
-        Err(error) => return workflow_error_response(error),
-    };
+    let record =
+        match load_persisted_workflow_record(state.engine.store(), &user_id, &workflow_id).await {
+            Ok(record) => record,
+            Err(error) => return workflow_error_response(error),
+        };
     let document_state = match parse_workflow_document_state(&record.yaml) {
         Ok(document_state) => document_state,
         Err(error) => return workflow_error_response(error),
@@ -1813,12 +1827,14 @@ async fn run_workflow(
         "workflow_id": workflow_id
     });
     let user_id_clone = user_id.clone();
-    let result = crate::storage::CURRENT_USER_ID.scope(user_id_clone, async move {
-        state
-            .engine
-            .execute_plan_with_editor_snapshot(&plan, initial_payload, record.yaml.clone())
-            .await
-    }).await;
+    let result = crate::storage::CURRENT_USER_ID
+        .scope(user_id_clone, async move {
+            state
+                .engine
+                .execute_plan_with_editor_snapshot(&plan, initial_payload, record.yaml.clone())
+                .await
+        })
+        .await;
 
     match result {
         Ok(summary) => (
@@ -1847,10 +1863,11 @@ async fn run_workflow_async(
     AxumPath(workflow_id): AxumPath<String>,
     Json(request): Json<RunWorkflowRequest>,
 ) -> axum::response::Response {
-    let record = match load_persisted_workflow_record(state.engine.store(), &user_id, &workflow_id).await {
-        Ok(record) => record,
-        Err(error) => return workflow_error_response(error),
-    };
+    let record =
+        match load_persisted_workflow_record(state.engine.store(), &user_id, &workflow_id).await {
+            Ok(record) => record,
+            Err(error) => return workflow_error_response(error),
+        };
     let document_state = match parse_workflow_document_state(&record.yaml) {
         Ok(document_state) => document_state,
         Err(error) => return workflow_error_response(error),
@@ -1870,12 +1887,14 @@ async fn run_workflow_async(
         "workflow_id": workflow_id
     });
     let user_id_clone = user_id.clone();
-    let result = crate::storage::CURRENT_USER_ID.scope(user_id_clone, async move {
-        state
-            .engine
-            .start_plan_with_editor_snapshot(plan, initial_payload, record.yaml.clone())
-            .await
-    }).await;
+    let result = crate::storage::CURRENT_USER_ID
+        .scope(user_id_clone, async move {
+            state
+                .engine
+                .start_plan_with_editor_snapshot(plan, initial_payload, record.yaml.clone())
+                .await
+        })
+        .await;
 
     match result {
         Ok(started) => (
@@ -2219,7 +2238,11 @@ async fn create_workflow_document(
     })
 }
 
-async fn delete_workflow_document(store: &RunStore, user_id: &str, workflow_id: &str) -> Result<(), TriggerError> {
+async fn delete_workflow_document(
+    store: &RunStore,
+    user_id: &str,
+    workflow_id: &str,
+) -> Result<(), TriggerError> {
     validate_workflow_id(workflow_id)?;
     match store.delete_workflow(user_id, workflow_id).await {
         Ok(()) => Ok(()),
@@ -2292,7 +2315,8 @@ async fn rename_workflow_document(
         Some(yaml) => parse_workflow_document_state(yaml)?,
         None => {
             let source_document =
-                read_workflow_document(store, connectors_dir, workflows_dir, user_id, workflow_id).await?;
+                read_workflow_document(store, connectors_dir, workflows_dir, user_id, workflow_id)
+                    .await?;
             parse_workflow_document_state(&source_document.yaml)?
         }
     };
@@ -3157,7 +3181,12 @@ async fn seed_workflows_from_directory_if_missing(
             &document_state.ui_detached_steps,
         )?;
         store
-            .create_workflow_if_missing("local", workflow_id, &document_state.workflow.name, &persisted_yaml)
+            .create_workflow_if_missing(
+                "local",
+                workflow_id,
+                &document_state.workflow.name,
+                &persisted_yaml,
+            )
             .await?;
     }
 
@@ -3983,14 +4012,14 @@ pub enum TriggerError {
 
 fn hash_password(password: &str, salt: &str) -> String {
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-    let mut mac = Hmac::<Sha256>::new_from_slice(salt.as_bytes())
-        .expect("HMAC can take key of any size");
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(salt.as_bytes()).expect("HMAC can take key of any size");
     mac.update(password.as_bytes());
     let mut result = mac.finalize().into_bytes();
 
     for _ in 0..5000 {
-        let mut inner_mac = Hmac::<Sha256>::new_from_slice(salt.as_bytes())
-            .expect("HMAC can take key of any size");
+        let mut inner_mac =
+            Hmac::<Sha256>::new_from_slice(salt.as_bytes()).expect("HMAC can take key of any size");
         inner_mac.update(&result);
         result = inner_mac.finalize().into_bytes();
     }
@@ -4020,13 +4049,12 @@ fn generate_session_token(user_id: &str) -> String {
     use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
     let expiry = Utc::now().timestamp() + 30 * 24 * 60 * 60; // 30 days
     let payload = format!("{}.{}", BASE64.encode(user_id), expiry);
-    
+
     let key = get_token_master_key();
-    let mut mac = Hmac::<Sha256>::new_from_slice(&key)
-        .expect("HMAC can take key of any size");
+    let mut mac = Hmac::<Sha256>::new_from_slice(&key).expect("HMAC can take key of any size");
     mac.update(payload.as_bytes());
     let signature = BASE64.encode(mac.finalize().into_bytes());
-    
+
     format!("{}.{}", payload, signature)
 }
 
@@ -4039,27 +4067,28 @@ fn verify_session_token(token: &str) -> Result<String, String> {
     let user_id_b64 = parts[0];
     let expiry_str = parts[1];
     let signature = parts[2];
-    
+
     let payload = format!("{}.{}", user_id_b64, expiry_str);
-    
+
     let key = get_token_master_key();
-    let mut mac = Hmac::<Sha256>::new_from_slice(&key)
-        .expect("HMAC can take key of any size");
+    let mut mac = Hmac::<Sha256>::new_from_slice(&key).expect("HMAC can take key of any size");
     mac.update(payload.as_bytes());
     let expected_signature = BASE64.encode(mac.finalize().into_bytes());
-    
+
     if !bool::from(signature.as_bytes().ct_eq(expected_signature.as_bytes())) {
         return Err("invalid token signature".to_string());
     }
-    
+
     let expiry = expiry_str.parse::<i64>().map_err(|_| "invalid expiry timestamp".to_string())?;
     if Utc::now().timestamp() > expiry {
         return Err("session expired".to_string());
     }
-    
-    let user_id_bytes = BASE64.decode(user_id_b64).map_err(|_| "invalid user_id encoding".to_string())?;
-    let user_id = String::from_utf8(user_id_bytes).map_err(|_| "invalid utf8 user_id".to_string())?;
-    
+
+    let user_id_bytes =
+        BASE64.decode(user_id_b64).map_err(|_| "invalid user_id encoding".to_string())?;
+    let user_id =
+        String::from_utf8(user_id_bytes).map_err(|_| "invalid utf8 user_id".to_string())?;
+
     Ok(user_id)
 }
 
@@ -4083,14 +4112,16 @@ async fn signup_handler(
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "email and password must not be empty" })),
-        ).into_response();
+        )
+            .into_response();
     }
 
     if password.len() < 8 {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "password must be at least 8 characters long" })),
-        ).into_response();
+        )
+            .into_response();
     }
 
     let store = state.engine.store();
@@ -4100,14 +4131,16 @@ async fn signup_handler(
             return (
                 StatusCode::CONFLICT,
                 Json(json!({ "error": "a user with this email already exists" })),
-            ).into_response();
+            )
+                .into_response();
         }
         Ok(None) => {}
         Err(err) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": format!("database error: {}", err) })),
-            ).into_response();
+            )
+                .into_response();
         }
     }
 
@@ -4118,17 +4151,14 @@ async fn signup_handler(
     match store.create_user(&email, &stored_hash).await {
         Ok(user_id) => {
             let token = generate_session_token(&user_id);
-            (
-                StatusCode::CREATED,
-                Json(json!({ "token": token, "email": email, "id": user_id })),
-            ).into_response()
+            (StatusCode::CREATED, Json(json!({ "token": token, "email": email, "id": user_id })))
+                .into_response()
         }
-        Err(err) => {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("failed to create user: {}", err) })),
-            ).into_response()
-        }
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("failed to create user: {}", err) })),
+        )
+            .into_response(),
     }
 }
 
@@ -4145,39 +4175,29 @@ async fn login_handler(
         Ok(Some((user_id, stored_hash))) => {
             if verify_password(password, &stored_hash) {
                 let token = generate_session_token(&user_id);
-                (
-                    StatusCode::OK,
-                    Json(json!({ "token": token, "email": email, "id": user_id })),
-                ).into_response()
+                (StatusCode::OK, Json(json!({ "token": token, "email": email, "id": user_id })))
+                    .into_response()
             } else {
-                (
-                    StatusCode::UNAUTHORIZED,
-                    Json(json!({ "error": "invalid email or password" })),
-                ).into_response()
+                (StatusCode::UNAUTHORIZED, Json(json!({ "error": "invalid email or password" })))
+                    .into_response()
             }
         }
         Ok(None) => {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({ "error": "invalid email or password" })),
-            ).into_response()
+            (StatusCode::UNAUTHORIZED, Json(json!({ "error": "invalid email or password" })))
+                .into_response()
         }
-        Err(err) => {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("database error: {}", err) })),
-            ).into_response()
-        }
+        Err(err) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": format!("database error: {}", err) })),
+        )
+            .into_response(),
     }
 }
 
 async fn me_handler(
     axum::Extension(UserId(user_id)): axum::Extension<UserId>,
 ) -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        Json(json!({ "id": user_id })),
-    ).into_response()
+    (StatusCode::OK, Json(json!({ "id": user_id }))).into_response()
 }
 
 async fn authenticate_user(
@@ -4190,19 +4210,17 @@ async fn authenticate_user(
         return next.run(request).await;
     }
 
-    let auth_header = request.headers()
-        .get(AUTHORIZATION)
-        .and_then(|val| val.to_str().ok());
+    let auth_header = request.headers().get(AUTHORIZATION).and_then(|val| val.to_str().ok());
 
-    let token = auth_header
-        .and_then(|val| val.strip_prefix("Bearer "))
-        .map(str::trim)
-        .or_else(|| {
-            request.headers()
+    let token =
+        auth_header.and_then(|val| val.strip_prefix("Bearer ")).map(str::trim).or_else(|| {
+            request
+                .headers()
                 .get(axum::http::header::COOKIE)
                 .and_then(|val| val.to_str().ok())
                 .and_then(|cookie_str| {
-                    cookie_str.split(';')
+                    cookie_str
+                        .split(';')
                         .map(str::trim)
                         .find(|cookie| cookie.starts_with("acsa_session="))
                         .map(|cookie| cookie["acsa_session=".len()..].trim())
@@ -4213,7 +4231,8 @@ async fn authenticate_user(
         return (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "unauthorized: missing session token" })),
-        ).into_response();
+        )
+            .into_response();
     };
 
     match verify_session_token(token) {
@@ -4221,12 +4240,11 @@ async fn authenticate_user(
             request.extensions_mut().insert(UserId(user_id));
             next.run(request).await
         }
-        Err(err) => {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({ "error": format!("unauthorized: invalid session token: {}", err) })),
-            ).into_response()
-        }
+        Err(err) => (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": format!("unauthorized: invalid session token: {}", err) })),
+        )
+            .into_response(),
     }
 }
 
@@ -5497,10 +5515,15 @@ steps:
             let inventory = workflow_inventory(&store, &connectors_dir, &workflows_dir, "local")
                 .await
                 .expect("inventory should build");
-            let document =
-                read_workflow_document(&store, &connectors_dir, &workflows_dir, "local", "customer-intake")
-                    .await
-                    .expect("workflow document should read");
+            let document = read_workflow_document(
+                &store,
+                &connectors_dir,
+                &workflows_dir,
+                "local",
+                "customer-intake",
+            )
+            .await
+            .expect("workflow document should read");
             (inventory, document)
         });
 
@@ -6235,7 +6258,10 @@ steps:
         assert_eq!(response.id, "customer-intake");
         let persisted = runtime.block_on(async {
             let store = RunStore::connect(&db_path).await.expect("store should reconnect");
-            store.get_workflow("local", "customer-intake").await.expect("workflow should persist in db")
+            store
+                .get_workflow("local", "customer-intake")
+                .await
+                .expect("workflow should persist in db")
         });
         assert_eq!(persisted.name, "customer intake");
         let payload = serde_json::to_value(response).expect("response should serialize");
@@ -6867,7 +6893,11 @@ steps:
         assert_eq!(response.summary.name, "Customer intake");
         let renamed_yaml = runtime.block_on(async {
             let store = RunStore::connect(&db_path).await.expect("store should reconnect");
-            store.get_workflow("local", "customer-intake").await.expect("renamed workflow should exist").yaml
+            store
+                .get_workflow("local", "customer-intake")
+                .await
+                .expect("renamed workflow should exist")
+                .yaml
         });
         assert!(renamed_yaml.contains("name: Customer intake"));
 

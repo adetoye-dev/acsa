@@ -338,7 +338,9 @@ impl WorkflowEngine {
     ) -> Result<ExecutionSummary, EngineError> {
         self.sync_connectors()?;
         let workflow_revision = workflow_revision_identity(&workflow_snapshot);
-        let user_id = crate::storage::CURRENT_USER_ID.try_with(|id| id.clone()).unwrap_or_else(|_| "local".to_string());
+        let user_id = crate::storage::CURRENT_USER_ID
+            .try_with(|id| id.clone())
+            .unwrap_or_else(|_| "local".to_string());
         let run = self
             .store
             .start_run(
@@ -394,7 +396,9 @@ impl WorkflowEngine {
     ) -> Result<StartedExecution, EngineError> {
         self.sync_connectors()?;
         let workflow_revision = workflow_revision_identity(&workflow_snapshot);
-        let user_id = crate::storage::CURRENT_USER_ID.try_with(|id| id.clone()).unwrap_or_else(|_| "local".to_string());
+        let user_id = crate::storage::CURRENT_USER_ID
+            .try_with(|id| id.clone())
+            .unwrap_or_else(|_| "local".to_string());
         let run = self
             .store
             .start_run(
@@ -590,11 +594,18 @@ impl WorkflowEngine {
 
                 join_set.spawn(async move {
                     let _permit = permit;
-                    let user_id = store.get_run_user_id(&run_id).await.unwrap_or_else(|_| "local".to_string());
-                    crate::storage::CURRENT_USER_ID.scope(user_id, async move {
-                        execute_step_with_retries(&store, &registry, &run_id, &step, inputs, timeout_ms)
+                    let user_id = store
+                        .get_run_user_id(&run_id)
+                        .await
+                        .unwrap_or_else(|_| "local".to_string());
+                    crate::storage::CURRENT_USER_ID
+                        .scope(user_id, async move {
+                            execute_step_with_retries(
+                                &store, &registry, &run_id, &step, inputs, timeout_ms,
+                            )
                             .await
-                    }).await
+                        })
+                        .await
                 });
             }
 

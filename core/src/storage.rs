@@ -236,7 +236,11 @@ impl RunStore {
         Ok(row.try_get("user_id")?)
     }
 
-    pub async fn create_user(&self, email: &str, password_hash: &str) -> Result<String, StorageError> {
+    pub async fn create_user(
+        &self,
+        email: &str,
+        password_hash: &str,
+    ) -> Result<String, StorageError> {
         let id = Uuid::new_v4().to_string();
         let now = current_timestamp();
         sqlx::query(
@@ -255,7 +259,10 @@ impl RunStore {
         Ok(id)
     }
 
-    pub async fn get_user_by_email(&self, email: &str) -> Result<Option<(String, String)>, StorageError> {
+    pub async fn get_user_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<(String, String)>, StorageError> {
         let row = sqlx::query(
             r#"
             SELECT id, password_hash
@@ -276,7 +283,10 @@ impl RunStore {
         }
     }
 
-    pub async fn list_credentials(&self, user_id: &str) -> Result<Vec<CredentialRecord>, StorageError> {
+    pub async fn list_credentials(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<CredentialRecord>, StorageError> {
         let rows = sqlx::query(
             r#"
             SELECT name, updated_at, user_id
@@ -363,11 +373,7 @@ impl RunStore {
             }
         }
 
-        Ok(CredentialRecord {
-            user_id: user_id.to_string(),
-            name: name.to_string(),
-            updated_at,
-        })
+        Ok(CredentialRecord { user_id: user_id.to_string(), name: name.to_string(), updated_at })
     }
 
     pub async fn delete_credential(&self, user_id: &str, name: &str) -> Result<(), StorageError> {
@@ -432,7 +438,11 @@ impl RunStore {
         rows.into_iter().map(map_workflow_row).collect()
     }
 
-    pub async fn get_workflow(&self, user_id: &str, workflow_id: &str) -> Result<WorkflowRecord, StorageError> {
+    pub async fn get_workflow(
+        &self,
+        user_id: &str,
+        workflow_id: &str,
+    ) -> Result<WorkflowRecord, StorageError> {
         let row = sqlx::query(
             r#"
             SELECT id, name, yaml, created_at, updated_at, user_id
@@ -449,7 +459,10 @@ impl RunStore {
         map_workflow_row(row)
     }
 
-    pub async fn get_workflow_by_id_system(&self, workflow_id: &str) -> Result<WorkflowRecord, StorageError> {
+    pub async fn get_workflow_by_id_system(
+        &self,
+        workflow_id: &str,
+    ) -> Result<WorkflowRecord, StorageError> {
         let row = sqlx::query(
             r#"
             SELECT id, name, yaml, created_at, updated_at, user_id
@@ -608,7 +621,11 @@ impl RunStore {
         self.get_workflow(user_id, target_id).await
     }
 
-    pub async fn delete_workflow(&self, user_id: &str, workflow_id: &str) -> Result<(), StorageError> {
+    pub async fn delete_workflow(
+        &self,
+        user_id: &str,
+        workflow_id: &str,
+    ) -> Result<(), StorageError> {
         let result = sqlx::query(
             r#"
             DELETE FROM workflows
@@ -1453,11 +1470,14 @@ impl RunStore {
     }
 
     pub async fn list_runs(&self, user_id: &str) -> Result<Vec<RunRecord>, StorageError> {
-        Ok(self.list_runs_page(&RunQuery {
-            limit: 10_000,
-            user_id: Some(user_id.to_string()),
-            ..RunQuery::default()
-        }).await?.items)
+        Ok(self
+            .list_runs_page(&RunQuery {
+                limit: 10_000,
+                user_id: Some(user_id.to_string()),
+                ..RunQuery::default()
+            })
+            .await?
+            .items)
     }
 
     pub async fn latest_runs_for_workflows(
@@ -1976,13 +1996,10 @@ impl RunStore {
         self.ensure_column("workflows", "user_id", "TEXT NOT NULL DEFAULT 'local'").await?;
 
         // Check if credentials table needs migration (for user_id primary key transition)
-        let credential_cols = sqlx::query("PRAGMA table_info(credentials)")
-            .fetch_all(&self.pool)
-            .await?;
+        let credential_cols =
+            sqlx::query("PRAGMA table_info(credentials)").fetch_all(&self.pool).await?;
         let has_user_id = credential_cols.iter().any(|row| {
-            row.try_get::<String, _>("name")
-                .map(|name| name == "user_id")
-                .unwrap_or(false)
+            row.try_get::<String, _>("name").map(|name| name == "user_id").unwrap_or(false)
         });
         if !credential_cols.is_empty() && !has_user_id {
             // Table exists but has no user_id column. Let's migrate it.
@@ -2010,9 +2027,7 @@ impl RunStore {
             )
             .execute(&self.pool)
             .await?;
-            sqlx::query("DROP TABLE credentials_old")
-                .execute(&self.pool)
-                .await?;
+            sqlx::query("DROP TABLE credentials_old").execute(&self.pool).await?;
         } else {
             // Fresh create or already migrated
             sqlx::query(
