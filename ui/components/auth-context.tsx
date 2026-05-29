@@ -59,6 +59,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get("token");
+      const email = params.get("email");
+      const id = params.get("id");
+
+      if (token && email && id) {
+        localStorage.setItem("acsa_session_token", token);
+        localStorage.setItem("acsa_user_email", email);
+        localStorage.setItem("acsa_user_id", id);
+        
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    }
+
     refreshAuth();
   }, []);
 

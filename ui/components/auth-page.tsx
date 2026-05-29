@@ -84,49 +84,10 @@ export function AuthPage({ onAuthSuccess }: AuthPageProps) {
     }
   };
 
-  const handleSocialLogin = async (provider: "google" | "github") => {
-    setError(null);
-    setLoading(true);
-
-    const emailMap = {
-      google: "google-user@acsa.io",
-      github: "github-user@acsa.io",
-    };
-
-    const mockEmail = emailMap[provider];
-    const mockPassword = `oauth-mock-secret-password-${provider}-123`;
-
-    try {
-      let res;
-      try {
-        // Try logging in first
-        res = await fetchEngineJson<AuthResponse>("/api/auth/login", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: mockEmail, password: mockPassword }),
-        });
-      } catch (loginErr) {
-        // Sign up if user doesn't exist yet
-        res = await fetchEngineJson<AuthResponse>("/api/auth/signup", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: mockEmail, password: mockPassword }),
-        });
-      }
-
-      if (res && res.token) {
-        localStorage.setItem("acsa_session_token", res.token);
-        localStorage.setItem("acsa_user_email", res.email);
-        localStorage.setItem("acsa_user_id", res.id);
-        onAuthSuccess();
-      } else {
-        setError("Social login returned an invalid signature payload.");
-      }
-    } catch (err: any) {
-      setError(err?.message || `Failed to sign in with ${provider}.`);
-    } finally {
-      setLoading(false);
-    }
+  const handleSocialLogin = (provider: "google" | "github") => {
+    // Redirect browser to the backend OAuth initialization endpoint.
+    // The proxy (/engine) will forward it to the Axum backend which returns a 302 to the Identity Provider.
+    window.location.href = `/engine/api/auth/${provider}`;
   };
 
   return (

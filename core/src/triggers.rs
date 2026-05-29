@@ -572,6 +572,10 @@ pub async fn serve(
         .route("/healthz", get(health))
         .route("/api/auth/signup", post(signup_handler))
         .route("/api/auth/login", post(login_handler))
+        .route("/api/auth/google", get(oauth_google_handler))
+        .route("/api/auth/google/callback", get(oauth_google_callback_handler))
+        .route("/api/auth/github", get(oauth_github_handler))
+        .route("/api/auth/github/callback", get(oauth_github_callback_handler))
         .merge(protected_routes)
         .route("/{*hook}", post(handle_webhook))
         .with_state(state);
@@ -4163,6 +4167,144 @@ async fn signup_handler(
         )
             .into_response(),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct OauthCallbackQuery {
+    code: String,
+}
+
+async fn oauth_google_handler() -> impl IntoResponse {
+    let client_id = env::var("ACSA_GOOGLE_CLIENT_ID").unwrap_or_default();
+    let redirect_uri = format!("{}/api/auth/google/callback", env::var("ACSA_PUBLIC_URL").unwrap_or_else(|_| "http://localhost:8000".to_string()));
+    let auth_url = format!(
+        "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope=email profile",
+        client_id, urlencoding::encode(&redirect_uri)
+    );
+    axum::response::Redirect::temporary(&auth_url)
+}
+
+async fn oauth_google_callback_handler(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<OauthCallbackQuery>,
+) -> impl IntoResponse {
+    let client_id = env::var("ACSA_GOOGLE_CLIENT_ID").unwrap_or_default();
+    let client_secret = env::var("ACSA_GOOGLE_CLIENT_SECRET").unwrap_or_default();
+    let redirect_uri = format!("{}/api/auth/google/callback", env::var("ACSA_PUBLIC_URL").unwrap_or_else(|_| "http://localhost:8000".to_string()));
+
+    let client = reqwest::Client::new();
+    let token_res = client.post("https://oauth2.googleapis.com/token")
+        .form(&[
+            ("client_id", client_id.as_str()),
+            ("client_secret", client_secret.as_str()),
+            ("code", query.code.as_str()),
+            ("grant_type", "authorization_code"),
+            ("redirect_uri", redirect_uri.as_str()),
+        ])
+        .send().await;
+
+    let token_json: Value = match token_res {
+        Ok(res) => res.json().await.unwrap_or(json!({})),
+        Err(_) => return (StatusCode::BAD_REQUEST, "Failed to exchange token").into_response(),
+    };
+
+    let access_token = token_json.get("access_token").and_then(|v| v.as_str()).unwrap_or_default();
+
+    let userinfo_res = client.get("https://www.googleapis.com/oauth2/v2/userinfo")
+        .bearer_auth(access_token)
+        .send().await;
+
+    let userinfo_json: Value = match userinfo_res {
+        Ok(res) => res.json().await.unwrap_or(json!({})),
+        Err(_) => return (StatusCode::BAD_REQUEST, "Failed to fetch user info").into_response(),
+    };
+
+    let email = match userinfo_json.get("email").and_then(|v| v.as_str()) {
+        Some(e) => e.to_lowercase(),
+        None => return (StatusCode::BAD_REQUEST, "Email not found in Google profile").into_response(),
+    };
+
+    handle_oauth_login_or_signup(state, email).await
+}
+
+async fn oauth_github_handler() -> impl IntoResponse {
+    let client_id = env::var("ACSA_GITHUB_CLIENT_ID").unwrap_or_default();
+    let redirect_uri = format!("{}/api/auth/github/callback", env::var("ACSA_PUBLIC_URL").unwrap_or_else(|_| "http://localhost:8000".to_string()));
+    let auth_url = format!(
+        "https://github.com/login/oauth/authorize?client_id={}&redirect_uri={}&scope=user:email",
+        client_id, urlencoding::encode(&redirect_uri)
+    );
+    axum::response::Redirect::temporary(&auth_url)
+}
+
+async fn oauth_github_callback_handler(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<OauthCallbackQuery>,
+) -> impl IntoResponse {
+    let client_id = env::var("ACSA_GITHUB_CLIENT_ID").unwrap_or_default();
+    let client_secret = env::var("ACSA_GITHUB_CLIENT_SECRET").unwrap_or_default();
+    let redirect_uri = format!("{}/api/auth/github/callback", env::var("ACSA_PUBLIC_URL").unwrap_or_else(|_| "http://localhost:8000".to_string()));
+
+    let client = reqwest::Client::new();
+    let token_res = client.post("https://github.com/login/oauth/access_token")
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id", client_id.as_str()),
+            ("client_secret", client_secret.as_str()),
+            ("code", query.code.as_str()),
+            ("redirect_uri", redirect_uri.as_str()),
+        ])
+        .send().await;
+
+    let token_json: Value = match token_res {
+        Ok(res) => res.json().await.unwrap_or(json!({})),
+        Err(_) => return (StatusCode::BAD_REQUEST, "Failed to exchange token").into_response(),
+    };
+
+    let access_token = token_json.get("access_token").and_then(|v| v.as_str()).unwrap_or_default();
+
+    let emails_res = client.get("https://api.github.com/user/emails")
+        .header("User-Agent", "acsa-engine")
+        .bearer_auth(access_token)
+        .send().await;
+
+    let emails_json: Vec<Value> = match emails_res {
+        Ok(res) => res.json().await.unwrap_or(vec![]),
+        Err(_) => return (StatusCode::BAD_REQUEST, "Failed to fetch user emails").into_response(),
+    };
+
+    let email = emails_json.iter()
+        .find(|e| e.get("primary").and_then(|v| v.as_bool()).unwrap_or(false))
+        .and_then(|e| e.get("email").and_then(|v| v.as_str()))
+        .map(|s| s.to_lowercase());
+
+    let email = match email {
+        Some(e) => e,
+        None => return (StatusCode::BAD_REQUEST, "Primary email not found in GitHub profile").into_response(),
+    };
+
+    handle_oauth_login_or_signup(state, email).await
+}
+
+async fn handle_oauth_login_or_signup(state: AppState, email: String) -> axum::response::Response {
+    let store = state.engine.store();
+    let frontend_url = env::var("ACSA_FRONTEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
+    
+    let user_id = match store.get_user_by_email(&email).await {
+        Ok(Some((uid, _))) => uid,
+        Ok(None) => {
+            let fake_hash = "OAUTH_MANAGED";
+            match store.create_user(&email, fake_hash).await {
+                Ok(uid) => uid,
+                Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response(),
+            }
+        },
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response(),
+    };
+
+    let token = generate_session_token(&user_id);
+    let redirect_url = format!("{}/?token={}&email={}&id={}", frontend_url, token, urlencoding::encode(&email), user_id);
+    axum::response::Redirect::temporary(&redirect_url).into_response()
 }
 
 async fn login_handler(
