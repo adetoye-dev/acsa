@@ -43,33 +43,54 @@ const REFERENCE_COPY: Record<string, { label: string; description: string }> = {
     description: "Used to verify signed or token-protected inbound webhooks."
   },
   ACSA_SMTP_FROM: {
-    label: "Email delivery",
-    description: "Used by the Email connector pack."
+    label: "SMTP Sender",
+    description: "Sender email address for outgoing SMTP emails."
   },
   ACSA_SMTP_HOST: {
-    label: "Email delivery",
-    description: "Used by the Email connector pack."
+    label: "SMTP Host",
+    description: "Hostname of your SMTP email server."
   },
   ACSA_SMTP_PASSWORD: {
-    label: "Email delivery",
-    description: "Used by the Email connector pack."
+    label: "SMTP Password",
+    description: "App password or password secret for your SMTP server."
   },
   ACSA_SMTP_PORT: {
-    label: "Email delivery",
-    description: "Used by the Email connector pack."
+    label: "SMTP Port",
+    description: "Connection port for SMTP (typically 465 or 587)."
   },
   ACSA_SMTP_TLS: {
-    label: "Email delivery",
-    description: "Used by the Email connector pack."
+    label: "SMTP Secure/TLS",
+    description: "Security mode to use for SMTP connection (e.g. ssl, starttls)."
   },
   ACSA_SMTP_USERNAME: {
-    label: "Email delivery",
-    description: "Used by the Email connector pack."
+    label: "SMTP Username",
+    description: "Authentication username for your SMTP server."
+  },
+  ACSA_SMTP_TIMEOUT_SECS: {
+    label: "SMTP Timeout",
+    description: "Timeout duration in seconds for sending emails."
+  },
+  ACSA_DEMO_EMAIL_TO: {
+    label: "Demo Recipient",
+    description: "Default email address to send automated demo reports to."
+  },
+  FIRECRAWL_API_KEY: {
+    label: "Firecrawl Scraper",
+    description: "API key used to crawl and scrape startup websites."
+  },
+  GOOGLE_SHEETS_CREDENTIALS_PATH: {
+    label: "Google Sheets Key Path",
+    description: "Absolute path to your Google Sheets Service Account JSON key."
+  },
+  GOOGLE_SHEETS_CREDENTIALS_JSON: {
+    label: "Google Sheets Key JSON",
+    description: "Raw JSON string or Base64-encoded credentials for Google Sheets."
   }
 };
 
 export function CredentialsPage() {
   const [credentials, setCredentials] = useState<CredentialItem[]>([]);
+  const [envKeys, setEnvKeys] = useState<string[]>([]);
   const [connectorInventory, setConnectorInventory] = useState<ConnectorInventoryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -104,15 +125,15 @@ export function CredentialsPage() {
     [starterReferences]
   );
 
-  const configuredNames = useMemo(
-    () => new Set(credentials.map((credential) => credential.name)),
-    [credentials]
+  const existingNames = useMemo(
+    () => new Set([...credentials.map((credential) => credential.name), ...envKeys]),
+    [credentials, envKeys]
   );
 
   const referenceRows = useMemo(() => {
     const names = Array.from(new Set([...starterReferences, ...connectorReferences]));
     return names.map((referenceName) => ({
-      configured: configuredNames.has(referenceName),
+      configured: existingNames.has(referenceName),
       name: referenceName,
       source: starterReferenceSet.has(referenceName) ? "starter" : "connector",
       ...(REFERENCE_COPY[referenceName] ?? {
@@ -123,7 +144,12 @@ export function CredentialsPage() {
             : "Used by installed connectors."
       })
     }));
-  }, [configuredNames, connectorReferences, starterReferenceSet, starterReferences]);
+  }, [existingNames, connectorReferences, starterReferenceSet, starterReferences]);
+
+  const missingCredentials = useMemo(
+    () => referenceRows.filter((row) => !row.configured),
+    [referenceRows]
+  );
 
   async function loadPageData() {
     const [credentialResponse, connectorResponse] = await Promise.all([
@@ -131,6 +157,7 @@ export function CredentialsPage() {
       fetchEngineJson<ConnectorInventoryResponse>("/api/connectors")
     ]);
     setCredentials(credentialResponse.credentials);
+    setEnvKeys(credentialResponse.env_keys ?? []);
     setConnectorInventory(connectorResponse);
   }
 
@@ -359,30 +386,52 @@ export function CredentialsPage() {
 
         <aside className="sleek-scroll min-h-0 overflow-y-auto border-l border-black/10 bg-[rgba(255,255,255,0.82)] px-5 py-5">
           <section>
-            <div className="mb-3 flex items-center justify-between gap-3">
-              <p className="section-kicker">Needed credentials</p>
-              <span className="ui-meta">{referenceRows.length}</span>
+            <div className="mb-4 flex items-center justify-between gap-3 border-b border-black/[0.04] pb-3">
+              <p className="section-kicker">Missing Credentials</p>
+              {missingCredentials.length > 0 ? (
+                <span className="text-[10.5px] font-bold uppercase tracking-wider text-amber-600 bg-amber-500/10 border border-amber-500/15 px-2 py-0.5 rounded-[6px]">
+                  {missingCredentials.length} missing
+                </span>
+              ) : (
+                <span className="text-[10.5px] font-bold uppercase tracking-wider text-green-600 bg-green-500/10 border border-green-500/15 px-2 py-0.5 rounded-[6px]">
+                  All Set
+                </span>
+              )}
             </div>
-            <div className="space-y-1.5">
-              {referenceRows.map((reference) => (
-                <div
-                  className="rounded-[10px] border border-black/10 bg-white px-3 py-2"
-                  key={reference.name}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="text-[13px] font-semibold leading-5 text-[#101a1d]">{reference.label}</div>
-                      <code className="mt-0.5 block truncate font-mono text-[11px] text-[#5f6870]">{reference.name}</code>
+            <div className="space-y-2.5">
+              {missingCredentials.length > 0 ? (
+                missingCredentials.map((reference) => (
+                  <div
+                    className="rounded-[12px] border border-amber-500/12 bg-amber-500/[0.01] px-4 py-3.5 shadow-sm transition-all hover:bg-amber-500/[0.02]"
+                    key={reference.name}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-[13.5px] font-bold leading-5 text-[#101a1d]">{reference.label}</div>
+                        <code className="mt-1 block truncate font-mono text-[11px] text-amber-800 bg-amber-500/10 px-1.5 py-0.5 rounded-[4px] w-fit">{reference.name}</code>
+                      </div>
+                      <span className="text-[9.5px] font-bold uppercase tracking-[0.12em] text-amber-600 bg-amber-500/15 px-1.5 py-0.5 rounded-[6px] shrink-0">
+                        Missing
+                      </span>
                     </div>
-                    <span className="text-[10px] font-medium uppercase tracking-[0.12em] text-[#7a828b]">
-                      {reference.configured ? "Configured" : "Needed"}
-                    </span>
+                    <p className="mt-2 text-[12px] leading-5 text-[#5f6870]">
+                      {reference.description}
+                    </p>
                   </div>
-                  <p className="mt-1 text-[12px] leading-5 text-[#6c747d]">
-                    {reference.description}
+                ))
+              ) : (
+                <div className="rounded-[16px] border border-green-500/10 bg-green-500/[0.02] p-5 text-center shadow-sm">
+                  <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-green-500/10 text-green-600 mb-3">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z" />
+                    </svg>
+                  </div>
+                  <h3 className="text-[14px] font-bold text-green-800">All Configured</h3>
+                  <p className="mt-1.5 text-[12px] text-green-700/80 leading-5">
+                    Your active workflows and connectors have full access to all required environment variables and keys.
                   </p>
                 </div>
-              ))}
+              )}
             </div>
           </section>
         </aside>

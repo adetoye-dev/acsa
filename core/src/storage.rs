@@ -498,7 +498,7 @@ impl RunStore {
         .execute(&self.pool)
         .await?;
 
-        self.get_workflow(user_id, workflow_id).await
+        self.get_workflow_by_id_system(workflow_id).await
     }
 
     pub async fn update_workflow(

@@ -24,6 +24,7 @@ export type CredentialItem = {
 
 type CredentialsResponse = {
   credentials: CredentialItem[];
+  env_keys?: string[];
 };
 
 export async function fetchCredentials() {

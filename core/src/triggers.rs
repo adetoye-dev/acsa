@@ -319,6 +319,7 @@ struct CredentialView {
 #[derive(Debug, Clone, Serialize)]
 struct CredentialsResponse {
     credentials: Vec<CredentialView>,
+    env_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3601,7 +3602,8 @@ async fn list_credentials(
     match state.engine.store().list_credentials(&user_id).await {
         Ok(records) => {
             let credentials = records.into_iter().map(credential_view).collect::<Vec<_>>();
-            (StatusCode::OK, Json(json!(CredentialsResponse { credentials }))).into_response()
+            let env_keys = env::vars().map(|(k, _)| k).collect::<Vec<_>>();
+            (StatusCode::OK, Json(json!(CredentialsResponse { credentials, env_keys }))).into_response()
         }
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
