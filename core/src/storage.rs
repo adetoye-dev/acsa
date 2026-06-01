@@ -1462,8 +1462,9 @@ impl RunStore {
 
         if !workflow_cols.is_empty() && !user_id_pk {
             // Table exists but user_id is not part of the primary key. Let's migrate it.
+            let mut tx = self.pool.begin().await?;
             sqlx::query("ALTER TABLE workflows RENAME TO workflows_old")
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await?;
             sqlx::query(
                 r#"
@@ -1478,7 +1479,7 @@ impl RunStore {
                 )
                 "#,
             )
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
             sqlx::query(
                 r#"
@@ -1486,9 +1487,10 @@ impl RunStore {
                 SELECT id, name, yaml, created_at, updated_at, user_id FROM workflows_old
                 "#,
             )
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
-            sqlx::query("DROP TABLE workflows_old").execute(&self.pool).await?;
+            sqlx::query("DROP TABLE workflows_old").execute(&mut *tx).await?;
+            tx.commit().await?;
         } else {
             // Fresh create or already migrated
             sqlx::query(
