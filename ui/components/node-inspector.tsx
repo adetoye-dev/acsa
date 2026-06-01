@@ -21,6 +21,7 @@ import type {
   WorkflowDocument
 } from "../lib/workflow-editor";
 import { YamlEditor } from "./yaml-editor";
+import { NodeGlyph } from "./node-visuals";
 
 type NodeInspectorProps = {
   activeWorkflow: WorkflowDocument | null;
@@ -148,6 +149,13 @@ export function NodeInspector({
                 Capability
               </div>
               <div className="flex items-center gap-3 rounded-[12px] border border-black/10 bg-[#fbfbfa] px-3.5 py-2.5">
+                <NodeGlyph
+                  category={selectedNode.data.category}
+                  className="shrink-0"
+                  kind={selectedNode.data.kind}
+                  size="sm"
+                  typeName={selectedNode.data.typeName}
+                />
                 <div className="min-w-0 flex-1">
                   <div className="text-[13px] font-medium text-ink">
                     {selectedStepType?.label ?? (selectedStep ? titleCase(selectedStep.type) : "Unknown")}
