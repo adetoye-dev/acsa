@@ -49,8 +49,7 @@ use tracing::{error, info, warn};
 use crate::{
     connectors::{
         discover_connector_manifests_from_dirs, inspect_connectors, inspect_connectors_from_dirs,
-        run_manifest_path,
-        wasm_connectors_enabled, ConnectorError, ConnectorRuntime,
+        run_manifest_path, wasm_connectors_enabled, ConnectorError, ConnectorRuntime,
     },
     engine::{
         compile_workflow, load_workflows_from_dir, validate_workflow, EngineError, ExecutionStatus,
@@ -58,7 +57,6 @@ use crate::{
     },
     models::{Trigger, Workflow},
     n8n_import::translate_n8n_workflow,
-
     observability::{
         current_timestamp, metrics_text, payload_visibility_enabled, record_log,
         redact_json_string, redact_text, LogLevel, RetentionPolicy,
@@ -72,9 +70,8 @@ use crate::{
         WorkflowValidationState,
     },
     storage::{
-        resolve_secret_value, CredentialRecord, LogQuery, LogRecord,
-        PaginatedResponse, RunQuery, RunRecord, RunStore,
-        StepRunRecord, WorkflowRecord,
+        resolve_secret_value, CredentialRecord, LogQuery, LogRecord, PaginatedResponse, RunQuery,
+        RunRecord, RunStore, StepRunRecord, WorkflowRecord,
     },
 };
 
@@ -167,8 +164,6 @@ struct WorkflowWriteResult {
     yaml: String,
 }
 
-
-
 #[derive(Debug, Deserialize)]
 struct TestConnectorRequest {
     #[serde(default)]
@@ -251,9 +246,6 @@ struct ConnectorInventoryResponse {
     wasm_enabled: bool,
 }
 
-
-
-
 #[derive(Debug, Clone, Serialize)]
 struct ConnectorTestResponse {
     connector: ConnectorView,
@@ -261,8 +253,6 @@ struct ConnectorTestResponse {
     output: Value,
     params: Value,
 }
-
-
 
 #[derive(Debug, Clone, Serialize)]
 struct CredentialView {
@@ -313,8 +303,6 @@ struct InvalidConnectorView {
     required_by_templates: Vec<String>,
     used_by_workflows: Vec<String>,
 }
-
-
 
 #[derive(Debug, Clone, Serialize)]
 struct WorkflowSummary {
@@ -663,16 +651,12 @@ async fn list_connectors(
     }
 }
 
-
-
 async fn test_connector(
     State(state): State<AppState>,
     AxumPath(connector_type): AxumPath<String>,
     Json(request): Json<TestConnectorRequest>,
 ) -> Response {
-    let inspection = match inspect_connectors_from_dirs(&[
-        state.connectors_dir.as_path(),
-    ]) {
+    let inspection = match inspect_connectors_from_dirs(&[state.connectors_dir.as_path()]) {
         Ok(inspection) => inspection,
         Err(error) => return connector_error_response(TriggerError::Connector(error)),
     };
@@ -731,8 +715,6 @@ async fn list_workflows(
         }
     }
 }
-
-
 
 async fn list_runs(
     State(state): State<AppState>,
@@ -1549,17 +1531,11 @@ async fn connector_inventory(
         invalid_connectors: inspection
             .invalid
             .iter()
-            .map(|connector| {
-                invalid_connector_view(connector, &workflow_dependencies)
-            })
+            .map(|connector| invalid_connector_view(connector, &workflow_dependencies))
             .collect(),
         wasm_enabled: wasm_connectors_enabled(),
     })
 }
-
-
-
-
 
 async fn connector_usage_by_workflow(
     store: &RunStore,
@@ -1713,21 +1689,19 @@ async fn node_catalog(
         },
     ];
 
-    let mut connectors = discover_connector_manifests_from_dirs(&[
-        connectors_dir,
-    ])?
-    .into_iter()
-    .map(|manifest| StepTypeEntry {
-        category: "Apps".to_string(),
-        description: format!(
-            "{} app connector loaded from manifest.",
-            connector_runtime_name(manifest.runtime).to_uppercase()
-        ),
-        label: manifest.name,
-        runtime: Some(connector_runtime_name(manifest.runtime).to_string()),
-        type_name: manifest.type_id,
-    })
-    .collect::<Vec<_>>();
+    let mut connectors = discover_connector_manifests_from_dirs(&[connectors_dir])?
+        .into_iter()
+        .map(|manifest| StepTypeEntry {
+            category: "Apps".to_string(),
+            description: format!(
+                "{} app connector loaded from manifest.",
+                connector_runtime_name(manifest.runtime).to_uppercase()
+            ),
+            label: manifest.name,
+            runtime: Some(connector_runtime_name(manifest.runtime).to_string()),
+            type_name: manifest.type_id,
+        })
+        .collect::<Vec<_>>();
 
     step_types.append(&mut connectors);
     step_types.sort_by(|left, right| left.label.cmp(&right.label));
@@ -2222,8 +2196,6 @@ fn resolve_connector_test_inputs(
     serde_json::from_str(&raw).map_err(|error| TriggerError::Connector(ConnectorError::Json(error)))
 }
 
-
-
 const fn default_true() -> bool {
     true
 }
@@ -2542,7 +2514,8 @@ async fn list_credentials(
         Ok(records) => {
             let credentials = records.into_iter().map(credential_view).collect::<Vec<_>>();
             let env_keys = env::vars().map(|(k, _)| k).collect::<Vec<_>>();
-            (StatusCode::OK, Json(json!(CredentialsResponse { credentials, env_keys }))).into_response()
+            (StatusCode::OK, Json(json!(CredentialsResponse { credentials, env_keys })))
+                .into_response()
         }
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
@@ -2760,7 +2733,7 @@ fn verify_session_token(token: &str) -> Result<String, String> {
         use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
         let payload_b64 = parts[1];
         let mut payload_padded = payload_b64.to_string();
-        while payload_padded.len() % 4 != 0 {
+        while !payload_padded.len().is_multiple_of(4) {
             payload_padded.push('=');
         }
         let decoded_bytes = BASE64
@@ -2860,32 +2833,27 @@ async fn authenticate_user(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, HashMap};
     use axum::{
         body::to_bytes,
         http::{header::AUTHORIZATION, HeaderMap, HeaderValue, StatusCode},
         response::IntoResponse,
         Json,
     };
+    use std::collections::{BTreeMap, HashMap};
 
     use chrono::Utc;
     use serde_json::json;
     use serde_yaml::Value as YamlValue;
 
     use super::{
-        authenticate_webhook,
-        build_workflow_summary, compute_signature, connector_inventory, connector_view,
-        create_workflow_document, cron_schedule,
-        import_n8n_workflow, invalid_connector_view,
-        node_catalog, parse_workflow_document_state,
+        authenticate_webhook, build_workflow_summary, compute_signature, connector_inventory,
+        connector_view, create_workflow_document, cron_schedule, import_n8n_workflow,
+        invalid_connector_view, node_catalog, parse_workflow_document_state,
         read_workflow_document, rename_workflow_document, request_has_engine_token, run_view,
         save_workflow_document, seed_workflows_from_directory_if_missing, serialize_workflow_yaml,
-        slugify_workflow_name,
-        validate_secret_value, validate_workflow_id, workflow_inventory,
-        CreateWorkflowRequest,
-        N8nImportRequest, RenameWorkflowRequest, RunDetailResponse,
-        RunPageResponse, TriggerError, WebhookSignatureAuth,
-        WebhookWorkflow,
+        slugify_workflow_name, validate_secret_value, validate_workflow_id, workflow_inventory,
+        CreateWorkflowRequest, N8nImportRequest, RenameWorkflowRequest, RunDetailResponse,
+        RunPageResponse, TriggerError, WebhookSignatureAuth, WebhookWorkflow,
     };
     use crate::{
         engine::compile_workflow,
@@ -2986,8 +2954,6 @@ mod tests {
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
     }
 
-
-
     #[test]
     fn node_catalog_uses_outcome_language_for_built_in_triggers() {
         let temp_dir = write_temp_directory("node-catalog-trigger-language");
@@ -3015,8 +2981,6 @@ mod tests {
 
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
     }
-
-
 
     #[tokio::test]
     async fn import_n8n_workflow_endpoint_returns_translation_payload() {
@@ -3113,7 +3077,6 @@ mod tests {
             .expect("error should be rendered as a string")
             .contains("invalid n8n workflow payload"));
     }
-
 
     #[test]
     fn rejects_workflow_ids_with_path_traversal_characters() {
@@ -3975,8 +3938,6 @@ steps:
 
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
     }
-
-
 
     #[test]
     fn create_workflow_succeeds_when_post_write_summary_enrichment_fails() {

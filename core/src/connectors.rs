@@ -1022,8 +1022,6 @@ mod tests {
         ConnectorRuntime,
     };
 
-
-
     #[test]
     fn validates_required_output_keys() {
         let manifest = ConnectorManifest {

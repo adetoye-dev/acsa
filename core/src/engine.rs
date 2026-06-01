@@ -37,14 +37,9 @@ use tokio::{spawn, sync::Semaphore, task::JoinSet, time::timeout};
 use crate::{
     connectors::load_connectors_from_dirs_into,
     models::{Step, Trigger, Workflow},
-    nodes::{
-        split_control, BuiltInNodeConfig, NodeError, NodeOutcome,
-        NodePause, NodeRegistry,
-    },
+    nodes::{split_control, BuiltInNodeConfig, NodeError, NodeOutcome, NodePause, NodeRegistry},
     observability::{record_log, LogLevel},
-    storage::{
-        HumanTaskRecord, NewHumanTask, RunStore, StorageError,
-    },
+    storage::{HumanTaskRecord, NewHumanTask, RunStore, StorageError},
 };
 
 const SUPPORTED_WORKFLOW_VERSION: &str = "v1";
@@ -2288,8 +2283,6 @@ json.dump({"echoed": "loaded-after-startup"}, sys.stdout)
         cleanup_file(temp_db);
         cleanup_dir(temp_data_dir);
     }
-
-
 
     fn cleanup_file(path: PathBuf) {
         if path.exists() {

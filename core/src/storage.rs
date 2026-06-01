@@ -236,8 +236,6 @@ impl RunStore {
         Ok(row.try_get("user_id")?)
     }
 
-
-
     pub async fn list_credentials(
         &self,
         user_id: &str,
@@ -598,8 +596,6 @@ impl RunStore {
 
         Ok(())
     }
-
-
 
     pub fn queued_plaintext_credential_names(&self) -> Vec<String> {
         match plaintext_credential_migration_queue().read() {
@@ -1428,7 +1424,6 @@ impl RunStore {
     }
 
     async fn initialize(&self) -> Result<(), StorageError> {
-
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS runs (
@@ -1606,7 +1601,6 @@ impl RunStore {
             .execute(&self.pool)
             .await?;
 
-
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)")
             .execute(&self.pool)
             .await?;
@@ -1783,11 +1777,6 @@ pub struct WorkflowRecord {
     pub user_id: String,
 }
 
-
-
-
-
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HumanTaskRecord {
     pub id: String,
@@ -1814,11 +1803,6 @@ pub struct NewHumanTask<'a> {
     pub step_id: &'a str,
     pub step_run_id: &'a str,
 }
-
-
-
-
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunStatus {
@@ -2147,11 +2131,6 @@ fn map_workflow_row(row: sqlx::sqlite::SqliteRow) -> Result<WorkflowRecord, Stor
     })
 }
 
-
-
-
-
-
 fn map_step_run_row(row: sqlx::sqlite::SqliteRow) -> Result<StepRunRecord, StorageError> {
     let attempt_i64 = row.try_get::<i64, _>("attempt")?;
     let attempt = u32::try_from(attempt_i64).map_err(|_| {
@@ -2384,8 +2363,6 @@ mod tests {
 
         tokio::fs::remove_dir_all(&temp_dir).await.expect("temp dir should be removed");
     }
-
-
 
     struct InsertRunArgs<'a> {
         editor_snapshot: Option<&'a str>,
