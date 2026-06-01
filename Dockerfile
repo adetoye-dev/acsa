@@ -65,16 +65,14 @@ RUN mkdir -p /data /app/workflows
 # Copy compiled engine binary
 COPY --from=builder /app/target/release/acsa-core /usr/local/bin/acsa-core
 
-# Copy default workflows, starter packs, and connectors into the image
+# Copy default workflows and connectors into the image
 COPY workflows /app/workflows
-COPY starter-packs /app/starter-packs
 COPY connectors /app/connectors
 
 # Configure default runtime environment variables
 ENV PORT=8080
 ENV ACSA_DB_PATH=/data/acsa.db
 ENV ACSA_WORKFLOWS_DIR=/app/workflows
-ENV STARTER_PACKS_DIR=/app/starter-packs
 
 # Expose server port
 EXPOSE 8080
