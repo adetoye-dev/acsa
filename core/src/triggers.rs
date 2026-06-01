@@ -762,8 +762,12 @@ async fn get_run_detail(
             return (StatusCode::FORBIDDEN, Json(json!({ "error": "access denied" })))
                 .into_response();
         }
-        Err(_) => {
+        Err(crate::storage::StorageError::RunNotFound(_)) => {
             return (StatusCode::NOT_FOUND, Json(json!({ "error": "run not found" })))
+                .into_response();
+        }
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
                 .into_response();
         }
     }
@@ -805,8 +809,12 @@ async fn get_run_logs(
             return (StatusCode::FORBIDDEN, Json(json!({ "error": "access denied" })))
                 .into_response();
         }
-        Err(_) => {
+        Err(crate::storage::StorageError::RunNotFound(_)) => {
             return (StatusCode::NOT_FOUND, Json(json!({ "error": "run not found" })))
+                .into_response();
+        }
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
                 .into_response();
         }
     }
@@ -2722,7 +2730,7 @@ fn verify_session_token(token: &str) -> Result<String, String> {
 
     let public_key_pem = env::var("ACSA_CLERK_PEM_PUBLIC_KEY").ok();
 
-    if env_flag("ACSA_CLERK_INSECURE_DEV") || public_key_pem.is_none() {
+    if env_flag("ACSA_CLERK_INSECURE_DEV") { 
         if public_key_pem.is_none() {
             warn!("ACSA_CLERK_PEM_PUBLIC_KEY is not set. Defaulting to local token parsing without signature verification for dev onboarding.");
         }
@@ -2730,14 +2738,10 @@ fn verify_session_token(token: &str) -> Result<String, String> {
         if parts.len() < 2 {
             return Err("invalid clerk token format".to_string());
         }
-        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64, Engine as _};  
         let payload_b64 = parts[1];
-        let mut payload_padded = payload_b64.to_string();
-        while !payload_padded.len().is_multiple_of(4) {
-            payload_padded.push('=');
-        }
         let decoded_bytes = BASE64
-            .decode(payload_padded)
+            .decode(payload_b64) 
             .map_err(|e| format!("failed to base64 decode claims: {}", e))?;
         let claims: ClerkClaims = serde_json::from_slice(&decoded_bytes)
             .map_err(|e| format!("failed to parse claims JSON: {}", e))?;
@@ -2749,7 +2753,7 @@ fn verify_session_token(token: &str) -> Result<String, String> {
         return Ok(claims.sub);
     }
 
-    let public_key_pem = public_key_pem.unwrap();
+    let public_key_pem =  public_key_pem.ok_or_else(|| "ACSA_CLERK_PEM_PUBLIC_KEY is not set".to_string())?;  
 
     let header =
         decode_header(token).map_err(|e| format!("failed to decode token header: {}", e))?;
