@@ -20,6 +20,32 @@ function isSensitiveCredentialPath(path: string): boolean {
   return path.startsWith("/api/credentials");
 }
 
+function getAuthHeaders(init?: RequestInit): HeadersInit {
+  const headers: Record<string, string> = {};
+  if (typeof window !== "undefined") {
+    const token = localStorage.getItem("acsa_session_token");
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+  }
+  
+  const initHeaders = init?.headers;
+  if (initHeaders) {
+    if (initHeaders instanceof Headers) {
+      initHeaders.forEach((value, key) => {
+        headers[key] = value;
+      });
+    } else if (Array.isArray(initHeaders)) {
+      initHeaders.forEach(([key, value]) => {
+        headers[key] = value;
+      });
+    } else {
+      Object.assign(headers, initHeaders);
+    }
+  }
+  return headers;
+}
+
 export async function fetchEngineJson<T>(
   path: string,
   init?: RequestInit
@@ -27,7 +53,8 @@ export async function fetchEngineJson<T>(
   const sensitivePath = isSensitiveCredentialPath(path);
   const response = await fetch(`${ENGINE_PROXY_BASE}${path}`, {
     cache: "no-store",
-    ...init
+    ...init,
+    headers: getAuthHeaders(init)
   });
   const body = await response.text();
   if (!body.trim()) {
@@ -68,7 +95,8 @@ export async function fetchEngineText(
 ): Promise<string> {
   const response = await fetch(`${ENGINE_PROXY_BASE}${path}`, {
     cache: "no-store",
-    ...init
+    ...init,
+    headers: getAuthHeaders(init)
   });
   const body = await response.text();
   if (!response.ok) {
@@ -84,7 +112,8 @@ export async function fetchEngineNoContent(
   const sensitivePath = isSensitiveCredentialPath(path);
   const response = await fetch(`${ENGINE_PROXY_BASE}${path}`, {
     cache: "no-store",
-    ...init
+    ...init,
+    headers: getAuthHeaders(init)
   });
 
   if (!response.ok) {

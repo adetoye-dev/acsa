@@ -1,9 +1,0 @@
-{
-  "inputs": {
-    "subject": "Daily update",
-    "body": "Hello from ACSA"
-  },
-  "params": {
-    "recipient": "user@example.com"
-  }
-}

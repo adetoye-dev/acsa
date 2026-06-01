@@ -35,17 +35,11 @@ use thiserror::Error;
 use tokio::{spawn, sync::Semaphore, task::JoinSet, time::timeout};
 
 use crate::{
-    asset_store::AssetStore,
-    connectors::{inspect_connectors, load_connectors_from_dirs_into},
+    connectors::load_connectors_from_dirs_into,
     models::{Step, Trigger, Workflow},
-    nodes::{
-        split_control, AliasNode, AliasNodeDefinition, BuiltInNodeConfig, NodeError, NodeOutcome,
-        NodePause, NodeRegistry,
-    },
+    nodes::{split_control, BuiltInNodeConfig, NodeError, NodeOutcome, NodePause, NodeRegistry},
     observability::{record_log, LogLevel},
-    storage::{
-        HumanTaskRecord, NewAssetRecord, NewConnectorRecord, NewHumanTask, RunStore, StorageError,
-    },
+    storage::{HumanTaskRecord, NewHumanTask, RunStore, StorageError},
 };
 
 const SUPPORTED_WORKFLOW_VERSION: &str = "v1";
@@ -128,9 +122,6 @@ impl WorkflowEngine {
         let store = RunStore::connect(database_path).await?;
         let registry = NodeRegistry::built_in(BuiltInNodeConfig::default());
         let engine = Self { config, registry, store };
-        if engine.config.connector_path.is_none() {
-            engine.sync_repo_authored_connectors(Path::new("connectors")).await?;
-        }
         engine.sync_connectors()?;
         Ok(engine)
     }
@@ -147,129 +138,10 @@ impl WorkflowEngine {
         self.sync_connectors()
     }
 
-    pub async fn sync_repo_authored_connectors(
-        &self,
-        connectors_dir: &Path,
-    ) -> Result<(), EngineError> {
-        if !connectors_dir.exists() {
-            return Ok(());
-        }
-
-        let inspection = inspect_connectors(connectors_dir)
-            .map_err(|error| EngineError::ConnectorLoad(error.to_string()))?;
-        let asset_store = AssetStore::new(self.store.asset_store_root())
-            .map_err(|error| EngineError::ConnectorLoad(error.to_string()))?;
-
-        for connector in inspection.connectors {
-            let manifest_json = serde_json::to_string(&connector.manifest)?;
-            let runtime = match connector.manifest.runtime {
-                crate::connectors::ConnectorRuntime::Process => "process",
-                crate::connectors::ConnectorRuntime::Wasm => "wasm",
-            };
-            let dir_name =
-                connector.connector_dir.file_name().and_then(|value| value.to_str()).ok_or_else(
-                    || {
-                        EngineError::ConnectorLoad(format!(
-                            "connector directory {} has no valid name",
-                            connector.connector_dir.display()
-                        ))
-                    },
-                )?;
-
-            match self.store.get_asset_record("connector", &connector.manifest.type_id).await {
-                Ok(existing_asset) => {
-                    if existing_asset.source_kind != "shipped" {
-                        continue;
-                    }
-                    if existing_asset.is_locally_modified {
-                        self.store
-                            .upsert_asset_record(NewAssetRecord {
-                                asset_kind: "connector",
-                                type_name: &existing_asset.type_name,
-                                name: &existing_asset.name,
-                                description: &existing_asset.description,
-                                category: existing_asset.category.as_deref(),
-                                runtime: existing_asset.runtime.as_deref(),
-                                source_kind: &existing_asset.source_kind,
-                                source_ref: existing_asset.source_ref.as_deref(),
-                                definition_json: &existing_asset.definition_json,
-                                installed_version: existing_asset.installed_version.as_deref(),
-                                available_version: connector.manifest.version.as_deref(),
-                                is_locally_modified: true,
-                            })
-                            .await?;
-                        continue;
-                    }
-                    if existing_asset.installed_version.as_deref()
-                        != connector.manifest.version.as_deref()
-                    {
-                        self.store
-                            .upsert_asset_record(NewAssetRecord {
-                                asset_kind: "connector",
-                                type_name: &existing_asset.type_name,
-                                name: &existing_asset.name,
-                                description: &existing_asset.description,
-                                category: existing_asset.category.as_deref(),
-                                runtime: Some(runtime),
-                                source_kind: &existing_asset.source_kind,
-                                source_ref: existing_asset.source_ref.as_deref().or(Some(dir_name)),
-                                definition_json: &existing_asset.definition_json,
-                                installed_version: existing_asset.installed_version.as_deref(),
-                                available_version: connector.manifest.version.as_deref(),
-                                is_locally_modified: false,
-                            })
-                            .await?;
-                        continue;
-                    }
-                }
-                Err(StorageError::AssetRecordNotFound(_, _)) => {}
-                Err(error) => return Err(error.into()),
-            }
-
-            let stored_bundle = asset_store
-                .store_connector_bundle(dir_name, &connector.connector_dir)
-                .map_err(|error| EngineError::ConnectorLoad(error.to_string()))?;
-            let connector_dir = stored_bundle.connector_dir.display().to_string();
-            let manifest_path = stored_bundle.manifest_path.display().to_string();
-
-            self.store
-                .upsert_asset_record(NewAssetRecord {
-                    asset_kind: "connector",
-                    type_name: &connector.manifest.type_id,
-                    name: &connector.manifest.name,
-                    description: &connector.manifest.name,
-                    category: Some("Apps"),
-                    runtime: Some(runtime),
-                    source_kind: "shipped",
-                    source_ref: Some(dir_name),
-                    definition_json: &manifest_json,
-                    installed_version: connector.manifest.version.as_deref(),
-                    available_version: connector.manifest.version.as_deref(),
-                    is_locally_modified: false,
-                })
-                .await?;
-            self.store
-                .upsert_connector_record(NewConnectorRecord {
-                    type_name: &connector.manifest.type_id,
-                    name: &connector.manifest.name,
-                    runtime,
-                    source_kind: "shipped",
-                    source_ref: Some(dir_name),
-                    connector_dir: &connector_dir,
-                    manifest_path: &manifest_path,
-                    manifest_json: &manifest_json,
-                })
-                .await?;
-        }
-
-        Ok(())
-    }
-
     fn sync_connectors(&self) -> Result<(), EngineError> {
-        let asset_store_connectors_dir = self.store.asset_store_connectors_dir();
         let connector_dirs: Vec<&Path> = match self.config.connector_path.as_deref() {
-            Some(connector_path) => vec![connector_path, asset_store_connectors_dir.as_path()],
-            None => vec![asset_store_connectors_dir.as_path()],
+            Some(connector_path) => vec![connector_path],
+            None => vec![Path::new("connectors")],
         };
         load_connectors_from_dirs_into(&self.registry, &connector_dirs)
             .map_err(|error| EngineError::ConnectorLoad(error.to_string()))?;
@@ -338,9 +210,13 @@ impl WorkflowEngine {
     ) -> Result<ExecutionSummary, EngineError> {
         self.sync_connectors()?;
         let workflow_revision = workflow_revision_identity(&workflow_snapshot);
+        let user_id = crate::storage::CURRENT_USER_ID
+            .try_with(|id| id.clone())
+            .unwrap_or_else(|_| "local".to_string());
         let run = self
             .store
             .start_run(
+                &user_id,
                 &plan.workflow.name,
                 &workflow_revision,
                 &workflow_snapshot,
@@ -392,9 +268,13 @@ impl WorkflowEngine {
     ) -> Result<StartedExecution, EngineError> {
         self.sync_connectors()?;
         let workflow_revision = workflow_revision_identity(&workflow_snapshot);
+        let user_id = crate::storage::CURRENT_USER_ID
+            .try_with(|id| id.clone())
+            .unwrap_or_else(|_| "local".to_string());
         let run = self
             .store
             .start_run(
+                &user_id,
                 &plan.workflow.name,
                 &workflow_revision,
                 &workflow_snapshot,
@@ -491,6 +371,7 @@ impl WorkflowEngine {
 
     pub async fn resume_human_task(
         &self,
+        user_id: &str,
         task_id: &str,
         response: Value,
     ) -> Result<ExecutionSummary, EngineError> {
@@ -501,6 +382,9 @@ impl WorkflowEngine {
         }
 
         let run = self.store.get_run(&task.run_id).await?;
+        if run.user_id != user_id {
+            return Err(EngineError::RunNotFound { run_id: run.id });
+        }
         if run.status != "paused" {
             return Err(EngineError::RunNotPaused { run_id: run.id });
         }
@@ -586,7 +470,17 @@ impl WorkflowEngine {
 
                 join_set.spawn(async move {
                     let _permit = permit;
-                    execute_step_with_retries(&store, &registry, &run_id, &step, inputs, timeout_ms)
+                    let user_id = store
+                        .get_run_user_id(&run_id)
+                        .await
+                        .unwrap_or_else(|_| "local".to_string());
+                    crate::storage::CURRENT_USER_ID
+                        .scope(user_id, async move {
+                            execute_step_with_retries(
+                                &store, &registry, &run_id, &step, inputs, timeout_ms,
+                            )
+                            .await
+                        })
                         .await
                 });
             }
@@ -1059,6 +953,8 @@ pub enum EngineError {
     ParseRunWorkflowSnapshot { run_id: String, message: String },
     #[error("human task {task_id} is no longer pending")]
     HumanTaskNotPending { task_id: String },
+    #[error("Run {run_id} was not found or access was denied")]
+    RunNotFound { run_id: String },
     #[error("run {run_id} is not paused")]
     RunNotPaused { run_id: String },
     #[error("human task {task_id} has unsupported kind {kind}")]
@@ -1430,7 +1326,7 @@ async fn execute_step_with_retries(
 }
 
 async fn resolve_executable_node(
-    store: &RunStore,
+    _store: &RunStore,
     registry: &NodeRegistry,
     step: &Step,
 ) -> Result<Arc<dyn crate::nodes::Node>, StepExecutionFailure> {
@@ -1438,43 +1334,10 @@ async fn resolve_executable_node(
         return Ok(node);
     }
 
-    let asset = match store.get_asset_record("node", &step.r#type).await {
-        Ok(asset) => asset,
-        Err(StorageError::AssetRecordNotFound(_, _)) => {
-            return Err(StepExecutionFailure {
-                step_id: step.id.clone(),
-                error: format!("unknown node type {}", step.r#type),
-            });
-        }
-        Err(error) => {
-            return Err(StepExecutionFailure {
-                step_id: step.id.clone(),
-                error: error.to_string(),
-            });
-        }
-    };
-
-    let definition =
-        serde_json::from_str::<AliasNodeDefinition>(&asset.definition_json).map_err(|error| {
-            StepExecutionFailure {
-                step_id: step.id.clone(),
-                error: format!("invalid node asset definition for {}: {error}", step.r#type),
-            }
-        })?;
-
-    if definition.kind != "alias" {
-        return Err(StepExecutionFailure {
-            step_id: step.id.clone(),
-            error: format!("unsupported node asset kind {} for {}", definition.kind, step.r#type),
-        });
-    }
-
-    Ok(Arc::new(AliasNode::new(
-        step.r#type.clone(),
-        definition.base_type,
-        definition.default_params,
-        registry.clone(),
-    )))
+    Err(StepExecutionFailure {
+        step_id: step.id.clone(),
+        error: format!("unknown node type {}", step.r#type),
+    })
 }
 
 fn error_message(error: &NodeError) -> String {
@@ -1682,7 +1545,7 @@ mod tests {
     use crate::{
         models::{RetryPolicy, Step, Trigger, Workflow, WorkflowUi},
         nodes::{BuiltInNodeConfig, Node, NodeError, NodeRegistry},
-        storage::{LogQuery, NewAssetRecord, RunStore},
+        storage::{LogQuery, RunStore},
     };
 
     #[test]
@@ -1971,7 +1834,7 @@ steps:
             .await
             .expect("workflow should execute");
 
-        let runs = store.list_runs().await.expect("runs should be queryable");
+        let runs = store.list_runs("local").await.expect("runs should be queryable");
         let step_runs =
             store.list_step_runs(&summary.run_id).await.expect("step runs should be queryable");
 
@@ -2091,12 +1954,12 @@ steps:
             .starts_with("sha256:"));
 
         let resumed = engine
-            .resume_human_task(&paused.pending_tasks[0].id, json!({ "approved": true }))
+            .resume_human_task("local", &paused.pending_tasks[0].id, json!({ "approved": true }))
             .await
             .expect("workflow should resume");
-        let runs = store.list_runs().await.expect("runs should be queryable");
+        let runs = store.list_runs("local").await.expect("runs should be queryable");
         let pending_tasks = store
-            .list_pending_human_tasks()
+            .list_pending_human_tasks("local")
             .await
             .expect("pending human tasks should be queryable");
 
@@ -2159,7 +2022,7 @@ steps:
             .expect("legacy workflow snapshot should update");
 
         let resumed = engine
-            .resume_human_task(&paused.pending_tasks[0].id, json!({ "approved": true }))
+            .resume_human_task("local", &paused.pending_tasks[0].id, json!({ "approved": true }))
             .await
             .expect("legacy workflow snapshot should resume");
 
@@ -2419,51 +2282,6 @@ json.dump({"echoed": "loaded-after-startup"}, sys.stdout)
 
         cleanup_file(temp_db);
         cleanup_dir(temp_data_dir);
-    }
-
-    #[tokio::test]
-    async fn executes_generated_alias_nodes_from_asset_records() {
-        let workflow = Workflow {
-            version: "v1".to_string(),
-            name: "generated-alias-node".to_string(),
-            trigger: Trigger { r#type: "manual".to_string(), details: Default::default() },
-            steps: vec![step("generated", "generated_echo", json!({ "prompt": "hello" }), vec![])],
-            ui: Default::default(),
-        };
-        let plan = compile_workflow(workflow).expect("workflow should plan");
-        let temp_db = temp_db_path("generated-alias-node");
-        let store = RunStore::connect(&temp_db).await.expect("sqlite should initialize");
-        store
-            .upsert_asset_record(NewAssetRecord {
-                asset_kind: "node",
-                type_name: "generated_echo",
-                name: "Generated Echo",
-                description: "Generated alias around echo.",
-                category: Some("Apps"),
-                runtime: Some("alias"),
-                source_kind: "generated",
-                source_ref: Some("prompt:test"),
-                definition_json:
-                    r#"{"kind":"alias","base_type":"echo","default_params":{"preset":"ok"}}"#,
-                installed_version: None,
-                available_version: None,
-                is_locally_modified: false,
-            })
-            .await
-            .expect("asset record should persist");
-        let registry = NodeRegistry::new();
-        registry.register(EchoNode);
-        let engine = WorkflowEngine::with_registry(store, registry, ExecutionConfig::default());
-
-        let summary = engine
-            .execute_plan(&plan, json!({ "trigger": "manual" }))
-            .await
-            .expect("workflow should execute with generated alias node");
-
-        assert_eq!(summary.outputs["generated"]["params"]["prompt"], json!("hello"));
-        assert_eq!(summary.outputs["generated"]["params"]["preset"], json!("ok"));
-
-        cleanup_file(temp_db);
     }
 
     fn cleanup_file(path: PathBuf) {

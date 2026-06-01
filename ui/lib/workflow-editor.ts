@@ -85,21 +85,10 @@ export type WorkflowDocumentResponse = {
 };
 
 export type StepTypeEntry = {
-  app_record?: {
-    available_version?: string | null;
-    base_type_name?: string | null;
-    description?: string | null;
-    installed_version?: string | null;
-    is_locally_modified?: boolean;
-    label?: string | null;
-    source_kind: string;
-    source_ref?: string | null;
-  } | null;
   category: string;
   description: string;
   label: string;
   runtime?: string | null;
-  source: string;
   type_name: string;
 };
 
@@ -577,7 +566,7 @@ export function workflowToCanvas(
       position,
       type: "workflowNode",
       data: {
-        category: catalogEntry?.category ?? inferStepCategory(step.type, catalogEntry?.source),
+        category: catalogEntry?.category ?? inferStepCategory(step.type),
         description: step.id,
         detached: detachedSteps.has(step.id),
         kind: "step",
@@ -585,7 +574,7 @@ export function workflowToCanvas(
         nodeId: step.id,
         onDelete: null,
         runtime: catalogEntry?.runtime ?? null,
-        source: catalogEntry?.source ?? "workflow",
+        source: "workflow",
         typeName: step.type
       }
     });
@@ -829,11 +818,7 @@ function defaultStepParams(typeName: string): Record<string, unknown> {
   }
 }
 
-function inferStepCategory(typeName: string, source?: string | null): string {
-  if (source && source !== "built_in") {
-    return "integration";
-  }
-
+function inferStepCategory(typeName: string): string {
   if (/(llm|embedding|retrieval|classification|extraction|agent)/.test(typeName)) {
     return "ai";
   }

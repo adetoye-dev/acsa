@@ -32,6 +32,7 @@ import { NodeInspector } from "./node-inspector";
 import { TopBar, type WorkspaceView } from "./top-bar";
 import { WorkflowCanvas } from "./workflow-canvas";
 import { YamlEditor } from "./yaml-editor";
+import { CustomModal } from "./custom-modal";
 import {
   fetchEngineJson,
   fetchEngineNoContent,
@@ -195,6 +196,13 @@ export function EditorShell({
   const hasCreatedDraftOnBoot = useRef(false);
   const lastRecordedRecentWorkflowKey = useRef<string | null>(null);
   const lastCanvasLayoutSignature = useRef<string | null>(null);
+  const [pendingWorkflowId, setPendingWorkflowId] = useState<string | null>(null);
+  const [modalState, setModalState] = useState<{
+    type: "unsaved_draft" | "yaml_validation_error" | "delete_workflow" | "duplicate_workflow" | "rename_workflow" | null;
+    workflowId?: string;
+    defaultValue?: string;
+    message?: string;
+  }>({ type: null });
   const canvas = useMemo(
     () =>
       activeWorkflow
@@ -341,11 +349,13 @@ export function EditorShell({
     if (
       activeWorkflowId &&
       activeWorkflowId !== requestedWorkflowId &&
-      activeWorkflow?.localDraft &&
-      !window.confirm(
-        "You have an unsaved draft workflow. Open the requested workflow and discard draft changes?"
-      )
+      activeWorkflow?.localDraft
     ) {
+      setPendingWorkflowId(requestedWorkflowId);
+      setModalState({
+        type: "unsaved_draft",
+        message: "You have an unsaved draft workflow. Open the requested workflow and discard draft changes?"
+      });
       navigateToWorkflowRoute(activeWorkflowId);
       return;
     }
@@ -774,13 +784,20 @@ export function EditorShell({
     }
   }
 
-  async function handleDeleteWorkflow(workflowId: string) {
-    if (!window.confirm(`Delete ${workflowId}?`)) {
-      return;
-    }
+  function handleDeleteWorkflow(workflowId: string) {
+    const wfName = documents[workflowId]?.workflow.name ||
+      workflows.find((w) => w.id === workflowId)?.name ||
+      workflowId;
+    setModalState({
+      type: "delete_workflow",
+      workflowId,
+      message: `Are you sure you want to delete "${wfName}"? This action cannot be undone.`
+    });
+  }
 
-    const document = documents[workflowId];
-    if (document?.localDraft) {
+  async function executeDeleteWorkflow(workflowId: string) {
+    const wfDoc = documents[workflowId];
+    if (wfDoc?.localDraft) {
       setDocuments((current) => {
         const nextDocuments = { ...current };
         delete nextDocuments[workflowId];
@@ -854,8 +871,15 @@ export function EditorShell({
     }
   }
 
-  async function handleDuplicateWorkflow(workflowId: string) {
-    const proposedId = window.prompt("Duplicate into", `${workflowId}-copy`);
+  function handleDuplicateWorkflow(workflowId: string) {
+    setModalState({
+      type: "duplicate_workflow",
+      workflowId,
+      defaultValue: `${workflowId}-copy`
+    });
+  }
+
+  async function executeDuplicateWorkflow(workflowId: string, proposedId: string) {
     if (!proposedId) {
       return;
     }
@@ -932,13 +956,20 @@ export function EditorShell({
     }
   }
 
-  async function handleRenameWorkflow(workflowId: string) {
-    const document = documents[workflowId];
+  function handleRenameWorkflow(workflowId: string) {
+    const wfDoc = documents[workflowId];
     const currentName =
-      document?.workflow.name ??
+      wfDoc?.workflow.name ??
       workflows.find((workflow) => workflow.id === workflowId)?.name ??
       workflowId;
-    const proposedName = window.prompt("Rename workflow", currentName);
+    setModalState({
+      type: "rename_workflow",
+      workflowId,
+      defaultValue: currentName
+    });
+  }
+
+  async function executeRenameWorkflow(workflowId: string, proposedName: string) {
     if (!proposedName) {
       return;
     }
@@ -965,16 +996,18 @@ export function EditorShell({
       return;
     }
 
-    if (document?.localDraft) {
+    const wfDoc = documents[workflowId];
+
+    if (wfDoc?.localDraft) {
       const renamedDocument = finalizeDocument({
-        ...document,
+        ...wfDoc,
         id: targetId,
         localDraft: true,
-        summary: summarizeWorkflow(targetId, document.workflow, {
+        summary: summarizeWorkflow(targetId, wfDoc.workflow, {
           localDraft: true
         }),
         workflow: {
-          ...document.workflow,
+          ...wfDoc.workflow,
           name: nextName
         }
       });
@@ -1008,7 +1041,7 @@ export function EditorShell({
           body: JSON.stringify({
             name: nextName,
             target_id: targetId,
-            ...(document ? { yaml: workflowToYaml({ ...document.workflow, name: nextName }) } : {})
+            ...(wfDoc ? { yaml: workflowToYaml({ ...wfDoc.workflow, name: nextName }) } : {})
           }),
           headers: {
             "content-type": "application/json"
@@ -1301,11 +1334,14 @@ export function EditorShell({
     if (
       centerView === "yaml" &&
       workflowYamlErrorRef.current &&
-      (currentWorkflowYaml === undefined || workflowYamlDraftRef.current !== currentWorkflowYaml) &&
-      !window.confirm(
-        "You have YAML validation errors and unsaved edits. Switch workflows and discard current YAML draft changes?"
-      )
+      (currentWorkflowYaml === undefined || workflowYamlDraftRef.current !== currentWorkflowYaml)
     ) {
+      setPendingWorkflowId(workflowId);
+      setModalState({
+        type: "yaml_validation_error",
+        workflowId,
+        message: "You have YAML validation errors and unsaved edits. Switch workflows and discard current YAML draft changes?"
+      });
       if (activeWorkflowId) {
         navigateToWorkflowRoute(activeWorkflowId);
       }
@@ -1606,6 +1642,20 @@ export function EditorShell({
     }
   }
 
+  function handleExportWorkflow() {
+    if (!activeWorkflow) return;
+    const yamlContent = workflowYamlDraft || activeWorkflow.yaml;
+    const blob = new Blob([yamlContent], { type: "text/yaml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${activeWorkflow.id}.yaml`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }
+
   function handleFocusStepLibrary() {
     setAddStepIntent({ mode: "detached" });
     openRightPanel("library");
@@ -1686,6 +1736,7 @@ export function EditorShell({
   }, [canvasLayoutSignature]);
 
   return (
+    <>
     <main className={`${embeddedInProductShell ? "h-full" : "h-[100dvh]"} overflow-hidden bg-[#f7f7f8] text-ink`}>
       <div
         className={`grid h-full ${
@@ -1702,6 +1753,8 @@ export function EditorShell({
           onRefresh={() => void handleRefresh()}
           onRun={() => void handleRun()}
           onSave={() => void handleSave()}
+          onExport={handleExportWorkflow}
+          onRename={activeWorkflowId ? () => void handleRenameWorkflow(activeWorkflowId) : undefined}
           runDisabled={!canRun}
           runDisabledReason={runDisabledReason}
           saveDisabled={!canSave}
@@ -1939,14 +1992,12 @@ export function EditorShell({
                         setAddStepIntent({ mode: "detached" });
                         closeRightPanel("library");
                       }}
-                      onNodeRecordSaved={() => refreshNodeCatalog()}
                       onSelectType={handleAddStep}
                       stepCatalog={stepCatalog}
                     />
                   ) : panel === "assistant" ? (
                     <AiAssistantRail
                       onClose={() => closeRightPanel("assistant")}
-                      onNodeRecordSaved={() => refreshNodeCatalog()}
                       onSelectType={handleAddStep}
                       stepCatalog={stepCatalog}
                     />
@@ -1986,7 +2037,6 @@ export function EditorShell({
                         setAddStepIntent({ mode: "detached" });
                         closeRightPanel("library");
                       }}
-                      onNodeRecordSaved={() => refreshNodeCatalog()}
                       onSelectType={handleAddStep}
                       stepCatalog={stepCatalog}
                     />
@@ -2016,6 +2066,110 @@ export function EditorShell({
         </section>
       </div>
     </main>
+
+      {/* Unsaved draft warning modal */}
+      {modalState.type === "unsaved_draft" && (
+        <CustomModal
+          type="confirm"
+          title="Discard Draft Changes?"
+          message={modalState.message ?? "You have unsaved changes. Continue and discard?"}
+          confirmText="Discard & Switch"
+          isWarning
+          onConfirm={() => {
+            const targetId = pendingWorkflowId;
+            setModalState({ type: null });
+            setPendingWorkflowId(null);
+            if (targetId) void handleSelectWorkflow(targetId);
+          }}
+          onCancel={() => {
+            setModalState({ type: null });
+            setPendingWorkflowId(null);
+          }}
+        />
+      )}
+
+      {/* YAML validation errors modal */}
+      {modalState.type === "yaml_validation_error" && (
+        <CustomModal
+          type="confirm"
+          title="Discard YAML Edits?"
+          message={modalState.message ?? "You have unsaved YAML edits. Switch and discard?"}
+          confirmText="Switch Anyway"
+          isWarning
+          onConfirm={() => {
+            const targetId = pendingWorkflowId;
+            setModalState({ type: null });
+            setPendingWorkflowId(null);
+            if (targetId) {
+              patchWorkflowState({
+                activeWorkflowId: targetId,
+                globalError: null,
+                selectedNodeId: null
+              });
+              navigateToWorkflowRoute(targetId);
+            }
+          }}
+          onCancel={() => {
+            setModalState({ type: null });
+            setPendingWorkflowId(null);
+            if (activeWorkflowId) navigateToWorkflowRoute(activeWorkflowId);
+          }}
+        />
+      )}
+
+      {/* Delete workflow confirmation modal */}
+      {modalState.type === "delete_workflow" && modalState.workflowId && (
+        <CustomModal
+          type="confirm"
+          title="Delete Workflow"
+          message={modalState.message ?? `Delete this workflow?`}
+          confirmText="Delete"
+          isWarning
+          onConfirm={() => {
+            const wfId = modalState.workflowId!;
+            setModalState({ type: null });
+            void executeDeleteWorkflow(wfId);
+          }}
+          onCancel={() => setModalState({ type: null })}
+        />
+      )}
+
+      {/* Duplicate workflow prompt modal */}
+      {modalState.type === "duplicate_workflow" && modalState.workflowId && (
+        <CustomModal
+          type="prompt"
+          title="Duplicate Workflow"
+          message="Enter an ID for the duplicated workflow:"
+          defaultValue={modalState.defaultValue}
+          placeholder="new-workflow-id"
+          confirmText="Duplicate"
+          onConfirm={(value) => {
+            const wfId = modalState.workflowId!;
+            setModalState({ type: null });
+            void executeDuplicateWorkflow(wfId, value ?? "");
+          }}
+          onCancel={() => setModalState({ type: null })}
+        />
+      )}
+
+      {/* Rename workflow prompt modal */}
+      {modalState.type === "rename_workflow" && modalState.workflowId && (
+        <CustomModal
+          type="prompt"
+          title="Rename Workflow"
+          message="Enter a new name for this workflow:"
+          defaultValue={modalState.defaultValue}
+          placeholder="New workflow name"
+          confirmText="Rename"
+          onConfirm={(value) => {
+            const wfId = modalState.workflowId!;
+            setModalState({ type: null });
+            void executeRenameWorkflow(wfId, value ?? "");
+          }}
+          onCancel={() => setModalState({ type: null })}
+        />
+      )}
+    </>
   );
 }
 
@@ -2058,6 +2212,10 @@ function ConfigRail({
   triggerCatalog: TriggerTypeEntry[];
   triggerDetailsDraft: string;
 }) {
+  const selectedStepType = selectedNode?.data.typeName
+    ? stepCatalog.find((entry) => entry.type_name === selectedNode.data.typeName) ?? null
+    : null;
+
   return (
     <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
       <div className="border-b border-black/10 px-3 py-2.5">
@@ -2126,7 +2284,7 @@ function ConfigRail({
           onTriggerDetailsChange={onTriggerDetailsChange}
           onTriggerTypeChange={onTriggerTypeChange}
           selectedNode={selectedNode}
-          stepCatalog={stepCatalog}
+          selectedStepType={selectedStepType}
           stepParamsDraft={stepParamsDraft}
           triggerCatalog={triggerCatalog}
           triggerDetailsDraft={triggerDetailsDraft}
@@ -2752,6 +2910,10 @@ function mergeWorkflowSummaries(
   );
 }
 
+function generateRandomSuffix() {
+  return Math.random().toString(36).substring(2, 7);
+}
+
 function nextDraftWorkflowId(
   workflows: WorkflowSummary[],
   documents: Record<string, WorkflowDocument> = {}
@@ -2760,11 +2922,11 @@ function nextDraftWorkflowId(
     ...workflows.map((workflow) => workflow.id),
     ...Object.keys(documents)
   ]);
-  let index = 1;
-  while (existingIds.has(`untitled-workflow-${index}`)) {
-    index += 1;
+  let id = `untitled-workflow-${generateRandomSuffix()}`;
+  while (existingIds.has(id)) {
+    id = `untitled-workflow-${generateRandomSuffix()}`;
   }
-  return `untitled-workflow-${index}`;
+  return id;
 }
 
 function nextStarterDraftWorkflowId(
@@ -2777,16 +2939,11 @@ function nextStarterDraftWorkflowId(
     ...Object.keys(documents)
   ]);
   const baseId = slugifyIdentifier(starterId);
-
-  if (!existingIds.has(baseId)) {
-    return baseId;
+  let id = `${baseId}-${generateRandomSuffix()}`;
+  while (existingIds.has(id)) {
+    id = `${baseId}-${generateRandomSuffix()}`;
   }
-
-  let index = 2;
-  while (existingIds.has(`${baseId}-${index}`)) {
-    index += 1;
-  }
-  return `${baseId}-${index}`;
+  return id;
 }
 
 function nextSelectableWorkflowId(

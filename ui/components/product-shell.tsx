@@ -19,6 +19,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
+import { useAuth } from "./auth-context";
+import { LogOut } from "lucide-react";
 
 type ProductShellProps = Readonly<{
   children: ReactNode;
@@ -58,6 +60,7 @@ export function ProductShell({
   children,
   defaultCollapsed = false
 }: ProductShellProps) {
+  const { logout } = useAuth();
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -104,6 +107,9 @@ export function ProductShell({
               alt="Acsa"
               className={`${collapsed ? "h-12 w-12" : "h-11 w-11"} shrink-0`}
               src="/acsa-mark.svg"
+              width={collapsed ? 48 : 44}
+              height={collapsed ? 48 : 44}
+              style={{ width: collapsed ? "48px" : "44px", height: collapsed ? "48px" : "44px" }}
             />
             {!collapsed ? (
               <div>
@@ -142,6 +148,37 @@ export function ProductShell({
         </nav>
 
         <div className="border-t border-black/10" />
+        <div className={`flex items-center justify-between border-t border-black/5 bg-black/[0.01] w-full min-w-0 overflow-hidden ${collapsed ? "p-3 flex-col gap-3" : "p-4"}`}>
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            {/* Avatar circle */}
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#6f63ff]/10 text-[#6f63ff] font-bold text-[13px] border border-[#6f63ff]/15 shadow-sm">
+              {(typeof window !== "undefined" ? localStorage.getItem("acsa_user_email")?.charAt(0).toUpperCase() : "U") || "U"}
+            </div>
+            {!collapsed && (
+              <div className="min-w-0 flex-1">
+                <div className="text-[12.5px] font-bold text-ink truncate leading-tight w-full block" title={typeof window !== "undefined" ? localStorage.getItem("acsa_user_email") || "" : ""}>
+                  {typeof window !== "undefined" ? localStorage.getItem("acsa_user_email") : "User"}
+                </div>
+                <div className="text-[10px] text-slate/50 font-semibold leading-none mt-0.5">
+                  Private Tenant
+                </div>
+              </div>
+            )}
+          </div>
+          
+          {!collapsed && <div className="w-1.5 shrink-0" />} {/* Spacer */}
+          
+          <button
+            onClick={logout}
+            type="button"
+            title="Sign Out"
+            className={`inline-flex items-center justify-center rounded-[8px] shrink-0 transition duration-200 border border-black/5 hover:border-black/15 bg-white text-slate hover:text-[#ff4c6a] hover:bg-[#ff4c6a]/5 cursor-pointer ${
+              collapsed ? "h-8 w-8" : "h-7 w-7"
+            }`}
+          >
+            <LogOut size={13} strokeWidth={2.5} />
+          </button>
+        </div>
       </aside>
 
       <main className="min-h-0 overflow-hidden">{children}</main>

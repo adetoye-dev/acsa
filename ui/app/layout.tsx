@@ -16,6 +16,7 @@ import "@xyflow/react/dist/style.css";
 
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { ClerkProvider } from "@clerk/nextjs";
 
 import "./globals.css";
 
@@ -29,6 +30,8 @@ export const metadata: Metadata = {
   }
 };
 
+import { AuthProvider } from "../components/auth-context";
+
 type RootLayoutProps = Readonly<{
   children: ReactNode;
 }>;
@@ -36,7 +39,12 @@ type RootLayoutProps = Readonly<{
 export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <html lang="en">
-      <body>{children}</body>
-    </html>
+        <body>
+          <ClerkProvider>
+            <AuthProvider>{children}</AuthProvider>
+          </ClerkProvider>
+        </body>
+      </html>
   );
 }
+

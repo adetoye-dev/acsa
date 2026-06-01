@@ -15,7 +15,7 @@
  */
 
 import type { ReactNode } from "react";
-import { RefreshCw, Save, Play, FileText } from "lucide-react";
+import { RefreshCw, Save, Play, FileText, Download } from "lucide-react";
 
 export type WorkspaceView = "canvas" | "yaml";
 
@@ -31,6 +31,8 @@ type TopBarProps = {
   onRefresh: () => void;
   onRun: () => void;
   onSave: () => void;
+  onExport?: () => void;
+  onRename?: () => void;
   saveDisabled: boolean;
   saveDisabledReason?: string | null;
   showBrand?: boolean;
@@ -48,6 +50,8 @@ export function TopBar({
   onRefresh,
   onRun,
   onSave,
+  onExport,
+  onRename,
   saveDisabled,
   saveDisabledReason,
   showBrand = true
@@ -61,6 +65,9 @@ export function TopBar({
               alt="Acsa"
               className="h-9 w-9 shrink-0 drop-shadow-sm transition-transform hover:scale-105"
               src="/acsa-mark.svg"
+              width={36}
+              height={36}
+              style={{ width: "36px", height: "36px" }}
             />
             <div className="min-w-0">
               <div className="text-[14px] font-bold tracking-tight text-ink">
@@ -78,12 +85,26 @@ export function TopBar({
             showBrand ? "justify-center" : "justify-start"
           }`}
         >
-            <div className="inline-flex min-w-0 max-w-[300px] items-center gap-2 rounded-[10px] bg-black/[0.03] px-3 py-1.5 shadow-[inset_0_1px_1px_rgba(0,0,0,0.01)] border border-black/5 cursor-default hover:bg-black/[0.04] transition-colors">
-              <FileText size={15} strokeWidth={2} className="text-[#6f63ff]/70" />
-              <div className="min-w-0 truncate text-[13px] font-semibold text-ink">
-                {activeWorkflowFile}
+            {onRename ? (
+              <button
+                onClick={onRename}
+                type="button"
+                title="Click to rename workflow"
+                className="inline-flex min-w-0 max-w-[300px] items-center gap-2 rounded-[10px] bg-black/[0.03] px-3 py-1.5 shadow-[inset_0_1px_1px_rgba(0,0,0,0.01)] border border-black/5 cursor-pointer hover:bg-black/[0.06] transition-colors text-left"
+              >
+                <FileText size={15} strokeWidth={2} className="text-[#6f63ff]/70 shrink-0" />
+                <span className="min-w-0 truncate text-[13px] font-semibold text-ink">
+                  {activeWorkflowFile}
+                </span>
+              </button>
+            ) : (
+              <div className="inline-flex min-w-0 max-w-[300px] items-center gap-2 rounded-[10px] bg-black/[0.03] px-3 py-1.5 shadow-[inset_0_1px_1px_rgba(0,0,0,0.01)] border border-black/5 cursor-default">
+                <FileText size={15} strokeWidth={2} className="text-[#6f63ff]/70 shrink-0" />
+                <div className="min-w-0 truncate text-[13px] font-semibold text-ink">
+                  {activeWorkflowFile}
+                </div>
               </div>
-            </div>
+            )}
           <div className="flex min-w-0 items-center flex-1 justify-center">
             <div
               aria-label="Workspace view"
@@ -111,6 +132,12 @@ export function TopBar({
             icon={<RefreshCw size={14} strokeWidth={2.5} />}
             label="Refresh"
             onClick={onRefresh}
+            variant="soft"
+          />
+          <TopBarActionButton
+            icon={<Download size={14} strokeWidth={2.5} />}
+            label="Export"
+            onClick={onExport || (() => {})}
             variant="soft"
           />
           {hasUnsavedChanges || isSaving ? (

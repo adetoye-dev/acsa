@@ -21,10 +21,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Sparkles, X } from "lucide-react";
 
 import type { StepTypeEntry } from "../lib/workflow-editor";
-import {
-  deriveGeneratedNodeIdentity,
-  upsertNodeRecord
-} from "../lib/node-records";
 import { NodeGlyph } from "./node-visuals";
 
 const EXAMPLE_PROMPTS = [
@@ -35,21 +31,16 @@ const EXAMPLE_PROMPTS = [
 
 type AiAssistantRailProps = {
   onClose?: () => void;
-  onNodeRecordSaved?: (typeName: string) => Promise<void> | void;
   onSelectType: (typeName: string) => void;
   stepCatalog: StepTypeEntry[];
 };
 
 export function AiAssistantRail({
   onClose,
-  onNodeRecordSaved,
   onSelectType,
   stepCatalog
 }: AiAssistantRailProps) {
   const [prompt, setPrompt] = useState("");
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [savedNodeLabel, setSavedNodeLabel] = useState<string | null>(null);
-  const [isSavingNode, setIsSavingNode] = useState(false);
 
   const suggestions = useMemo(() => {
     const query = prompt.trim().toLowerCase();
@@ -72,40 +63,6 @@ export function AiAssistantRail({
       .slice(0, 6)
       .map((candidate) => candidate.entry);
   }, [prompt, stepCatalog]);
-
-  async function handleSaveGeneratedNode() {
-    const trimmedPrompt = prompt.trim();
-    if (!trimmedPrompt || isSavingNode) {
-      return;
-    }
-
-    const identity = deriveGeneratedNodeIdentity(trimmedPrompt, "Generated step");
-    const suggestedBaseType = suggestions[0]?.type_name ?? "noop";
-    setIsSavingNode(true);
-    setSaveError(null);
-    setSavedNodeLabel(null);
-
-    try {
-      const record = await upsertNodeRecord({
-        base_type_name: suggestedBaseType,
-        category: "Apps",
-        description: trimmedPrompt,
-        label: identity.label,
-        source_kind: "generated",
-        source_ref: trimmedPrompt,
-        type_name: identity.type_name
-      });
-      await onNodeRecordSaved?.(record.type_name);
-      onSelectType(record.type_name);
-      setSavedNodeLabel(record.label);
-    } catch (nextError) {
-      setSaveError(
-        nextError instanceof Error ? nextError.message : "Failed to save generated node"
-      );
-    } finally {
-      setIsSavingNode(false);
-    }
-  }
 
   return (
     <motion.section 
@@ -154,30 +111,10 @@ export function AiAssistantRail({
               id="workflow-assistant-prompt"
               onChange={(event) => {
                 setPrompt(event.target.value);
-                setSaveError(null);
-                setSavedNodeLabel(null);
               }}
               placeholder="Describe what should happen and the assistant will suggest likely steps from your installed library."
               value={prompt}
             />
-            <div className="mt-4 flex items-center gap-2">
-              <button
-                className="inline-flex items-center justify-center rounded-[10px] bg-gradient-to-b from-[#6f63ff] to-[#5d52d8] px-4 py-2 text-[13px] font-semibold text-white shadow-[0_2px_4px_rgba(111,99,255,0.2)] transition-all hover:-translate-y-0.5 hover:shadow-[0_4px_8px_rgba(111,99,255,0.3)] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:transform-none"
-                disabled={isSavingNode || !prompt.trim()}
-                onClick={() => void handleSaveGeneratedNode()}
-                type="button"
-              >
-                {isSavingNode ? "Saving…" : "Save and add node"}
-              </button>
-              {savedNodeLabel ? (
-                <span className="text-[12px] leading-5 text-[#4f5964]">
-                  Added {savedNodeLabel}.
-                </span>
-              ) : null}
-            </div>
-            {saveError ? (
-              <p className="mt-2 text-[12px] leading-5 text-[#c65a72]">{saveError}</p>
-            ) : null}
           </div>
 
           <div>
@@ -233,21 +170,11 @@ export function AiAssistantRail({
                         className="shrink-0 group-hover:scale-105 transition-transform"
                         kind="step"
                         size="md"
-                        source={entry.source}
                         typeName={entry.type_name}
                       />
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <div className="truncate text-[13px] font-semibold text-ink">{entry.label}</div>
-                          {entry.app_record ? (
-                            <span className="rounded-md bg-[#f3f0ff] px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-[0.12em] text-[#6f63ff]">
-                              {entry.app_record.source_kind === "generated"
-                                ? "Gen"
-                                : entry.app_record.source_kind === "custom"
-                                  ? "Custom"
-                                  : "Saved"}
-                            </span>
-                          ) : null}
                         </div>
                         <div className="mt-0.5 truncate text-[11px] leading-5 text-slate/80">
                           {entry.description}
@@ -282,7 +209,7 @@ function scoreStepSuggestion(entry: StepTypeEntry, tokens: string[]) {
     return 0;
   }
 
-  const haystack = [entry.label, entry.description, entry.type_name, entry.category, entry.source]
+  const haystack = [entry.label, entry.description, entry.type_name, entry.category]
     .filter((value) => value !== null && value !== undefined)
     .map((value) => String(value).trim())
     .filter((value) => value.length > 0)
