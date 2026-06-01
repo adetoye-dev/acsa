@@ -570,12 +570,6 @@ pub async fn serve(
         .route_layer(middleware::from_fn_with_state(state.clone(), enforce_engine_access));
     let app = Router::new()
         .route("/healthz", get(health))
-        .route("/api/auth/signup", post(signup_handler))
-        .route("/api/auth/login", post(login_handler))
-        .route("/api/auth/google", get(oauth_google_handler))
-        .route("/api/auth/google/callback", get(oauth_google_callback_handler))
-        .route("/api/auth/github", get(oauth_github_handler))
-        .route("/api/auth/github/callback", get(oauth_github_callback_handler))
         .merge(protected_routes)
         .route("/{*hook}", post(handle_webhook))
         .with_state(state);
@@ -4018,362 +4012,71 @@ pub enum TriggerError {
 
 // --- Built-in Pure Rust Authentication Layer ---
 
-use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-    Argon2,
-};
-
-fn hash_password(password: &str) -> Result<String, String> {
-    let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
-    let password_hash =
-        argon2.hash_password(password.as_bytes(), &salt).map_err(|e| e.to_string())?.to_string();
-    Ok(password_hash)
-}
-
-fn verify_password(password: &str, stored: &str) -> bool {
-    let parsed_hash = match PasswordHash::new(stored) {
-        Ok(hash) => hash,
-        Err(_) => return false,
-    };
-    Argon2::default().verify_password(password.as_bytes(), &parsed_hash).is_ok()
-}
-
-fn get_token_master_key() -> Vec<u8> {
-    env::var("ACSA_SESSION_SECRET")
-        .expect("ACSA_SESSION_SECRET environment variable is required to sign sessions")
-        .into_bytes()
-}
-
-fn generate_session_token(user_id: &str) -> String {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-    let expiry = Utc::now().timestamp() + 30 * 24 * 60 * 60; // 30 days
-    let payload = format!("{}.{}", BASE64.encode(user_id), expiry);
-
-    let key = get_token_master_key();
-    let mut mac = Hmac::<Sha256>::new_from_slice(&key).expect("HMAC can take key of any size");
-    mac.update(payload.as_bytes());
-    let signature = BASE64.encode(mac.finalize().into_bytes());
-
-    format!("{}.{}", payload, signature)
-}
-
 fn verify_session_token(token: &str) -> Result<String, String> {
-    use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
-    let parts: Vec<&str> = token.split('.').collect();
-    if parts.len() != 3 {
-        return Err("invalid token format".to_string());
-    }
-    let user_id_b64 = parts[0];
-    let expiry_str = parts[1];
-    let signature = parts[2];
+    use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
 
-    let payload = format!("{}.{}", user_id_b64, expiry_str);
-
-    let key = get_token_master_key();
-    let mut mac = Hmac::<Sha256>::new_from_slice(&key).expect("HMAC can take key of any size");
-    mac.update(payload.as_bytes());
-    let expected_signature = BASE64.encode(mac.finalize().into_bytes());
-
-    if !bool::from(signature.as_bytes().ct_eq(expected_signature.as_bytes())) {
-        return Err("invalid token signature".to_string());
+    #[derive(Debug, serde::Deserialize)]
+    struct ClerkClaims {
+        sub: String,
+        exp: i64,
     }
 
-    let expiry = expiry_str.parse::<i64>().map_err(|_| "invalid expiry timestamp".to_string())?;
-    if Utc::now().timestamp() > expiry {
-        return Err("session expired".to_string());
+    let public_key_pem = env::var("ACSA_CLERK_PEM_PUBLIC_KEY").ok();
+
+    if env_flag("ACSA_CLERK_INSECURE_DEV") || public_key_pem.is_none() {
+        if public_key_pem.is_none() {
+            warn!("ACSA_CLERK_PEM_PUBLIC_KEY is not set. Defaulting to local token parsing without signature verification for dev onboarding.");
+        }
+        let parts: Vec<&str> = token.split('.').collect();
+        if parts.len() < 2 {
+            return Err("invalid clerk token format".to_string());
+        }
+        use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+        let payload_b64 = parts[1];
+        let mut payload_padded = payload_b64.to_string();
+        while payload_padded.len() % 4 != 0 {
+            payload_padded.push('=');
+        }
+        let decoded_bytes = BASE64
+            .decode(payload_padded)
+            .map_err(|e| format!("failed to base64 decode claims: {}", e))?;
+        let claims: ClerkClaims = serde_json::from_slice(&decoded_bytes)
+            .map_err(|e| format!("failed to parse claims JSON: {}", e))?;
+
+        let now = chrono::Utc::now().timestamp();
+        if now > claims.exp {
+            return Err("clerk token has expired".to_string());
+        }
+        return Ok(claims.sub);
     }
 
-    let user_id_bytes =
-        BASE64.decode(user_id_b64).map_err(|_| "invalid user_id encoding".to_string())?;
-    let user_id =
-        String::from_utf8(user_id_bytes).map_err(|_| "invalid utf8 user_id".to_string())?;
+    let public_key_pem = public_key_pem.unwrap();
 
-    Ok(user_id)
-}
+    let header =
+        decode_header(token).map_err(|e| format!("failed to decode token header: {}", e))?;
+    let mut validation = Validation::new(header.alg);
+    validation.validate_exp = true;
 
-#[derive(Debug, Deserialize)]
-struct AuthPayload {
-    email: String,
-    password: String,
+    let decoding_key = if public_key_pem.contains("-----BEGIN PUBLIC KEY-----") {
+        DecodingKey::from_rsa_pem(public_key_pem.as_bytes())
+            .map_err(|e| format!("failed to parse RSA PEM public key: {}", e))?
+    } else {
+        let wrapped_pem = format!(
+            "-----BEGIN PUBLIC KEY-----\n{}\n-----END PUBLIC KEY-----",
+            public_key_pem.trim()
+        );
+        DecodingKey::from_rsa_pem(wrapped_pem.as_bytes())
+            .map_err(|e| format!("failed to parse RSA wrapped PEM public key: {}", e))?
+    };
+
+    let token_data = decode::<ClerkClaims>(token, &decoding_key, &validation)
+        .map_err(|e| format!("clerk JWT verification failed: {}", e))?;
+
+    Ok(token_data.claims.sub)
 }
 
 #[derive(Debug, Clone)]
 pub struct UserId(pub String);
-
-async fn signup_handler(
-    State(state): State<AppState>,
-    Json(payload): Json<AuthPayload>,
-) -> impl IntoResponse {
-    let email = payload.email.trim().to_lowercase();
-    let password = payload.password.trim();
-
-    if email.is_empty() || password.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "email and password must not be empty" })),
-        )
-            .into_response();
-    }
-
-    if password.len() < 8 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "password must be at least 8 characters long" })),
-        )
-            .into_response();
-    }
-
-    let store = state.engine.store();
-
-    match store.get_user_by_email(&email).await {
-        Ok(Some(_)) => {
-            return (
-                StatusCode::CONFLICT,
-                Json(json!({ "error": "a user with this email already exists" })),
-            )
-                .into_response();
-        }
-        Ok(None) => {}
-        Err(err) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("database error: {}", err) })),
-            )
-                .into_response();
-        }
-    }
-
-    let stored_hash = match hash_password(password) {
-        Ok(h) => h,
-        Err(err) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": format!("failed to hash password: {}", err) })),
-            )
-                .into_response();
-        }
-    };
-
-    match store.create_user(&email, &stored_hash).await {
-        Ok(user_id) => {
-            let token = generate_session_token(&user_id);
-            (StatusCode::CREATED, Json(json!({ "token": token, "email": email, "id": user_id })))
-                .into_response()
-        }
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("failed to create user: {}", err) })),
-        )
-            .into_response(),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct OauthCallbackQuery {
-    code: String,
-}
-
-async fn oauth_google_handler() -> impl IntoResponse {
-    let client_id = env::var("ACSA_GOOGLE_CLIENT_ID").unwrap_or_default();
-    let redirect_uri = format!(
-        "{}/api/auth/google/callback",
-        env::var("ACSA_PUBLIC_URL").unwrap_or_else(|_| "http://localhost:8000".to_string())
-    );
-    let auth_url = format!(
-        "https://accounts.google.com/o/oauth2/v2/auth?client_id={}&redirect_uri={}&response_type=code&scope=email profile",
-        client_id, urlencoding::encode(&redirect_uri)
-    );
-    axum::response::Redirect::temporary(&auth_url)
-}
-
-async fn oauth_google_callback_handler(
-    State(state): State<AppState>,
-    axum::extract::Query(query): axum::extract::Query<OauthCallbackQuery>,
-) -> impl IntoResponse {
-    let client_id = env::var("ACSA_GOOGLE_CLIENT_ID").unwrap_or_default();
-    let client_secret = env::var("ACSA_GOOGLE_CLIENT_SECRET").unwrap_or_default();
-    let redirect_uri = format!(
-        "{}/api/auth/google/callback",
-        env::var("ACSA_PUBLIC_URL").unwrap_or_else(|_| "http://localhost:8000".to_string())
-    );
-
-    let client = reqwest::Client::new();
-    let token_res = client
-        .post("https://oauth2.googleapis.com/token")
-        .form(&[
-            ("client_id", client_id.as_str()),
-            ("client_secret", client_secret.as_str()),
-            ("code", query.code.as_str()),
-            ("grant_type", "authorization_code"),
-            ("redirect_uri", redirect_uri.as_str()),
-        ])
-        .send()
-        .await;
-
-    let token_json: Value = match token_res {
-        Ok(res) => res.json().await.unwrap_or(json!({})),
-        Err(_) => return (StatusCode::BAD_REQUEST, "Failed to exchange token").into_response(),
-    };
-
-    let access_token = token_json.get("access_token").and_then(|v| v.as_str()).unwrap_or_default();
-
-    let userinfo_res = client
-        .get("https://www.googleapis.com/oauth2/v2/userinfo")
-        .bearer_auth(access_token)
-        .send()
-        .await;
-
-    let userinfo_json: Value = match userinfo_res {
-        Ok(res) => res.json().await.unwrap_or(json!({})),
-        Err(_) => return (StatusCode::BAD_REQUEST, "Failed to fetch user info").into_response(),
-    };
-
-    let email = match userinfo_json.get("email").and_then(|v| v.as_str()) {
-        Some(e) => e.to_lowercase(),
-        None => {
-            return (StatusCode::BAD_REQUEST, "Email not found in Google profile").into_response()
-        }
-    };
-
-    handle_oauth_login_or_signup(state, email).await
-}
-
-async fn oauth_github_handler() -> impl IntoResponse {
-    let client_id = env::var("ACSA_GITHUB_CLIENT_ID").unwrap_or_default();
-    let redirect_uri = format!(
-        "{}/api/auth/github/callback",
-        env::var("ACSA_PUBLIC_URL").unwrap_or_else(|_| "http://localhost:8000".to_string())
-    );
-    let auth_url = format!(
-        "https://github.com/login/oauth/authorize?client_id={}&redirect_uri={}&scope=user:email",
-        client_id,
-        urlencoding::encode(&redirect_uri)
-    );
-    axum::response::Redirect::temporary(&auth_url)
-}
-
-async fn oauth_github_callback_handler(
-    State(state): State<AppState>,
-    axum::extract::Query(query): axum::extract::Query<OauthCallbackQuery>,
-) -> impl IntoResponse {
-    let client_id = env::var("ACSA_GITHUB_CLIENT_ID").unwrap_or_default();
-    let client_secret = env::var("ACSA_GITHUB_CLIENT_SECRET").unwrap_or_default();
-    let redirect_uri = format!(
-        "{}/api/auth/github/callback",
-        env::var("ACSA_PUBLIC_URL").unwrap_or_else(|_| "http://localhost:8000".to_string())
-    );
-
-    let client = reqwest::Client::new();
-    let token_res = client
-        .post("https://github.com/login/oauth/access_token")
-        .header("Accept", "application/json")
-        .form(&[
-            ("client_id", client_id.as_str()),
-            ("client_secret", client_secret.as_str()),
-            ("code", query.code.as_str()),
-            ("redirect_uri", redirect_uri.as_str()),
-        ])
-        .send()
-        .await;
-
-    let token_json: Value = match token_res {
-        Ok(res) => res.json().await.unwrap_or(json!({})),
-        Err(_) => return (StatusCode::BAD_REQUEST, "Failed to exchange token").into_response(),
-    };
-
-    let access_token = token_json.get("access_token").and_then(|v| v.as_str()).unwrap_or_default();
-
-    let emails_res = client
-        .get("https://api.github.com/user/emails")
-        .header("User-Agent", "acsa-engine")
-        .bearer_auth(access_token)
-        .send()
-        .await;
-
-    let emails_json: Vec<Value> = match emails_res {
-        Ok(res) => res.json().await.unwrap_or(vec![]),
-        Err(_) => return (StatusCode::BAD_REQUEST, "Failed to fetch user emails").into_response(),
-    };
-
-    let email = emails_json
-        .iter()
-        .find(|e| e.get("primary").and_then(|v| v.as_bool()).unwrap_or(false))
-        .and_then(|e| e.get("email").and_then(|v| v.as_str()))
-        .map(|s| s.to_lowercase());
-
-    let email = match email {
-        Some(e) => e,
-        None => {
-            return (StatusCode::BAD_REQUEST, "Primary email not found in GitHub profile")
-                .into_response()
-        }
-    };
-
-    handle_oauth_login_or_signup(state, email).await
-}
-
-async fn handle_oauth_login_or_signup(state: AppState, email: String) -> axum::response::Response {
-    let store = state.engine.store();
-    let frontend_url =
-        env::var("ACSA_FRONTEND_URL").unwrap_or_else(|_| "http://localhost:3000".to_string());
-
-    let user_id = match store.get_user_by_email(&email).await {
-        Ok(Some((uid, _))) => uid,
-        Ok(None) => {
-            let fake_hash = "OAUTH_MANAGED";
-            match store.create_user(&email, fake_hash).await {
-                Ok(uid) => uid,
-                Err(_) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response()
-                }
-            }
-        }
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Database error").into_response(),
-    };
-
-    let token = generate_session_token(&user_id);
-    let redirect_url = format!(
-        "{}/?token={}&email={}&id={}",
-        frontend_url,
-        token,
-        urlencoding::encode(&email),
-        user_id
-    );
-    axum::response::Redirect::temporary(&redirect_url).into_response()
-}
-
-async fn login_handler(
-    State(state): State<AppState>,
-    Json(payload): Json<AuthPayload>,
-) -> impl IntoResponse {
-    let email = payload.email.trim().to_lowercase();
-    let password = payload.password.trim();
-
-    let store = state.engine.store();
-
-    match store.get_user_by_email(&email).await {
-        Ok(Some((user_id, stored_hash))) => {
-            if verify_password(password, &stored_hash) {
-                let token = generate_session_token(&user_id);
-                (StatusCode::OK, Json(json!({ "token": token, "email": email, "id": user_id })))
-                    .into_response()
-            } else {
-                (StatusCode::UNAUTHORIZED, Json(json!({ "error": "invalid email or password" })))
-                    .into_response()
-            }
-        }
-        Ok(None) => {
-            (StatusCode::UNAUTHORIZED, Json(json!({ "error": "invalid email or password" })))
-                .into_response()
-        }
-        Err(err) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": format!("database error: {}", err) })),
-        )
-            .into_response(),
-    }
-}
 
 async fn me_handler(
     axum::Extension(UserId(user_id)): axum::Extension<UserId>,

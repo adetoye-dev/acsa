@@ -65,6 +65,9 @@ export function TopBar({
               alt="Acsa"
               className="h-9 w-9 shrink-0 drop-shadow-sm transition-transform hover:scale-105"
               src="/acsa-mark.svg"
+              width={36}
+              height={36}
+              style={{ width: "36px", height: "36px" }}
             />
             <div className="min-w-0">
               <div className="text-[14px] font-bold tracking-tight text-ink">
