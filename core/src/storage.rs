@@ -1463,9 +1463,7 @@ impl RunStore {
         if !workflow_cols.is_empty() && !user_id_pk {
             // Table exists but user_id is not part of the primary key. Let's migrate it.
             let mut tx = self.pool.begin().await?;
-            sqlx::query("ALTER TABLE workflows RENAME TO workflows_old")
-                .execute(&mut *tx)
-                .await?;
+            sqlx::query("ALTER TABLE workflows RENAME TO workflows_old").execute(&mut *tx).await?;
             sqlx::query(
                 r#"
                 CREATE TABLE workflows (
