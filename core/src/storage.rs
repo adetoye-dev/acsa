@@ -236,52 +236,7 @@ impl RunStore {
         Ok(row.try_get("user_id")?)
     }
 
-    pub async fn create_user(
-        &self,
-        email: &str,
-        password_hash: &str,
-    ) -> Result<String, StorageError> {
-        let id = Uuid::new_v4().to_string();
-        let now = current_timestamp();
-        sqlx::query(
-            r#"
-            INSERT INTO users (id, email, password_hash, created_at)
-            VALUES (?, ?, ?, ?)
-            "#,
-        )
-        .bind(&id)
-        .bind(email.trim().to_lowercase())
-        .bind(password_hash)
-        .bind(now)
-        .execute(&self.pool)
-        .await?;
 
-        Ok(id)
-    }
-
-    pub async fn get_user_by_email(
-        &self,
-        email: &str,
-    ) -> Result<Option<(String, String)>, StorageError> {
-        let row = sqlx::query(
-            r#"
-            SELECT id, password_hash
-            FROM users
-            WHERE email = ?
-            "#,
-        )
-        .bind(email.trim().to_lowercase())
-        .fetch_optional(&self.pool)
-        .await?;
-
-        if let Some(row) = row {
-            let id: String = row.try_get("id")?;
-            let hash: String = row.try_get("password_hash")?;
-            Ok(Some((id, hash)))
-        } else {
-            Ok(None)
-        }
-    }
 
     pub async fn list_credentials(
         &self,
@@ -1944,18 +1899,6 @@ impl RunStore {
     }
 
     async fn initialize(&self) -> Result<(), StorageError> {
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS users (
-              id TEXT PRIMARY KEY,
-              email TEXT UNIQUE NOT NULL,
-              password_hash TEXT NOT NULL,
-              created_at INTEGER NOT NULL
-            )
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
 
         sqlx::query(
             r#"

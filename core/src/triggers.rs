@@ -50,8 +50,8 @@ use crate::{
     asset_store::AssetStore,
     connectors::{
         discover_connector_manifests_from_dirs, inspect_connectors, inspect_connectors_from_dirs,
-        install_starter_connector_pack, run_manifest_path, scaffold_connector,
-        wasm_connectors_enabled, ConnectorError, ConnectorManifest, ConnectorRuntime,
+        run_manifest_path, scaffold_connector,
+        wasm_connectors_enabled, ConnectorError, ConnectorRuntime,
     },
     engine::{
         compile_workflow, load_workflows_from_dir, validate_workflow, EngineError, ExecutionStatus,
@@ -281,15 +281,6 @@ struct ConnectorInventoryResponse {
     wasm_enabled: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct StarterConnectorPackView {
-    description: String,
-    id: String,
-    install_state: String,
-    installed: bool,
-    name: String,
-    provided_step_types: Vec<String>,
-}
 
 #[derive(Debug, Clone, Serialize)]
 struct ConnectorScaffoldResponse {
@@ -539,11 +530,6 @@ pub async fn serve(
         .route("/api/credentials", get(list_credentials).post(upsert_credential))
         .route("/api/credentials/{credential_name}", axum::routing::delete(delete_credential))
         .route("/api/connectors", get(list_connectors))
-        .route("/api/connectors/starter-packs", get(list_starter_connector_packs))
-        .route(
-            "/api/connectors/starter-packs/{pack_id}/install",
-            post(install_starter_connector_pack_endpoint),
-        )
         .route("/api/connectors/scaffold", post(create_connector))
         .route("/api/connectors/{connector_type}", axum::routing::put(update_connector_record))
         .route("/api/connectors/{connector_type}/apply-update", post(apply_connector_update))
@@ -749,23 +735,6 @@ async fn list_connectors(
     }
 }
 
-async fn list_starter_connector_packs(
-    Extension(UserId(user_id)): Extension<UserId>,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
-    if let Err(error) = ensure_shipped_asset_records(state.engine.store()).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })));
-    }
-
-    match starter_connector_pack_views(state.engine.store(), &state.connectors_dir, &user_id).await
-    {
-        Ok(views) => (StatusCode::OK, Json(json!(views))),
-        Err(error) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
-        }
-    }
-}
-
 async fn list_node_records(State(state): State<AppState>) -> impl IntoResponse {
     let node_asset_base_types = match node_asset_base_type_map(state.engine.store()).await {
         Ok(base_types) => base_types,
@@ -791,68 +760,6 @@ async fn list_node_records(State(state): State<AppState>) -> impl IntoResponse {
         Err(error) => {
             (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
         }
-    }
-}
-
-async fn install_starter_connector_pack_endpoint(
-    Extension(UserId(user_id)): Extension<UserId>,
-    State(state): State<AppState>,
-    AxumPath(pack_id): AxumPath<String>,
-) -> Response {
-    let pack = match crate::starter_connector_packs::starter_connector_pack(&pack_id) {
-        Ok(Some(pack)) => pack,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": format!("starter pack {} not found", pack_id) })),
-            )
-                .into_response();
-        }
-        Err(error) => return connector_error_response(TriggerError::StarterPack(error)),
-    };
-
-    let asset_store = match AssetStore::new(state.engine.store().asset_store_root()) {
-        Ok(asset_store) => asset_store,
-        Err(error) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
-                .into_response()
-        }
-    };
-    let install_root = asset_store.connectors_dir();
-
-    match install_starter_connector_pack(&install_root, &pack) {
-        Ok(_) => {
-            if let Err(error) = persist_connector_record_from_dir(
-                state.engine.store(),
-                &install_root,
-                &install_root.join(pack.install_dir_name),
-                "starter_pack",
-                Some(pack.id),
-            )
-            .await
-            {
-                return connector_error_response(error);
-            }
-            let pack_states = match starter_pack_install_state_map(
-                state.engine.store(),
-                &state.connectors_dir,
-                &user_id,
-            )
-            .await
-            {
-                Ok(states) => states,
-                Err(error) => {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({ "error": error.to_string() })),
-                    )
-                        .into_response();
-                }
-            };
-            let view = starter_connector_pack_view(&pack, pack_states.get(pack.install_dir_name));
-            (StatusCode::OK, Json(json!(view))).into_response()
-        }
-        Err(error) => connector_error_response(TriggerError::Connector(error)),
     }
 }
 
@@ -1441,20 +1348,6 @@ async fn install_shipped_connector_asset(
     let asset_store = AssetStore::new(store.asset_store_root())?;
 
     if let Some(source_ref) = asset.source_ref.as_deref() {
-        if let Some(pack) = crate::starter_connector_packs::starter_connector_pack(source_ref)? {
-            let stored_bundle =
-                asset_store.store_connector_bundle(pack.install_dir_name, &pack.source_dir)?;
-            persist_connector_record_from_dir(
-                store,
-                &asset_store.connectors_dir(),
-                &stored_bundle.connector_dir,
-                "shipped",
-                Some(pack.id),
-            )
-            .await?;
-            return Ok(());
-        }
-
         let repo_source_dir = connectors_dir.join(source_ref);
         if repo_source_dir.exists() {
             let stored_bundle = asset_store.store_connector_bundle(source_ref, &repo_source_dir)?;
@@ -2500,78 +2393,6 @@ fn parse_node_asset_base_type(record: &AssetRecord) -> Option<String> {
     Some(definition.base_type)
 }
 
-async fn starter_connector_pack_views(
-    store: &RunStore,
-    connectors_dir: &Path,
-    user_id: &str,
-) -> Result<Vec<StarterConnectorPackView>, TriggerError> {
-    let pack_states = starter_pack_install_state_map(store, connectors_dir, user_id).await?;
-    let packs = crate::starter_connector_packs::starter_connector_packs()
-        .map_err(TriggerError::StarterPack)?;
-    Ok(packs
-        .iter()
-        .map(|pack| starter_connector_pack_view(pack, pack_states.get(pack.install_dir_name)))
-        .collect())
-}
-
-async fn starter_pack_install_state_map(
-    store: &RunStore,
-    connectors_dir: &Path,
-    user_id: &str,
-) -> Result<HashMap<String, ProductConnectorState>, TriggerError> {
-    let inventory = connector_inventory(store, connectors_dir, user_id).await?;
-    let mut states = HashMap::new();
-
-    for connector in inventory.connectors {
-        if let Some(dir_name) = Path::new(&connector.connector_dir).file_name() {
-            states.insert(dir_name.to_string_lossy().to_string(), connector.connector_state);
-        }
-    }
-
-    for connector in inventory.invalid_connectors {
-        if let Some(dir_name) = Path::new(&connector.connector_dir).file_name() {
-            states
-                .entry(dir_name.to_string_lossy().to_string())
-                .or_insert(connector.connector_state);
-        }
-    }
-
-    Ok(states)
-}
-
-fn starter_connector_pack_view(
-    pack: &crate::starter_connector_packs::StarterConnectorPack,
-    connector_state: Option<&ProductConnectorState>,
-) -> StarterConnectorPackView {
-    let install_state = starter_connector_pack_install_state(connector_state);
-    StarterConnectorPackView {
-        description: pack.description.to_string(),
-        id: pack.id.to_string(),
-        install_state: install_state.to_string(),
-        installed: install_state == "satisfied",
-        name: pack.name.to_string(),
-        provided_step_types: pack
-            .provided_step_types
-            .iter()
-            .map(|value| value.to_string())
-            .collect(),
-    }
-}
-
-fn starter_connector_pack_install_state(
-    connector_state: Option<&ProductConnectorState>,
-) -> &'static str {
-    match connector_state {
-        None => "available",
-        Some(state) if !state.install_validity.valid => "invalid",
-        Some(state) => match state.trust {
-            ProductConnectorTrustState::Trusted => "satisfied",
-            ProductConnectorTrustState::SetupRequired => "setup_required",
-            ProductConnectorTrustState::RuntimeRestricted => "runtime_restricted",
-        },
-    }
-}
-
 fn node_record_response(
     record: crate::storage::NodeRecord,
     base_type_name: Option<String>,
@@ -2680,41 +2501,6 @@ async fn ensure_shipped_asset_records(store: &RunStore) -> Result<(), TriggerErr
                 definition_json: &definition_json,
                 installed_version: Some("1.0.0"),
                 available_version: Some("1.0.0"),
-                is_locally_modified: false,
-            })
-            .await?;
-    }
-
-    for pack in crate::starter_connector_packs::starter_connector_packs()? {
-        let manifest_path = pack.source_dir.join("manifest.json");
-        let raw_manifest = fs::read_to_string(&manifest_path)?;
-        let manifest =
-            serde_json::from_str::<ConnectorManifest>(&raw_manifest).map_err(|error| {
-                TriggerError::Connector(ConnectorError::InvalidManifest {
-                    message: format!(
-                        "failed to parse shipped starter pack manifest {}: {error}",
-                        manifest_path.display()
-                    ),
-                })
-            })?;
-        let type_name =
-            pack.provided_step_types.first().copied().unwrap_or(manifest.type_id.as_str());
-        if store.get_asset_record("connector", type_name).await.is_ok() {
-            continue;
-        }
-        store
-            .upsert_asset_record(NewAssetRecord {
-                asset_kind: "connector",
-                type_name,
-                name: pack.name,
-                description: pack.description,
-                category: Some("Apps"),
-                runtime: Some(connector_runtime_name(manifest.runtime)),
-                source_kind: "shipped",
-                source_ref: Some(pack.id),
-                definition_json: &raw_manifest,
-                installed_version: manifest.version.as_deref(),
-                available_version: manifest.version.as_deref(),
                 is_locally_modified: false,
             })
             .await?;
@@ -3966,8 +3752,7 @@ pub enum TriggerError {
     AssetStore(#[from] crate::asset_store::AssetStoreError),
     #[error("connector error: {0}")]
     Connector(#[from] ConnectorError),
-    #[error("starter pack error: {0}")]
-    StarterPack(#[from] crate::starter_connector_packs::StarterPackError),
+
     #[error("workflow engine error: {0}")]
     Engine(#[from] EngineError),
     #[error("storage error: {0}")]
@@ -4152,8 +3937,8 @@ mod tests {
         apply_connector_update, apply_node_asset_update, authenticate_webhook,
         build_workflow_summary, compute_signature, connector_inventory, connector_view,
         create_connector, create_workflow_document, cron_schedule, ensure_shipped_asset_records,
-        import_n8n_workflow, install_starter_connector_pack_endpoint, invalid_connector_view,
-        list_starter_connector_packs, node_catalog, parse_workflow_document_state,
+        import_n8n_workflow, invalid_connector_view,
+        node_catalog, parse_workflow_document_state,
         read_workflow_document, rename_workflow_document, request_has_engine_token, run_view,
         save_workflow_document, seed_workflows_from_directory_if_missing, serialize_workflow_yaml,
         slugify_workflow_name, sync_repo_authored_connector_assets, update_connector_record,
@@ -4164,7 +3949,6 @@ mod tests {
         WebhookWorkflow,
     };
     use crate::{
-        connectors::install_starter_connector_pack,
         engine::{compile_workflow, ExecutionConfig, WorkflowEngine},
         models::{Step, Trigger, Workflow},
         nodes::{BuiltInNodeConfig, NodeRegistry},
@@ -4174,7 +3958,6 @@ mod tests {
             WorkflowConnectorRequirementsState, WorkflowFacts, WorkflowLifecycleState,
             WorkflowTelemetryFacts, WorkflowValidationState,
         },
-        starter_connector_packs::starter_connector_pack,
         storage::{NewAssetRecord, NewConnectorRecord, NewNodeRecord, RunRecord, RunStore},
     };
 
@@ -4266,7 +4049,7 @@ mod tests {
     }
 
     #[test]
-    fn shipped_asset_seeding_creates_built_in_and_starter_connector_assets() {
+    fn shipped_asset_seeding_creates_built_in_assets() {
         let temp_dir = write_temp_directory("shipped-asset-seeding");
         let db_path = temp_dir.join("runs.sqlite");
         let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
@@ -4279,11 +4062,6 @@ mod tests {
                 asset.asset_kind == "node"
                     && asset.type_name == "constant"
                     && asset.source_kind == "shipped"
-            }));
-            assert!(assets.iter().any(|asset| {
-                asset.asset_kind == "connector"
-                    && asset.type_name == "slack_notify"
-                    && asset.source_ref.as_deref() == Some("slack-notify")
             }));
         });
 
@@ -4653,123 +4431,7 @@ mod tests {
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
     }
 
-    #[tokio::test]
-    async fn starter_pack_inventory_exposes_curated_pack_install_state() {
-        let temp_dir = write_temp_directory("starter-pack-inventory");
-        let state = starter_pack_test_state(&temp_dir).await;
-        let pack = starter_connector_pack("slack-notify")
-            .expect("starter pack lookup should succeed")
-            .expect("starter pack should exist");
-        install_starter_connector_pack(&state.engine.store().asset_store_connectors_dir(), &pack)
-            .expect("starter pack should install");
 
-        let response = list_starter_connector_packs(
-            axum::Extension(UserId("local".to_string())),
-            AxumState(state.clone()),
-        )
-        .await
-        .into_response();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let payload =
-            to_bytes(response.into_body(), usize::MAX).await.expect("response body should read");
-        let payload: serde_json::Value =
-            serde_json::from_slice(&payload).expect("starter pack inventory should deserialize");
-        let packs = payload.as_array().expect("starter pack inventory should be an array");
-        let slack_pack = packs
-            .iter()
-            .find(|pack| pack["id"] == "slack-notify")
-            .expect("slack starter pack should exist");
-        assert_eq!(slack_pack["installed"], json!(true));
-        assert_eq!(slack_pack["install_state"], json!("satisfied"));
-        assert_eq!(slack_pack["provided_step_types"], json!(["slack_notify"]));
-
-        let github_pack = packs
-            .iter()
-            .find(|pack| pack["id"] == "github-issue-create")
-            .expect("github starter pack should exist");
-        assert_eq!(github_pack["installed"], json!(false));
-        assert_eq!(github_pack["install_state"], json!("available"));
-
-        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
-    }
-
-    #[tokio::test]
-    async fn install_starter_pack_endpoint_copies_connector_and_returns_updated_state() {
-        let temp_dir = write_temp_directory("starter-pack-install");
-        let state = starter_pack_test_state(&temp_dir).await;
-
-        let response = install_starter_connector_pack_endpoint(
-            axum::Extension(UserId("local".to_string())),
-            AxumState(state.clone()),
-            AxumPath("github-issue-create".to_string()),
-        )
-        .await
-        .into_response();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let payload =
-            to_bytes(response.into_body(), usize::MAX).await.expect("response body should read");
-        let payload: serde_json::Value =
-            serde_json::from_slice(&payload).expect("starter pack install should deserialize");
-        assert_eq!(payload["id"], json!("github-issue-create"));
-        assert_eq!(payload["installed"], json!(true));
-        assert_eq!(payload["install_state"], json!("satisfied"));
-        assert!(state
-            .engine
-            .store()
-            .asset_store_connectors_dir()
-            .join("github-issue-create")
-            .join("manifest.json")
-            .exists());
-
-        let second_response = install_starter_connector_pack_endpoint(
-            axum::Extension(UserId("local".to_string())),
-            AxumState(state.clone()),
-            AxumPath("github-issue-create".to_string()),
-        )
-        .await
-        .into_response();
-
-        assert_eq!(second_response.status(), StatusCode::OK);
-        let second_payload = to_bytes(second_response.into_body(), usize::MAX)
-            .await
-            .expect("response body should read");
-        let second_payload: serde_json::Value = serde_json::from_slice(&second_payload)
-            .expect("starter pack install should deserialize");
-        assert_eq!(second_payload["installed"], json!(true));
-        assert_eq!(second_payload["install_state"], json!("satisfied"));
-
-        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
-    }
-
-    #[tokio::test]
-    async fn install_starter_pack_endpoint_persists_connector_record() {
-        let temp_dir = write_temp_directory("starter-pack-record");
-        let state = starter_pack_test_state(&temp_dir).await;
-
-        let response = install_starter_connector_pack_endpoint(
-            axum::Extension(UserId("local".to_string())),
-            AxumState(state.clone()),
-            AxumPath("github-issue-create".to_string()),
-        )
-        .await
-        .into_response();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let record = state
-            .engine
-            .store()
-            .get_connector_record_by_type("github_issue_create")
-            .await
-            .expect("starter pack connector record should persist");
-        assert_eq!(record.name, "GitHub Issue Create");
-        assert_eq!(record.source_kind, "starter_pack");
-        assert_eq!(record.source_ref.as_deref(), Some("github-issue-create"));
-        assert!(record.connector_dir.ends_with("github-issue-create"));
-
-        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
-    }
 
     #[tokio::test]
     async fn create_connector_persists_connector_record() {

@@ -30,8 +30,6 @@ use shlex::split as shlex_split;
 use thiserror::Error;
 use tokio::{io::AsyncWriteExt, process::Command, time::timeout};
 
-pub use crate::starter_connector_packs;
-
 use crate::nodes::{ensure_relative_path, Node, NodeError, NodeRegistry};
 use crate::storage::resolve_secret_value;
 
@@ -427,64 +425,6 @@ pub fn scaffold_connector(
         ConnectorRuntime::Wasm => scaffold_wasm_connector(&connector_dir, name, type_id)?,
     }
     Ok(connector_dir)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StarterConnectorPackInstallResult {
-    Installed { connector_dir: PathBuf },
-    AlreadyInstalled { connector_dir: PathBuf },
-}
-
-pub fn install_starter_connector_pack(
-    connectors_dir: &Path,
-    pack: &starter_connector_packs::StarterConnectorPack,
-) -> Result<StarterConnectorPackInstallResult, ConnectorError> {
-    fs::create_dir_all(connectors_dir)?;
-    let connector_dir = connectors_dir.join(pack.install_dir_name);
-    match fs::create_dir(&connector_dir) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            return Ok(StarterConnectorPackInstallResult::AlreadyInstalled { connector_dir });
-        }
-        Err(error) => return Err(error.into()),
-    }
-
-    if let Err(error) = copy_dir_all(&pack.source_dir, &connector_dir) {
-        if let Err(cleanup_error) = fs::remove_dir_all(&connector_dir) {
-            tracing::warn!(
-                connector_dir = %connector_dir.display(),
-                error = %cleanup_error,
-                "failed to clean up starter connector install directory after copy failure"
-            );
-        }
-        return Err(error);
-    }
-
-    Ok(StarterConnectorPackInstallResult::Installed { connector_dir })
-}
-
-fn copy_dir_all(source_dir: &Path, target_dir: &Path) -> Result<(), ConnectorError> {
-    if !source_dir.exists() {
-        return Err(ConnectorError::InvalidManifest {
-            message: format!(
-                "starter pack template directory {} does not exist",
-                source_dir.display()
-            ),
-        });
-    }
-
-    fs::create_dir_all(target_dir)?;
-    for entry in fs::read_dir(source_dir)? {
-        let entry = entry?;
-        let entry_path = entry.path();
-        let target_path = target_dir.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir_all(&entry_path, &target_path)?;
-        } else {
-            fs::copy(&entry_path, &target_path)?;
-        }
-    }
-    Ok(())
 }
 
 async fn execute_process_connector(
@@ -1082,108 +1022,7 @@ mod tests {
         ConnectorRuntime,
     };
 
-    #[test]
-    fn starter_pack_catalog_lists_curated_first_party_packs() {
-        let catalog = super::starter_connector_packs::starter_connector_packs()
-            .expect("starter pack catalog should resolve");
-        let ids = catalog.iter().map(|pack| pack.id).collect::<Vec<_>>();
 
-        assert_eq!(
-            ids,
-            vec!["slack-notify", "github-issue-create", "google-sheets-append-row", "email-send",]
-        );
-        assert_eq!(catalog[0].provided_step_types, &["slack_notify"]);
-    }
-
-    #[test]
-    fn install_starter_pack_copies_template_files_into_connectors_dir() {
-        let temp_dir =
-            std::env::temp_dir().join(format!("acsa-starter-install-{}", uuid::Uuid::new_v4()));
-        let connectors_dir = temp_dir.join("connectors");
-        fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
-
-        let pack = super::starter_connector_packs::starter_connector_pack("slack-notify")
-            .expect("starter pack lookup should succeed")
-            .expect("starter pack should exist");
-        let result = super::install_starter_connector_pack(&connectors_dir, &pack)
-            .expect("starter pack should install");
-
-        match result {
-            super::StarterConnectorPackInstallResult::Installed {
-                connector_dir: installed_dir,
-            } => {
-                assert_eq!(installed_dir, connectors_dir.join("slack-notify"));
-            }
-            super::StarterConnectorPackInstallResult::AlreadyInstalled { .. } => {
-                panic!("starter pack should install fresh into an empty connectors dir");
-            }
-        }
-
-        let installed_dir = connectors_dir.join("slack-notify");
-        assert!(installed_dir.join("manifest.json").exists());
-        assert!(installed_dir.join("main.py").exists());
-
-        let inspection =
-            inspect_connectors(&connectors_dir).expect("installed connectors should inspect");
-        assert_eq!(inspection.connectors.len(), 1);
-        assert_eq!(inspection.connectors[0].manifest.type_id, "slack_notify");
-
-        fs::remove_dir_all(temp_dir).expect("temp directory should be removed");
-    }
-
-    #[test]
-    fn install_starter_pack_does_not_overwrite_existing_connector_dir() {
-        let temp_dir =
-            std::env::temp_dir().join(format!("acsa-starter-existing-{}", uuid::Uuid::new_v4()));
-        let connectors_dir = temp_dir.join("connectors");
-        let existing_connector_dir = connectors_dir.join("slack-notify");
-        fs::create_dir_all(&existing_connector_dir)
-            .expect("existing connector dir should be created");
-        fs::write(existing_connector_dir.join("main.py"), "sentinel")
-            .expect("sentinel file should write");
-        fs::write(
-            existing_connector_dir.join("manifest.json"),
-            serde_json::to_string_pretty(&ConnectorManifest {
-                allowed_env: Vec::new(),
-                allowed_hosts: Vec::new(),
-                allowed_paths: BTreeMap::new(),
-                entry: "main.py".to_string(),
-                enable_wasi: false,
-                inputs: vec!["message".to_string()],
-                limits: ConnectorLimits { memory: None, timeout: Some(1_000), timeout_ms: None },
-                name: "Slack Notify".to_string(),
-                outputs: vec!["sent".to_string()],
-                runtime: ConnectorRuntime::Process,
-                type_id: "slack_notify".to_string(),
-                version: Some("0.1.0".to_string()),
-            })
-            .expect("manifest should serialize"),
-        )
-        .expect("manifest should write");
-
-        let pack = super::starter_connector_packs::starter_connector_pack("slack-notify")
-            .expect("starter pack lookup should succeed")
-            .expect("starter pack should exist");
-        let result = super::install_starter_connector_pack(&connectors_dir, &pack)
-            .expect("starter pack install should succeed");
-
-        match result {
-            super::StarterConnectorPackInstallResult::AlreadyInstalled { connector_dir } => {
-                assert_eq!(connector_dir, existing_connector_dir);
-            }
-            super::StarterConnectorPackInstallResult::Installed { .. } => {
-                panic!("starter pack should not overwrite an existing connector dir");
-            }
-        }
-
-        assert_eq!(
-            fs::read_to_string(existing_connector_dir.join("main.py"))
-                .expect("main.py should remain"),
-            "sentinel"
-        );
-
-        fs::remove_dir_all(temp_dir).expect("temp directory should be removed");
-    }
 
     #[test]
     fn validates_required_output_keys() {
