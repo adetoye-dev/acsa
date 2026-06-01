@@ -496,7 +496,7 @@ impl RunStore {
         .execute(&self.pool)
         .await?;
 
-        self.get_workflow_by_id_system(workflow_id).await
+        self.get_workflow(user_id, workflow_id).await
     }
 
     pub async fn update_workflow(
@@ -1451,21 +1451,62 @@ impl RunStore {
         self.ensure_column("runs", "state_json", "TEXT").await?;
         self.ensure_column("runs", "user_id", "TEXT NOT NULL DEFAULT 'local'").await?;
 
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS workflows (
-              id TEXT PRIMARY KEY,
-              name TEXT NOT NULL,
-              yaml TEXT NOT NULL,
-              created_at INTEGER NOT NULL,
-              updated_at INTEGER NOT NULL,
-              user_id TEXT NOT NULL DEFAULT 'local'
+        // Check if workflows table needs primary key migration to allow (id, user_id) unique combinations
+        let workflow_cols =
+            sqlx::query("PRAGMA table_info(workflows)").fetch_all(&self.pool).await?;
+        let user_id_pk = workflow_cols.iter().any(|row| {
+            let name: String = row.try_get("name").unwrap_or_default();
+            let pk: i16 = row.try_get("pk").unwrap_or(0);
+            name == "user_id" && pk > 0
+        });
+
+        if !workflow_cols.is_empty() && !user_id_pk {
+            // Table exists but user_id is not part of the primary key. Let's migrate it.
+            sqlx::query("ALTER TABLE workflows RENAME TO workflows_old")
+                .execute(&self.pool)
+                .await?;
+            sqlx::query(
+                r#"
+                CREATE TABLE workflows (
+                  id TEXT NOT NULL,
+                  name TEXT NOT NULL,
+                  yaml TEXT NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL,
+                  user_id TEXT NOT NULL DEFAULT 'local',
+                  PRIMARY KEY (id, user_id)
+                )
+                "#,
             )
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-        self.ensure_column("workflows", "user_id", "TEXT NOT NULL DEFAULT 'local'").await?;
+            .execute(&self.pool)
+            .await?;
+            sqlx::query(
+                r#"
+                INSERT INTO workflows (id, name, yaml, created_at, updated_at, user_id)
+                SELECT id, name, yaml, created_at, updated_at, user_id FROM workflows_old
+                "#,
+            )
+            .execute(&self.pool)
+            .await?;
+            sqlx::query("DROP TABLE workflows_old").execute(&self.pool).await?;
+        } else {
+            // Fresh create or already migrated
+            sqlx::query(
+                r#"
+                CREATE TABLE IF NOT EXISTS workflows (
+                  id TEXT NOT NULL,
+                  name TEXT NOT NULL,
+                  yaml TEXT NOT NULL,
+                  created_at INTEGER NOT NULL,
+                  updated_at INTEGER NOT NULL,
+                  user_id TEXT NOT NULL DEFAULT 'local',
+                  PRIMARY KEY (id, user_id)
+                )
+                "#,
+            )
+            .execute(&self.pool)
+            .await?;
+        }
 
         // Check if credentials table needs migration (for user_id primary key transition)
         let credential_cols =
