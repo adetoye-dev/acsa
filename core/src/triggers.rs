@@ -767,7 +767,10 @@ async fn get_run_detail(
                 .into_response();
         }
         Err(error) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string() })),
+            )
                 .into_response();
         }
     }
@@ -814,7 +817,10 @@ async fn get_run_logs(
                 .into_response();
         }
         Err(error) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": error.to_string() })),
+            )
                 .into_response();
         }
     }
@@ -2730,7 +2736,7 @@ fn verify_session_token(token: &str) -> Result<String, String> {
 
     let public_key_pem = env::var("ACSA_CLERK_PEM_PUBLIC_KEY").ok();
 
-    if env_flag("ACSA_CLERK_INSECURE_DEV") { 
+    if env_flag("ACSA_CLERK_INSECURE_DEV") {
         if public_key_pem.is_none() {
             warn!("ACSA_CLERK_PEM_PUBLIC_KEY is not set. Defaulting to local token parsing without signature verification for dev onboarding.");
         }
@@ -2738,10 +2744,10 @@ fn verify_session_token(token: &str) -> Result<String, String> {
         if parts.len() < 2 {
             return Err("invalid clerk token format".to_string());
         }
-        use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64, Engine as _};  
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD as BASE64, Engine as _};
         let payload_b64 = parts[1];
         let decoded_bytes = BASE64
-            .decode(payload_b64) 
+            .decode(payload_b64)
             .map_err(|e| format!("failed to base64 decode claims: {}", e))?;
         let claims: ClerkClaims = serde_json::from_slice(&decoded_bytes)
             .map_err(|e| format!("failed to parse claims JSON: {}", e))?;
@@ -2753,7 +2759,8 @@ fn verify_session_token(token: &str) -> Result<String, String> {
         return Ok(claims.sub);
     }
 
-    let public_key_pem =  public_key_pem.ok_or_else(|| "ACSA_CLERK_PEM_PUBLIC_KEY is not set".to_string())?;  
+    let public_key_pem =
+        public_key_pem.ok_or_else(|| "ACSA_CLERK_PEM_PUBLIC_KEY is not set".to_string())?;
 
     let header =
         decode_header(token).map_err(|e| format!("failed to decode token header: {}", e))?;
