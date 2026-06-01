@@ -20,7 +20,6 @@ import type {
   TriggerTypeEntry,
   WorkflowDocument
 } from "../lib/workflow-editor";
-import { semanticCategoryLabel } from "../lib/semantic-labels";
 import { YamlEditor } from "./yaml-editor";
 
 type NodeInspectorProps = {
@@ -34,7 +33,7 @@ type NodeInspectorProps = {
   onTriggerDetailsChange: (value: string) => void;
   onTriggerTypeChange: (value: string) => void;
   selectedNode: CanvasNode | null;
-  stepCatalog: StepTypeEntry[];
+  selectedStepType: StepTypeEntry | null;
   stepParamsDraft: string;
   triggerCatalog: TriggerTypeEntry[];
   triggerDetailsDraft: string;
@@ -51,7 +50,7 @@ export function NodeInspector({
   onTriggerDetailsChange,
   onTriggerTypeChange,
   selectedNode,
-  stepCatalog,
+  selectedStepType,
   stepParamsDraft,
   triggerCatalog,
   triggerDetailsDraft
@@ -145,28 +144,21 @@ export function NodeInspector({
 
           <div className="mt-4 grid gap-3">
             <div>
-              <label
-                className="mb-2 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62"
-                htmlFor="step-type"
-              >
+              <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/62">
                 Capability
-              </label>
-              <select
-                className="ui-input"
-                id="step-type"
-                onChange={(event) => onSelectedNodeTypeChange(event.target.value)}
-                value={selectedStep.type}
-              >
-                {groupedStepOptions(stepCatalog).map(([category, entries]) => (
-                  <optgroup key={category} label={semanticCategoryLabel(category)}>
-                    {entries.map((entry) => (
-                      <option key={entry.type_name} value={entry.type_name}>
-                        {entry.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
+              </div>
+              <div className="flex items-center gap-3 rounded-[12px] border border-black/10 bg-[#fbfbfa] px-3.5 py-2.5">
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-medium text-ink">
+                    {selectedStepType?.label ?? (selectedStep ? titleCase(selectedStep.type) : "Unknown")}
+                  </div>
+                  {selectedStepType?.description ? (
+                    <div className="mt-1 text-[12px] leading-relaxed text-slate">
+                      {selectedStepType.description}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -242,12 +234,8 @@ export function NodeInspector({
   );
 }
 
-function groupedStepOptions(stepCatalog: StepTypeEntry[]) {
-  const groups = new Map<string, StepTypeEntry[]>();
-  for (const entry of stepCatalog) {
-    const bucket = groups.get(entry.category) ?? [];
-    bucket.push(entry);
-    groups.set(entry.category, bucket);
-  }
-  return Array.from(groups.entries());
+function titleCase(value: string) {
+  return value
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (character) => character.toUpperCase());
 }

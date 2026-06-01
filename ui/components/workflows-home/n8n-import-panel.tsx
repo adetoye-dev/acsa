@@ -20,10 +20,6 @@ import { useRef, useState, type ChangeEvent } from "react";
 
 import { fetchEngineJson } from "../../lib/engine-client";
 import {
-  deriveGeneratedNodeIdentity,
-  upsertNodeRecord
-} from "../../lib/node-records";
-import {
   importHasOpenableDraft,
   type N8nImportReportItem,
   type N8nImportRequirementItem,
@@ -44,16 +40,11 @@ export function N8nImportPanel({
   const [error, setError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [result, setResult] = useState<N8nImportResponse | null>(null);
-  const [savingNodeKeys, setSavingNodeKeys] = useState<Record<string, boolean>>({});
-  const [savedNodeKeys, setSavedNodeKeys] = useState<Record<string, boolean>>({});
-  const [saveNodeError, setSaveNodeError] = useState<string | null>(null);
 
   async function handleTranslate() {
     setIsImporting(true);
     setError(null);
     setResult(null);
-    setSaveNodeError(null);
-    setSavedNodeKeys({});
 
     try {
       const workflowJson = JSON.parse(jsonInput);
@@ -88,8 +79,6 @@ export function N8nImportPanel({
       setJsonInput(nextText);
       setError(null);
       setResult(null);
-      setSaveNodeError(null);
-      setSavedNodeKeys({});
     } catch (nextError) {
       setError(
         nextError instanceof Error
@@ -99,42 +88,6 @@ export function N8nImportPanel({
       setResult(null);
     } finally {
       inputEl.value = "";
-    }
-  }
-
-  async function handleSaveGeneratedNode(item: N8nImportReportItem, index: number) {
-    const itemKey = reportItemKey(item, index);
-    const identity = deriveGeneratedNodeIdentity(item.item_name, "Imported node");
-    setSavingNodeKeys((current) => ({
-      ...current,
-      [itemKey]: true
-    }));
-    setSaveNodeError(null);
-
-    try {
-      await upsertNodeRecord({
-        base_type_name: "noop",
-        category: "Apps",
-        description: item.message,
-        label: identity.label,
-        source_kind: "generated",
-        source_ref: `n8n:${item.item_name}`,
-        type_name: identity.type_name
-      });
-      setSavedNodeKeys((current) => ({
-        ...current,
-        [itemKey]: true
-      }));
-    } catch (nextError) {
-      setSaveNodeError(
-        nextError instanceof Error ? nextError.message : "Failed to save generated node"
-      );
-    } finally {
-      setSavingNodeKeys((current) => {
-        const next = { ...current };
-        delete next[itemKey];
-        return next;
-      });
     }
   }
 
@@ -242,25 +195,16 @@ export function N8nImportPanel({
               <ReportList
                 emptyCopy="Nothing blocked."
                 items={result.report.blocked}
-                onSaveNodeDraft={(item, index) => void handleSaveGeneratedNode(item, index)}
-                savedNodeKeys={savedNodeKeys}
-                savingNodeKeys={savingNodeKeys}
                 title="Blocked"
                 tone="text-[#c65a72]"
               />
               <ReportList
                 emptyCopy="Nothing degraded."
                 items={result.report.degraded}
-                onSaveNodeDraft={(item, index) => void handleSaveGeneratedNode(item, index)}
-                savedNodeKeys={savedNodeKeys}
-                savingNodeKeys={savingNodeKeys}
                 title="Degraded"
                 tone="text-[#9a6a2b]"
               />
               <RequirementList items={result.report.requirements} />
-              {saveNodeError ? (
-                <p className="text-sm leading-6 text-[#c65a72]">{saveNodeError}</p>
-              ) : null}
             </div>
           ) : (
             <div className="space-y-2">
@@ -280,17 +224,11 @@ export function N8nImportPanel({
 function ReportList({
   emptyCopy,
   items,
-  onSaveNodeDraft,
-  savedNodeKeys,
-  savingNodeKeys,
   title,
   tone
 }: {
   emptyCopy: string;
   items: N8nImportReportItem[];
-  onSaveNodeDraft?: (item: N8nImportReportItem, index: number) => void;
-  savedNodeKeys?: Record<string, boolean>;
-  savingNodeKeys?: Record<string, boolean>;
   title: string;
   tone: string;
 }) {
@@ -313,20 +251,6 @@ function ReportList({
                   </p>
                   <p className="mt-1 text-sm leading-6 text-[#5f6870]">{item.message}</p>
                 </div>
-                {onSaveNodeDraft && item.item_type === "node" ? (
-                  <button
-                    className="ui-button !px-2.5 !py-1.5"
-                    disabled={Boolean(savingNodeKeys?.[reportItemKey(item, index)] || savedNodeKeys?.[reportItemKey(item, index)])}
-                    onClick={() => onSaveNodeDraft(item, index)}
-                    type="button"
-                  >
-                    {savedNodeKeys?.[reportItemKey(item, index)]
-                      ? "Saved"
-                      : savingNodeKeys?.[reportItemKey(item, index)]
-                        ? "Saving…"
-                        : "Save node"}
-                  </button>
-                ) : null}
               </div>
             </li>
           ))}
@@ -336,10 +260,6 @@ function ReportList({
       )}
     </section>
   );
-}
-
-function reportItemKey(item: N8nImportReportItem, index: number) {
-  return `${item.item_type}:${item.item_name}:${index}`;
 }
 
 function RequirementList({

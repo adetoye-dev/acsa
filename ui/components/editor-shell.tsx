@@ -1992,14 +1992,12 @@ export function EditorShell({
                         setAddStepIntent({ mode: "detached" });
                         closeRightPanel("library");
                       }}
-                      onNodeRecordSaved={() => refreshNodeCatalog()}
                       onSelectType={handleAddStep}
                       stepCatalog={stepCatalog}
                     />
                   ) : panel === "assistant" ? (
                     <AiAssistantRail
                       onClose={() => closeRightPanel("assistant")}
-                      onNodeRecordSaved={() => refreshNodeCatalog()}
                       onSelectType={handleAddStep}
                       stepCatalog={stepCatalog}
                     />
@@ -2039,7 +2037,6 @@ export function EditorShell({
                         setAddStepIntent({ mode: "detached" });
                         closeRightPanel("library");
                       }}
-                      onNodeRecordSaved={() => refreshNodeCatalog()}
                       onSelectType={handleAddStep}
                       stepCatalog={stepCatalog}
                     />
@@ -2215,6 +2212,10 @@ function ConfigRail({
   triggerCatalog: TriggerTypeEntry[];
   triggerDetailsDraft: string;
 }) {
+  const selectedStepType = selectedNode?.data.typeName
+    ? stepCatalog.find((entry) => entry.type_name === selectedNode.data.typeName) ?? null
+    : null;
+
   return (
     <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
       <div className="border-b border-black/10 px-3 py-2.5">
@@ -2283,7 +2284,7 @@ function ConfigRail({
           onTriggerDetailsChange={onTriggerDetailsChange}
           onTriggerTypeChange={onTriggerTypeChange}
           selectedNode={selectedNode}
-          stepCatalog={stepCatalog}
+          selectedStepType={selectedStepType}
           stepParamsDraft={stepParamsDraft}
           triggerCatalog={triggerCatalog}
           triggerDetailsDraft={triggerDetailsDraft}

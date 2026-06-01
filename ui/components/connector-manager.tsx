@@ -19,11 +19,8 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
-  type ApplyConnectorUpdateResponse,
   type ConnectorInventoryItem,
   type ConnectorInventoryResponse,
-  type ConnectorRuntime,
-  type ConnectorScaffoldResponse,
   type ConnectorTestResponse
 } from "../lib/connectors";
 import { fetchEngineJson } from "../lib/engine-client";
@@ -35,52 +32,22 @@ import {
   connectorTrustLabel,
   connectorValidityLabel
 } from "../lib/product-status";
-import { slugifyIdentifier } from "../lib/workflow-editor";
 
 type ConnectorManagerProps = {
   onCatalogInvalidated: () => Promise<void> | void;
 };
 
-function connectorSourceLabel(connector: ConnectorInventoryItem) {
-  const sourceKind = connector.app_record?.source_kind;
-  if (sourceKind === "starter_pack") {
-    return "Installed in app";
-  }
-  if (sourceKind === "custom") {
-    return "Created in app";
-  }
-  if (sourceKind === "generated") {
-    return "Generated in app";
-  }
-  return null;
-}
-
 export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps) {
   const [inventory, setInventory] = useState<ConnectorInventoryResponse | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
-  const [editDescription, setEditDescription] = useState("");
-  const [editError, setEditError] = useState<string | null>(null);
-  const [editName, setEditName] = useState("");
-  const [editingType, setEditingType] = useState<string | null>(null);
-  const [isApplyingUpdate, setIsApplyingUpdate] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(true);
-  const [isSavingEdit, setIsSavingEdit] = useState(false);
-  const [isScaffolding, setIsScaffolding] = useState(false);
-  const [isTypeDirty, setIsTypeDirty] = useState(false);
   const [lastAction, setLastAction] = useState("Loading connector inventory");
-  const [nameDraft, setNameDraft] = useState("");
-  const [runtimeDraft, setRuntimeDraft] = useState<ConnectorRuntime>("process");
   const [testResults, setTestResults] = useState<Record<string, ConnectorTestResponse>>({});
   const [testingType, setTestingType] = useState<string | null>(null);
-  const [typeDraft, setTypeDraft] = useState("");
 
   const sortedConnectors = useMemo(
     () => [...(inventory?.connectors ?? [])].sort((left, right) => left.name.localeCompare(right.name)),
     [inventory?.connectors]
-  );
-  const editingConnector = useMemo(
-    () => sortedConnectors.find((connector) => connector.type_name === editingType) ?? null,
-    [editingType, sortedConnectors]
   );
 
   useEffect(function loadConnectorInventoryOnMountEffect() {
@@ -115,41 +82,6 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
     }
   }
 
-  async function handleScaffold() {
-    const nextName = nameDraft.trim();
-    const nextType = slugifyIdentifier((isTypeDirty ? typeDraft : nextName).trim());
-    if (!nextName || !nextType) {
-      setGlobalError("Connector name and type id are required.");
-      return;
-    }
-
-    setIsScaffolding(true);
-    try {
-      const response = await fetchEngineJson<ConnectorScaffoldResponse>("/api/connectors/scaffold", {
-        body: JSON.stringify({
-          name: nextName,
-          runtime: runtimeDraft,
-          type_id: nextType
-        }),
-        headers: {
-          "content-type": "application/json"
-        },
-        method: "POST"
-      });
-      setNameDraft("");
-      setTypeDraft("");
-      setIsTypeDirty(false);
-      setGlobalError(null);
-      setLastAction(`Scaffolded ${response.connector.name}`);
-      await refreshInventory();
-    } catch (error) {
-      setGlobalError(error instanceof Error ? error.message : "Connector scaffold failed");
-      setLastAction("Connector scaffold failed");
-    } finally {
-      setIsScaffolding(false);
-    }
-  }
-
   async function handleRunSample(connector: ConnectorInventoryItem) {
     setTestingType(connector.type_name);
     try {
@@ -177,83 +109,15 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
     }
   }
 
-  function handleEdit(connector: ConnectorInventoryItem) {
-    if (editingType && editingType !== connector.type_name) {
-      return;
-    }
-    setEditingType(connector.type_name);
-    setEditName(connector.name);
-    setEditDescription(connector.description);
-    setEditError(null);
-  }
-
-  function handleCancelEdit() {
-    setEditingType(null);
-    setEditName("");
-    setEditDescription("");
-    setEditError(null);
-  }
-
-  async function handleSaveEdit() {
-    if (!editingConnector || isSavingEdit) {
-      return;
-    }
-
-    setIsSavingEdit(true);
-    setEditError(null);
-    try {
-      await fetchEngineJson(`/api/connectors/${editingConnector.type_name}`, {
-        body: JSON.stringify({
-          description: editDescription.trim(),
-          name: editName.trim()
-        }),
-        headers: {
-          "content-type": "application/json"
-        },
-        method: "PUT"
-      });
-      await refreshInventory();
-      handleCancelEdit();
-    } catch (error) {
-      setEditError(error instanceof Error ? error.message : "Failed to save connector");
-    } finally {
-      setIsSavingEdit(false);
-    }
-  }
-
-  async function handleApplyUpdate(connector: ConnectorInventoryItem) {
-    setIsApplyingUpdate(connector.type_name);
-    setGlobalError(null);
-    try {
-      await fetchEngineJson<ApplyConnectorUpdateResponse>(
-        `/api/connectors/${connector.type_name}/apply-update`,
-        {
-          body: JSON.stringify({}),
-          headers: {
-            "content-type": "application/json"
-          },
-          method: "POST"
-        }
-      );
-      setLastAction(`Updated ${connector.name}`);
-      await refreshInventory();
-    } catch (error) {
-      setGlobalError(error instanceof Error ? error.message : `Failed to update ${connector.name}`);
-      setLastAction(`Connector update failed for ${connector.name}`);
-    } finally {
-      setIsApplyingUpdate(null);
-    }
-  }
-
   return (
     <section className="space-y-4">
       <div className="flex items-center justify-between gap-4">
         <div>
-          <p className="section-kicker">Developer tools</p>
-          <h2 className="section-title mt-2">Create and test connectors</h2>
+          <p className="section-kicker">Integrations catalog</p>
+          <h2 className="section-title mt-2">Pre-installed static connectors</h2>
         </div>
         <button
-          className="ui-button"
+          className="ui-button transition-all duration-300 hover:scale-[1.02] active:scale-[0.98]"
           onClick={() => void refreshInventory()}
           type="button"
         >
@@ -262,16 +126,17 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
       </div>
 
       <div className="space-y-4">
-        <div className="rounded-[12px] border border-black/10 bg-white/80 p-4">
+        {/* Status bar */}
+        <div className="rounded-[12px] border border-black/10 bg-white/80 p-4 shadow-sm backdrop-blur-md transition-all duration-300 hover:shadow-md">
           <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate/70">
-            <span className="ui-badge">{sortedConnectors.length} loaded</span>
-            <span className="ui-badge">{inventory?.invalid_connectors.length ?? 0} invalid</span>
-            <span className={`rounded-md px-2 py-1 font-mono ${inventory?.wasm_enabled ? "bg-tide/10 text-tide" : "bg-ember/10 text-ember"}`}>
+            <span className="ui-badge bg-tide/10 text-tide">{sortedConnectors.length} active</span>
+            <span className="ui-badge bg-ember/10 text-ember">{inventory?.invalid_connectors.length ?? 0} invalid</span>
+            <span className={`rounded-md px-2 py-1 font-mono ${inventory?.wasm_enabled ? "bg-emerald-500/10 text-emerald-600" : "bg-ember/10 text-ember"}`}>
               WASM {inventory?.wasm_enabled ? "enabled" : "disabled"}
             </span>
           </div>
           <p className="mt-3 text-sm leading-6 text-slate">
-            Connectors installed or created in the app are available immediately in workflows and executions.
+            All connectors are statically discovered directly from the workspace and are immediately available to execute.
           </p>
           <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
             {lastAction}
@@ -283,338 +148,166 @@ export function ConnectorManager({ onCatalogInvalidated }: ConnectorManagerProps
           ) : null}
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
-          <div className="rounded-[12px] border border-black/10 bg-white/85 p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="section-kicker">Scaffold</p>
-                <h3 className="section-title mt-2">Start a new connector</h3>
-              </div>
-              <span className="ui-badge font-mono">{runtimeDraft}</span>
+        {/* Clean single-column integrations feed */}
+        <div className="space-y-4">
+          {sortedConnectors.length === 0 ? (
+            <div className="rounded-[12px] border border-dashed border-black/15 bg-white/80 px-4 py-12 text-center text-sm leading-6 text-slate">
+              No connectors are discovered in the connectors directory.
             </div>
+          ) : (
+            sortedConnectors.map((connector) => {
+              const testResult = testResults[connector.type_name];
 
-            <div className="mt-4 grid gap-3">
-              <label className="grid gap-2 text-sm text-slate" htmlFor="connector-name">
-                Name
-                <input
-                  className="ui-input"
-                  id="connector-name"
-                  onChange={(event) => {
-                    const nextName = event.target.value;
-                    setNameDraft(nextName);
-                    if (!isTypeDirty) {
-                      setTypeDraft(slugifyIdentifier(nextName));
-                    }
-                  }}
-                  placeholder="sample-echo"
-                  type="text"
-                  value={nameDraft}
-                />
-              </label>
-
-              <label className="grid gap-2 text-sm text-slate" htmlFor="connector-type">
-                Type id
-                <input
-                  className="ui-input font-mono"
-                  id="connector-type"
-                  onChange={(event) => {
-                    setIsTypeDirty(true);
-                    setTypeDraft(slugifyIdentifier(event.target.value));
-                  }}
-                  placeholder="sample_echo"
-                  type="text"
-                  value={typeDraft}
-                />
-              </label>
-
-              <label className="grid gap-2 text-sm text-slate" htmlFor="connector-runtime">
-                Runtime
-                <select
-                  className="ui-input"
-                  id="connector-runtime"
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    if (value === "process" || value === "wasm") {
-                      setRuntimeDraft(value);
-                    }
-                  }}
-                  value={runtimeDraft}
+              return (
+                <article
+                  key={connector.type_name}
+                  className="rounded-[12px] border border-black/10 bg-white/85 p-5 shadow-sm transition-all duration-300 hover:shadow-md hover:border-black/15"
                 >
-                  <option value="process">Process</option>
-                  <option value="wasm">WASM</option>
-                </select>
-              </label>
-            </div>
-
-            <div className="mt-4 flex items-center justify-between gap-3">
-              <p className="text-sm leading-6 text-slate">
-                Acsa creates the runtime bundle and starter files for you automatically.
-              </p>
-              <button
-                className="ui-button ui-button-tide"
-                disabled={isScaffolding}
-                onClick={() => void handleScaffold()}
-                type="button"
-              >
-                {isScaffolding ? "Scaffolding..." : "Scaffold"}
-              </button>
-            </div>
-          </div>
-          <div className="space-y-3">
-            {sortedConnectors.length === 0 ? (
-              <div className="rounded-[12px] border border-dashed border-black/15 bg-white/80 px-4 py-8 text-center text-sm leading-6 text-slate">
-                No connectors are available yet. Create one here or install a starter pack above.
-              </div>
-            ) : (
-              sortedConnectors.map((connector) => {
-                const testResult = testResults[connector.type_name];
-                const isEditing = editingType === connector.type_name;
-                const isEditLockedByAnotherConnector =
-                  editingType !== null && editingType !== connector.type_name;
-                const hasUpdate =
-                  !!connector.app_record?.available_version &&
-                  connector.app_record.available_version !== connector.app_record.installed_version;
-                const canApplyUpdate =
-                  connector.app_record?.source_kind === "shipped" &&
-                  hasUpdate &&
-                  !connector.app_record.is_locally_modified;
-
-                return (
-                  <article
-                    key={connector.type_name}
-                    className="rounded-[12px] border border-black/10 bg-white/85 p-4"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h3 className="text-sm font-medium text-[#101a1d]">{connector.name}</h3>
-                          <span
-                            className={`rounded-md px-2 py-1 font-mono text-[11px] uppercase tracking-[0.16em] ${connectorRuntimeTone(connector.connector_state)}`}
-                          >
-                            {connectorRuntimeLabel(connector.connector_state.runtime.mode)}
-                          </span>
-                          {connector.version ? (
-                            <span className="ui-badge font-mono">{connector.version}</span>
-                          ) : null}
-                          {connector.app_record?.is_locally_modified ? (
-                            <span className="ui-badge">Locally modified</span>
-                          ) : null}
-                          {hasUpdate ? (
-                            <span className="ui-badge">Update available</span>
-                          ) : null}
-                          {connectorSourceLabel(connector) ? (
-                            <span className="ui-badge">{connectorSourceLabel(connector)}</span>
-                          ) : null}
-                          <span className="ui-badge">
-                            {connectorTrustLabel(connector.connector_state.trust)}
-                          </span>
-                          <span className="ui-badge">
-                            {connectorValidityLabel(
-                              connector.connector_state.install_validity.state
-                            )}
-                          </span>
-                          <span
-                            className={`rounded-md px-2 py-1 text-[11px] font-medium ${connectorSetupTone(connector.connector_state)}`}
-                          >
-                            {connectorSetupLabel(connector.connector_state)}
-                          </span>
-                        </div>
-                        <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
-                          {connector.type_name}
-                        </p>
-                        <p className="mt-2 max-w-[60ch] text-sm leading-6 text-slate">
-                          {connector.description}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          className="ui-button"
-                          disabled={isEditLockedByAnotherConnector}
-                          onClick={() => handleEdit(connector)}
-                          type="button"
+                  <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-base font-semibold text-[#101a1d]">{connector.name}</h3>
+                        <span
+                          className={`rounded-md px-2 py-1 font-mono text-[10px] uppercase tracking-[0.16em] ${connectorRuntimeTone(connector.connector_state)}`}
                         >
-                          Edit
-                        </button>
-                        {canApplyUpdate ? (
-                          <button
-                            className="ui-button"
-                            disabled={isApplyingUpdate === connector.type_name}
-                            onClick={() => void handleApplyUpdate(connector)}
-                            type="button"
-                          >
-                            {isApplyingUpdate === connector.type_name ? "Updating..." : "Update"}
-                          </button>
+                          {connectorRuntimeLabel(connector.connector_state.runtime.mode)}
+                        </span>
+                        {connector.version ? (
+                          <span className="ui-badge font-mono">{connector.version}</span>
                         ) : null}
-                        <button
-                          className="ui-button"
-                          disabled={testingType === connector.type_name || !connector.sample_input_path}
-                          onClick={() => void handleRunSample(connector)}
-                          type="button"
+                        <span className="ui-badge">
+                          {connectorTrustLabel(connector.connector_state.trust)}
+                        </span>
+                        <span className="ui-badge">
+                          {connectorValidityLabel(
+                            connector.connector_state.install_validity.state
+                          )}
+                        </span>
+                        <span
+                          className={`rounded-md px-2 py-1 text-[10px] font-semibold tracking-wider uppercase ${connectorSetupTone(connector.connector_state)}`}
                         >
-                          {testingType === connector.type_name ? "Testing..." : "Run sample"}
-                        </button>
+                          {connectorSetupLabel(connector.connector_state)}
+                        </span>
                       </div>
+                      <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-slate/50">
+                        {connector.type_name}
+                      </p>
+                      <p className="max-w-[75ch] text-sm leading-6 text-slate">
+                        {connector.description}
+                      </p>
                     </div>
 
-                    {isEditing ? (
-                      <div className="mt-4 rounded-[12px] border border-black/10 bg-[#fbfbfa] p-3">
-                        <div className="mb-3 flex items-start justify-between gap-3">
-                          <div>
-                            <div className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/58">
-                              Edit connector
-                            </div>
-                            <div className="mt-1 text-[14px] font-medium tracking-tight text-ink">
-                              {connector.type_name}
-                            </div>
-                          </div>
-                          <button
-                            className="ui-button"
-                            onClick={handleCancelEdit}
-                            type="button"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-
-                        <div className="grid gap-3">
-                          <label className="grid gap-1.5">
-                            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/58">
-                              Name
-                            </span>
-                            <input
-                              className="ui-input"
-                              onChange={(event) => setEditName(event.target.value)}
-                              value={editName}
-                            />
-                          </label>
-
-                          <label className="grid gap-1.5">
-                            <span className="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/58">
-                              Description
-                            </span>
-                            <textarea
-                              className="ui-input min-h-[92px] resize-y"
-                              onChange={(event) => setEditDescription(event.target.value)}
-                              value={editDescription}
-                            />
-                          </label>
-
-                          <div className="flex items-center gap-2">
-                            <button
-                              className="ui-button ui-button-primary"
-                              disabled={isSavingEdit || !editName.trim() || !editDescription.trim()}
-                              onClick={() => void handleSaveEdit()}
-                              type="button"
-                            >
-                              {isSavingEdit ? "Saving…" : "Save changes"}
-                            </button>
-                          </div>
-
-                          {editError ? (
-                            <p className="text-[12px] leading-5 text-[#c65a72]">{editError}</p>
-                          ) : null}
-                        </div>
-                      </div>
-                    ) : null}
-
-                    <div className="mt-3 grid gap-2 text-sm leading-6 text-slate">
-                      <p>Entry: <code className="rounded bg-sand px-1.5 py-0.5 font-mono text-ink">{connector.entry}</code></p>
-                      <p>Inputs: <span className="font-mono text-ink">{connector.inputs.join(", ") || "none"}</span></p>
-                      <p>Outputs: <span className="font-mono text-ink">{connector.outputs.join(", ") || "none"}</span></p>
-                      <p>
-                        Steps:{" "}
-                        <span className="font-mono text-ink">
-                          {connector.provided_step_types.join(", ") || connector.type_name}
-                        </span>
-                      </p>
-                      <p>
-                        Used by:{" "}
-                        <span className="font-mono text-ink">
-                          {connector.used_by_workflows.join(", ") || "No workflows yet"}
-                        </span>
-                      </p>
-                      <p>Manifest: <code className="rounded bg-sand px-1.5 py-0.5 font-mono text-[11px] text-ink">{connector.manifest_path}</code></p>
+                    <div className="flex items-center gap-2 shrink-0 self-end md:self-start">
+                      <button
+                        className="ui-button ui-button-tide transition-all duration-300 hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50"
+                        disabled={testingType === connector.type_name || !connector.sample_input_path}
+                        onClick={() => void handleRunSample(connector)}
+                        type="button"
+                      >
+                        {testingType === connector.type_name ? "Testing..." : "Run sample"}
+                      </button>
                     </div>
+                  </div>
 
-                    {connector.notes.length > 0 ? (
-                      <div className="mt-3 rounded-xl border border-ember/15 bg-ember/5 px-3 py-3 text-sm leading-6 text-ember">
-                        {connector.notes.map((note, index) => (
-                          <p key={index}>{note}</p>
-                        ))}
+                  {/* Core properties grid */}
+                  <div className="mt-4 pt-4 border-t border-black/5 grid gap-x-6 gap-y-2 text-xs text-slate/85 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+                    <p><span className="font-semibold text-slate/60 mr-1">Entry:</span> <code className="rounded bg-sand/60 px-1.5 py-0.5 font-mono text-[11px] text-ink">{connector.entry}</code></p>
+                    <p><span className="font-semibold text-slate/60 mr-1">Inputs:</span> <span className="font-mono text-ink font-medium">{connector.inputs.join(", ") || "none"}</span></p>
+                    <p><span className="font-semibold text-slate/60 mr-1">Outputs:</span> <span className="font-mono text-ink font-medium">{connector.outputs.join(", ") || "none"}</span></p>
+                    <p>
+                      <span className="font-semibold text-slate/60 mr-1">Steps:</span>{" "}
+                      <span className="font-mono text-ink font-medium">
+                        {connector.provided_step_types.join(", ") || connector.type_name}
+                      </span>
+                    </p>
+                    <p>
+                      <span className="font-semibold text-slate/60 mr-1">Used by:</span>{" "}
+                      <span className="font-mono text-ink font-medium">
+                        {connector.used_by_workflows.join(", ") || "No active workflows"}
+                      </span>
+                    </p>
+                    <p className="truncate"><span className="font-semibold text-slate/60 mr-1">Manifest:</span> <code className="rounded bg-sand/60 px-1.5 py-0.5 font-mono text-[10px] text-ink">{connector.manifest_path}</code></p>
+                  </div>
+
+                  {connector.notes.length > 0 ? (
+                    <div className="mt-4 rounded-xl border border-ember/15 bg-ember/5 px-3 py-2.5 text-xs text-ember space-y-1">
+                      {connector.notes.map((note, index) => (
+                        <p key={index} className="flex items-center gap-1.5">
+                          <span className="inline-block w-1 h-1 rounded-full bg-ember shrink-0" />
+                          {note}
+                        </p>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {(connector.allowed_env.length > 0 || connector.allowed_hosts.length > 0) ? (
+                    <div className="mt-4 flex flex-wrap gap-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate/60">
+                      {connector.allowed_env.length > 0 ? (
+                        <span className="ui-badge font-mono bg-tide/5 text-tide">
+                          env: {connector.allowed_env.join(", ")}
+                        </span>
+                      ) : null}
+                      {connector.allowed_hosts.length > 0 ? (
+                        <span className="ui-badge font-mono bg-tide/5 text-tide">
+                          hosts: {connector.allowed_hosts.join(", ")}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {testResult ? (
+                    <div className="mt-4 rounded-xl border border-tide/20 bg-tide/5 p-4 transition-all duration-300">
+                      <div className="text-[11px] font-bold uppercase tracking-[0.18em] text-tide">
+                        Latest sample result
                       </div>
-                    ) : null}
-
-                    {(connector.allowed_env.length > 0 || connector.allowed_hosts.length > 0) ? (
-                      <div className="mt-3 flex flex-wrap gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate/70">
-                        {connector.allowed_env.length > 0 ? (
-                          <span className="ui-badge font-mono">
-                            env: {connector.allowed_env.join(", ")}
-                          </span>
-                        ) : null}
-                        {connector.allowed_hosts.length > 0 ? (
-                          <span className="ui-badge font-mono">
-                            hosts: {connector.allowed_hosts.join(", ")}
-                          </span>
-                        ) : null}
-                      </div>
-                    ) : null}
-
-                    {testResult ? (
-                      <div className="mt-4 rounded-xl border border-tide/20 bg-tide/5 p-3">
-                        <div className="text-xs font-semibold uppercase tracking-[0.18em] text-tide">
-                          Latest sample result
-                        </div>
-                        <pre className="mt-3 overflow-x-auto rounded-xl bg-ink px-3 py-3 font-mono text-[11px] leading-6 text-white">
+                      <pre className="mt-3 overflow-x-auto rounded-xl bg-ink px-4 py-3 font-mono text-[11px] leading-6 text-white/95 shadow-inner">
 {JSON.stringify(testResult.output, null, 2)}
-                        </pre>
-                      </div>
-                    ) : null}
-                  </article>
-                );
-              })
-            )}
-          </div>
+                      </pre>
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })
+          )}
         </div>
 
+        {/* Invalid connectors block */}
         {(inventory?.invalid_connectors.length ?? 0) > 0 ? (
-          <div className="rounded-[12px] border border-ember/20 bg-ember/5 p-4">
+          <div className="rounded-[12px] border border-ember/20 bg-ember/5 p-5 shadow-sm">
             <p className="section-kicker text-ember">Needs attention</p>
-            <div className="mt-3 space-y-3">
+            <h3 className="text-sm font-semibold text-ink mt-1">Invalid Connectors discovered</h3>
+            <div className="mt-4 space-y-3">
               {inventory?.invalid_connectors.map((connector) => (
                 <article
                   key={connector.id}
-                  className="rounded-[10px] border border-ember/15 bg-white/80 p-3"
+                  className="rounded-[10px] border border-ember/15 bg-white/80 p-4 shadow-sm"
                 >
                   <div className="flex items-center justify-between gap-3">
-                    <div className="font-semibold text-ink">{connector.id}</div>
-                    <span className="ui-badge font-mono">
+                    <div className="font-semibold text-ink text-sm">{connector.id}</div>
+                    <span className="ui-badge font-mono bg-ember/10 text-ember">
                       {connectorValidityLabel(connector.connector_state.install_validity.state)}
                     </span>
                   </div>
                   <p className="mt-2 text-sm leading-6 text-slate">{connector.error}</p>
-                  <p
-                    className={`mt-2 inline-flex rounded-md px-2 py-1 text-[11px] font-medium ${connectorSetupTone(connector.connector_state)}`}
-                  >
-                    {connectorSetupLabel(connector.connector_state)}
-                  </p>
-                  {connector.provided_step_types.length > 0 ? (
-                    <p className="mt-2 text-sm leading-6 text-slate">
-                      Steps:{" "}
-                      <span className="font-mono text-ink">
-                        {connector.provided_step_types.join(", ")}
-                      </span>
-                    </p>
-                  ) : null}
-                  {connector.used_by_workflows.length > 0 ? (
-                    <p className="mt-1 text-sm leading-6 text-slate">
-                      Used by:{" "}
-                      <span className="font-mono text-ink">
-                        {connector.used_by_workflows.join(", ")}
-                      </span>
-                    </p>
-                  ) : null}
+                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+                    <span
+                      className={`inline-flex rounded px-2 py-0.5 font-medium ${connectorSetupTone(connector.connector_state)}`}
+                    >
+                      {connectorSetupLabel(connector.connector_state)}
+                    </span>
+                    {connector.provided_step_types.length > 0 ? (
+                      <p className="text-slate">
+                        Steps: <span className="font-mono text-ink font-medium">{connector.provided_step_types.join(", ")}</span>
+                      </p>
+                    ) : null}
+                    {connector.used_by_workflows.length > 0 ? (
+                      <p className="text-slate">
+                        Used by: <span className="font-mono text-ink font-medium">{connector.used_by_workflows.join(", ")}</span>
+                      </p>
+                    ) : null}
+                  </div>
                   {connector.manifest_path ? (
-                    <p className="mt-2 font-mono text-[11px] uppercase tracking-[0.16em] text-slate/65">
+                    <p className="mt-3 font-mono text-[9px] uppercase tracking-[0.16em] text-slate/50">
                       {connector.manifest_path}
                     </p>
                   ) : null}

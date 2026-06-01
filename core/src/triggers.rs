@@ -47,10 +47,9 @@ use thiserror::Error;
 use tracing::{error, info, warn};
 
 use crate::{
-    asset_store::AssetStore,
     connectors::{
         discover_connector_manifests_from_dirs, inspect_connectors, inspect_connectors_from_dirs,
-        run_manifest_path, scaffold_connector,
+        run_manifest_path,
         wasm_connectors_enabled, ConnectorError, ConnectorRuntime,
     },
     engine::{
@@ -59,7 +58,7 @@ use crate::{
     },
     models::{Trigger, Workflow},
     n8n_import::translate_n8n_workflow,
-    nodes::AliasNodeDefinition,
+
     observability::{
         current_timestamp, metrics_text, payload_visibility_enabled, record_log,
         redact_json_string, redact_text, LogLevel, RetentionPolicy,
@@ -73,9 +72,9 @@ use crate::{
         WorkflowValidationState,
     },
     storage::{
-        resolve_secret_value, AssetRecord, CredentialRecord, LogQuery, LogRecord, NewAssetRecord,
-        NewConnectorRecord, NewNodeRecord, PaginatedResponse, RunQuery, RunRecord, RunStore,
-        StepRunRecord, StorageError, WorkflowRecord,
+        resolve_secret_value, CredentialRecord, LogQuery, LogRecord,
+        PaginatedResponse, RunQuery, RunRecord, RunStore,
+        StepRunRecord, WorkflowRecord,
     },
 };
 
@@ -168,34 +167,7 @@ struct WorkflowWriteResult {
     yaml: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct CreateConnectorRequest {
-    name: String,
-    runtime: String,
-    type_id: String,
-}
 
-#[derive(Debug, Deserialize)]
-struct UpdateConnectorRecordRequest {
-    description: String,
-    name: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct ApplyAssetUpdateRequest;
-
-#[derive(Debug, Deserialize)]
-struct UpsertNodeRecordRequest {
-    #[serde(default)]
-    base_type_name: Option<String>,
-    category: String,
-    description: String,
-    label: String,
-    source_kind: String,
-    #[serde(default)]
-    source_ref: Option<String>,
-    type_name: String,
-}
 
 #[derive(Debug, Deserialize)]
 struct TestConnectorRequest {
@@ -232,12 +204,10 @@ struct InvalidWorkflowFile {
 
 #[derive(Debug, Clone, Serialize)]
 struct StepTypeEntry {
-    app_record: Option<NodeRecordView>,
     category: String,
     description: String,
     label: String,
     runtime: Option<String>,
-    source: String,
     type_name: String,
 }
 
@@ -282,11 +252,7 @@ struct ConnectorInventoryResponse {
 }
 
 
-#[derive(Debug, Clone, Serialize)]
-struct ConnectorScaffoldResponse {
-    connector: ConnectorView,
-    next_steps: Vec<String>,
-}
+
 
 #[derive(Debug, Clone, Serialize)]
 struct ConnectorTestResponse {
@@ -296,18 +262,7 @@ struct ConnectorTestResponse {
     params: Value,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct NodeRecordResponse {
-    base_type_name: Option<String>,
-    category: String,
-    description: String,
-    id: String,
-    label: String,
-    source_kind: String,
-    source_ref: Option<String>,
-    type_name: String,
-    updated_at: i64,
-}
+
 
 #[derive(Debug, Clone, Serialize)]
 struct CredentialView {
@@ -326,7 +281,6 @@ struct CredentialsResponse {
 struct ConnectorView {
     allowed_env: Vec<String>,
     allowed_hosts: Vec<String>,
-    app_record: Option<ConnectorRecordView>,
     connector_dir: String,
     connector_state: ProductConnectorState,
     description: String,
@@ -350,7 +304,6 @@ struct ConnectorView {
 
 #[derive(Debug, Clone, Serialize)]
 struct InvalidConnectorView {
-    app_record: Option<ConnectorRecordView>,
     connector_dir: String,
     connector_state: ProductConnectorState,
     error: String,
@@ -361,28 +314,7 @@ struct InvalidConnectorView {
     used_by_workflows: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct ConnectorRecordView {
-    available_version: Option<String>,
-    description: Option<String>,
-    installed_version: Option<String>,
-    is_locally_modified: bool,
-    name: Option<String>,
-    source_kind: String,
-    source_ref: Option<String>,
-}
 
-#[derive(Debug, Clone, Serialize)]
-struct NodeRecordView {
-    available_version: Option<String>,
-    base_type_name: Option<String>,
-    description: Option<String>,
-    installed_version: Option<String>,
-    is_locally_modified: bool,
-    label: Option<String>,
-    source_kind: String,
-    source_ref: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize)]
 struct WorkflowSummary {
@@ -486,7 +418,7 @@ pub async fn serve(
     }
 
     seed_workflows_from_directory_if_missing(engine.store(), &config.workflows_dir).await?;
-    ensure_shipped_asset_records(engine.store()).await?;
+
     let workflows = load_workflows_from_dir(&config.workflows_dir)?;
     let mut webhook_workflows = HashMap::new();
     let mut registered_paths = HashSet::new();
@@ -531,11 +463,6 @@ pub async fn serve(
         .route("/api/credentials", get(list_credentials).post(upsert_credential))
         .route("/api/credentials/{credential_name}", axum::routing::delete(delete_credential))
         .route("/api/connectors", get(list_connectors))
-        .route("/api/connectors/scaffold", post(create_connector))
-        .route("/api/connectors/{connector_type}", axum::routing::put(update_connector_record))
-        .route("/api/connectors/{connector_type}/apply-update", post(apply_connector_update))
-        .route("/api/node-records", get(list_node_records).post(upsert_node_record))
-        .route("/api/node-records/{type_name}/apply-update", post(apply_node_asset_update))
         .route("/api/connectors/{connector_type}/test", post(test_connector))
         .route("/api/imports/n8n", post(import_n8n_workflow))
         .route("/api/node-catalog", get(list_node_catalog))
@@ -736,491 +663,15 @@ async fn list_connectors(
     }
 }
 
-async fn list_node_records(State(state): State<AppState>) -> impl IntoResponse {
-    let node_asset_base_types = match node_asset_base_type_map(state.engine.store()).await {
-        Ok(base_types) => base_types,
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": error.to_string() })),
-            );
-        }
-    };
 
-    match state.engine.store().list_node_records().await {
-        Ok(records) => (
-            StatusCode::OK,
-            Json(json!(records
-                .into_iter()
-                .map(|record| {
-                    let base_type_name = node_asset_base_types.get(&record.type_name).cloned();
-                    node_record_response(record, base_type_name)
-                })
-                .collect::<Vec<_>>())),
-        ),
-        Err(error) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
-        }
-    }
-}
-
-async fn create_connector(
-    Extension(UserId(user_id)): Extension<UserId>,
-    State(state): State<AppState>,
-    Json(request): Json<CreateConnectorRequest>,
-) -> Response {
-    let runtime = match parse_connector_runtime(&request.runtime) {
-        Ok(runtime) => runtime,
-        Err(error) => return connector_error_response(error),
-    };
-
-    let asset_store = match AssetStore::new(state.engine.store().asset_store_root()) {
-        Ok(asset_store) => asset_store,
-        Err(error) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
-                .into_response()
-        }
-    };
-    let install_root = asset_store.connectors_dir();
-
-    match scaffold_connector(&install_root, request.name.trim(), request.type_id.trim(), runtime) {
-        Ok(connector_dir) => {
-            if let Err(error) = persist_connector_record_from_dir(
-                state.engine.store(),
-                &install_root,
-                &connector_dir,
-                "custom",
-                None,
-            )
-            .await
-            {
-                return connector_error_response(error);
-            }
-            match connector_inventory(state.engine.store(), &state.connectors_dir, &user_id).await {
-                Ok(inventory) => match inventory
-                    .connectors
-                    .into_iter()
-                    .find(|connector| connector.type_name == request.type_id.trim())
-                {
-                    Some(connector) => (
-                        StatusCode::CREATED,
-                        Json(json!(ConnectorScaffoldResponse {
-                            connector: connector.clone(),
-                            next_steps: vec![
-                                format!("Open {} in Connectors", connector.name),
-                                if connector.sample_input_path.is_some() {
-                                    format!("Run a sample test for {}", connector.name)
-                                } else {
-                                    format!("Add a sample test input for {}", connector.name)
-                                },
-                            ],
-                        })),
-                    )
-                        .into_response(),
-                    None => connector_error_response(TriggerError::Connector(
-                        ConnectorError::InvalidManifest {
-                            message: "scaffolded connector could not be reloaded from inventory"
-                                .to_string(),
-                        },
-                    )),
-                },
-                Err(error) => connector_error_response(error),
-            }
-        }
-        Err(error) => connector_error_response(TriggerError::Connector(error)),
-    }
-}
-
-async fn update_connector_record(
-    State(state): State<AppState>,
-    AxumPath(connector_type): AxumPath<String>,
-    Json(request): Json<UpdateConnectorRecordRequest>,
-) -> Response {
-    let name = request.name.trim();
-    let description = request.description.trim();
-    if name.is_empty() || description.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "connector name and description are required" })),
-        )
-            .into_response();
-    }
-
-    let store = state.engine.store();
-    let connector_asset = match store.get_asset_record("connector", &connector_type).await {
-        Ok(record) => record,
-        Err(StorageError::AssetRecordNotFound(_, _)) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": format!("connector {} was not found", connector_type) })),
-            )
-                .into_response();
-        }
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": error.to_string() })),
-            )
-                .into_response();
-        }
-    };
-
-    if let Err(error) = store
-        .upsert_asset_record(NewAssetRecord {
-            asset_kind: "connector",
-            type_name: &connector_asset.type_name,
-            name,
-            description,
-            category: connector_asset.category.as_deref(),
-            runtime: connector_asset.runtime.as_deref(),
-            source_kind: &connector_asset.source_kind,
-            source_ref: connector_asset.source_ref.as_deref(),
-            definition_json: &connector_asset.definition_json,
-            installed_version: connector_asset.installed_version.as_deref(),
-            available_version: connector_asset.available_version.as_deref(),
-            is_locally_modified: true,
-        })
-        .await
-    {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
-            .into_response();
-    }
-
-    match store.get_connector_record_by_type(&connector_type).await {
-        Ok(record) => {
-            if let Err(error) = store
-                .upsert_connector_record(NewConnectorRecord {
-                    type_name: &record.type_name,
-                    name,
-                    runtime: &record.runtime,
-                    source_kind: &record.source_kind,
-                    source_ref: record.source_ref.as_deref(),
-                    connector_dir: &record.connector_dir,
-                    manifest_path: &record.manifest_path,
-                    manifest_json: &record.manifest_json,
-                })
-                .await
-            {
-                if let Err(rollback_error) = store
-                    .upsert_asset_record(NewAssetRecord {
-                        asset_kind: "connector",
-                        type_name: &connector_asset.type_name,
-                        name: &connector_asset.name,
-                        description: &connector_asset.description,
-                        category: connector_asset.category.as_deref(),
-                        runtime: connector_asset.runtime.as_deref(),
-                        source_kind: &connector_asset.source_kind,
-                        source_ref: connector_asset.source_ref.as_deref(),
-                        definition_json: &connector_asset.definition_json,
-                        installed_version: connector_asset.installed_version.as_deref(),
-                        available_version: connector_asset.available_version.as_deref(),
-                        is_locally_modified: connector_asset.is_locally_modified,
-                    })
-                    .await
-                {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({
-                            "error": format!(
-                                "{} (asset rollback failed: {})",
-                                error,
-                                rollback_error
-                            )
-                        })),
-                    )
-                        .into_response();
-                }
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({ "error": error.to_string() })),
-                )
-                    .into_response();
-            }
-        }
-        Err(StorageError::ConnectorRecordNotFound(_)) => {}
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": error.to_string() })),
-            )
-                .into_response();
-        }
-    }
-
-    (
-        StatusCode::OK,
-        Json(json!({
-            "type_name": connector_type,
-            "name": name,
-            "description": description,
-            "is_locally_modified": true
-        })),
-    )
-        .into_response()
-}
-
-async fn apply_connector_update(
-    Extension(UserId(user_id)): Extension<UserId>,
-    State(state): State<AppState>,
-    AxumPath(connector_type): AxumPath<String>,
-    Json(_request): Json<ApplyAssetUpdateRequest>,
-) -> Response {
-    let store = state.engine.store();
-    let asset = match store.get_asset_record("connector", &connector_type).await {
-        Ok(asset) => asset,
-        Err(StorageError::AssetRecordNotFound(_, _)) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": format!("connector {} was not found", connector_type) })),
-            )
-                .into_response();
-        }
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": error.to_string() })),
-            )
-                .into_response();
-        }
-    };
-
-    if asset.source_kind != "shipped" {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "only shipped connectors can be updated" })),
-        )
-            .into_response();
-    }
-    if asset.is_locally_modified {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "review local edits before applying an update" })),
-        )
-            .into_response();
-    }
-
-    match install_shipped_connector_asset(store, &state.connectors_dir, &asset).await {
-        Ok(()) => match connector_inventory(store, &state.connectors_dir, &user_id).await {
-            Ok(inventory) => {
-                let Some(updated) =
-                    inventory.connectors.into_iter().find(|item| item.type_name == connector_type)
-                else {
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({ "error": "updated connector did not reload correctly" })),
-                    )
-                        .into_response();
-                };
-                (StatusCode::OK, Json(json!({ "connector": updated }))).into_response()
-            }
-            Err(error) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
-                    .into_response()
-            }
-        },
-        Err(error) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
-                .into_response()
-        }
-    }
-}
-
-async fn apply_node_asset_update(
-    State(state): State<AppState>,
-    AxumPath(type_name): AxumPath<String>,
-    Json(_request): Json<ApplyAssetUpdateRequest>,
-) -> Response {
-    let store = state.engine.store();
-    let asset = match store.get_asset_record("node", &type_name).await {
-        Ok(asset) => asset,
-        Err(StorageError::AssetRecordNotFound(_, _)) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": format!("node {} was not found", type_name) })),
-            )
-                .into_response();
-        }
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": error.to_string() })),
-            )
-                .into_response();
-        }
-    };
-
-    if asset.source_kind != "shipped" {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "only shipped nodes can be updated" })),
-        )
-            .into_response();
-    }
-    if asset.is_locally_modified {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({ "error": "review local edits before applying an update" })),
-        )
-            .into_response();
-    }
-
-    let Some((_, name, description, category)) = built_in_step_spec(&type_name) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "only built-in shipped nodes can be updated today" })),
-        )
-            .into_response();
-    };
-
-    let definition_json = match built_in_node_asset_definition_json(&type_name) {
-        Ok(value) => value,
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": error.to_string() })),
-            )
-                .into_response();
-        }
-    };
-
-    match store
-        .upsert_asset_record(NewAssetRecord {
-            asset_kind: "node",
-            type_name: &type_name,
-            name,
-            description,
-            category: Some(category),
-            runtime: None,
-            source_kind: "shipped",
-            source_ref: Some("built_in"),
-            definition_json: &definition_json,
-            installed_version: asset
-                .available_version
-                .as_deref()
-                .or(asset.installed_version.as_deref()),
-            available_version: asset
-                .available_version
-                .as_deref()
-                .or(asset.installed_version.as_deref()),
-            is_locally_modified: false,
-        })
-        .await
-    {
-        Ok(updated) => (
-            StatusCode::OK,
-            Json(json!({
-                "type_name": updated.type_name,
-                "installed_version": updated.installed_version,
-                "available_version": updated.available_version,
-                "is_locally_modified": updated.is_locally_modified
-            })),
-        )
-            .into_response(),
-        Err(error) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
-                .into_response()
-        }
-    }
-}
-
-async fn upsert_node_record(
-    State(state): State<AppState>,
-    Json(request): Json<UpsertNodeRecordRequest>,
-) -> Response {
-    let store = state.engine.store();
-    let type_name = request.type_name.trim();
-    let label = request.label.trim();
-    let description = request.description.trim();
-    let category = request.category.trim();
-    let source_kind = request.source_kind.trim();
-    let source_ref = request.source_ref.as_deref().map(str::trim);
-    let base_type_name = request
-        .base_type_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("noop");
-
-    let node_record =
-        NewNodeRecord { type_name, label, description, category, source_kind, source_ref };
-    let node_record_existed = match store.get_node_record_by_type(type_name).await {
-        Ok(_) => true,
-        Err(StorageError::NodeRecordNotFound(_)) => false,
-        Err(error) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
-                .into_response()
-        }
-    };
-
-    match store.upsert_node_record(node_record).await {
-        Ok(record) => match upsert_node_asset_record(store, &node_record, base_type_name).await {
-            Ok(()) => (
-                StatusCode::OK,
-                Json(json!(node_record_response(record, Some(base_type_name.to_string())))),
-            )
-                .into_response(),
-            Err(error) => {
-                if !node_record_existed {
-                    if let Err(rollback_error) = store.delete_node_record(&record.id).await {
-                        error!(
-                            node_record_id = %record.id,
-                            rollback_error = %rollback_error,
-                            "failed to rollback inserted node record after node asset upsert failure"
-                        );
-                    }
-                }
-                (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
-                    .into_response()
-            }
-        },
-        Err(error) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": error.to_string() })))
-                .into_response()
-        }
-    }
-}
-
-async fn upsert_node_asset_record(
-    store: &RunStore,
-    node_record: &NewNodeRecord<'_>,
-    base_type_name: &str,
-) -> Result<(), TriggerError> {
-    let definition_json = serde_json::to_string(&json!({
-        "kind": "alias",
-        "base_type": base_type_name,
-        "default_params": {}
-    }))
-    .map_err(|error| TriggerError::Engine(EngineError::ConnectorLoad(error.to_string())))?;
-
-    let record = NewAssetRecord {
-        asset_kind: "node",
-        type_name: node_record.type_name,
-        name: node_record.label,
-        description: node_record.description,
-        category: Some(node_record.category),
-        runtime: Some("alias"),
-        source_kind: node_record.source_kind,
-        source_ref: node_record.source_ref,
-        definition_json: &definition_json,
-        installed_version: None,
-        available_version: None,
-        is_locally_modified: false,
-    };
-
-    store.upsert_asset_record(record).await?;
-
-    Ok(())
-}
 
 async fn test_connector(
     State(state): State<AppState>,
     AxumPath(connector_type): AxumPath<String>,
     Json(request): Json<TestConnectorRequest>,
 ) -> Response {
-    let asset_store_connectors_dir = state.engine.store().asset_store_connectors_dir();
     let inspection = match inspect_connectors_from_dirs(&[
         state.connectors_dir.as_path(),
-        asset_store_connectors_dir.as_path(),
     ]) {
         Ok(inspection) => inspection,
         Err(error) => return connector_error_response(TriggerError::Connector(error)),
@@ -1251,7 +702,7 @@ async fn test_connector(
         Ok(output) => (
             StatusCode::OK,
             Json(json!(ConnectorTestResponse {
-                connector: connector_view(&connector, &HashMap::new(), &HashMap::new()),
+                connector: connector_view(&connector, &HashMap::new()),
                 inputs,
                 output,
                 params,
@@ -1281,184 +732,7 @@ async fn list_workflows(
     }
 }
 
-async fn persist_connector_record_from_dir(
-    store: &RunStore,
-    connectors_dir: &Path,
-    connector_dir: &Path,
-    source_kind: &str,
-    source_ref: Option<&str>,
-) -> Result<(), TriggerError> {
-    let canonical_connector_dir = fs::canonicalize(connector_dir).map_err(TriggerError::Io)?;
-    let inspection = inspect_connectors(connectors_dir)?;
-    let connector = inspection
-        .connectors
-        .into_iter()
-        .find(|candidate| candidate.connector_dir == canonical_connector_dir)
-        .ok_or_else(|| {
-            TriggerError::Connector(ConnectorError::InvalidManifest {
-                message: format!(
-                    "connector at {} could not be reloaded after install",
-                    canonical_connector_dir.display()
-                ),
-            })
-        })?;
-    let manifest_json = serde_json::to_string(&connector.manifest)
-        .map_err(|error| TriggerError::Connector(ConnectorError::Json(error)))?;
-    let connector_dir_string = connector.connector_dir.display().to_string();
-    let manifest_path_string = connector.manifest_path.display().to_string();
-    let runtime = connector_runtime_name(connector.manifest.runtime);
 
-    store
-        .upsert_asset_record(NewAssetRecord {
-            asset_kind: "connector",
-            type_name: &connector.manifest.type_id,
-            name: &connector.manifest.name,
-            description: &connector.manifest.name,
-            category: Some("Apps"),
-            runtime: Some(runtime),
-            source_kind,
-            source_ref,
-            definition_json: &manifest_json,
-            installed_version: connector.manifest.version.as_deref(),
-            available_version: connector.manifest.version.as_deref(),
-            is_locally_modified: false,
-        })
-        .await?;
-
-    store
-        .upsert_connector_record(NewConnectorRecord {
-            type_name: &connector.manifest.type_id,
-            name: &connector.manifest.name,
-            runtime,
-            source_kind,
-            source_ref,
-            connector_dir: &connector_dir_string,
-            manifest_path: &manifest_path_string,
-            manifest_json: &manifest_json,
-        })
-        .await?;
-
-    Ok(())
-}
-
-async fn install_shipped_connector_asset(
-    store: &RunStore,
-    connectors_dir: &Path,
-    asset: &AssetRecord,
-) -> Result<(), TriggerError> {
-    let asset_store = AssetStore::new(store.asset_store_root())?;
-
-    if let Some(source_ref) = asset.source_ref.as_deref() {
-        let repo_source_dir = connectors_dir.join(source_ref);
-        if repo_source_dir.exists() {
-            let stored_bundle = asset_store.store_connector_bundle(source_ref, &repo_source_dir)?;
-            persist_connector_record_from_dir(
-                store,
-                &asset_store.connectors_dir(),
-                &stored_bundle.connector_dir,
-                "shipped",
-                Some(source_ref),
-            )
-            .await?;
-            return Ok(());
-        }
-    }
-
-    Err(TriggerError::Connector(ConnectorError::InvalidManifest {
-        message: format!("no shipped connector source could be found for {}", asset.type_name),
-    }))
-}
-
-pub async fn sync_repo_authored_connector_assets(
-    store: &RunStore,
-    connectors_dir: &Path,
-) -> Result<(), TriggerError> {
-    if !connectors_dir.exists() {
-        return Ok(());
-    }
-
-    let inspection = inspect_connectors(connectors_dir)?;
-    let asset_store = AssetStore::new(store.asset_store_root())?;
-    let install_root = asset_store.connectors_dir();
-
-    for connector in inspection.connectors {
-        let runtime = connector_runtime_name(connector.manifest.runtime);
-        let dir_name =
-            connector.connector_dir.file_name().and_then(|value| value.to_str()).ok_or_else(
-                || {
-                    TriggerError::Connector(ConnectorError::InvalidManifest {
-                        message: format!(
-                            "connector directory {} has no valid name",
-                            connector.connector_dir.display()
-                        ),
-                    })
-                },
-            )?;
-
-        match store.get_asset_record("connector", &connector.manifest.type_id).await {
-            Ok(existing_asset) => {
-                if existing_asset.source_kind != "shipped" {
-                    continue;
-                }
-                if existing_asset.is_locally_modified {
-                    store
-                        .upsert_asset_record(NewAssetRecord {
-                            asset_kind: "connector",
-                            type_name: &existing_asset.type_name,
-                            name: &existing_asset.name,
-                            description: &existing_asset.description,
-                            category: existing_asset.category.as_deref(),
-                            runtime: existing_asset.runtime.as_deref(),
-                            source_kind: &existing_asset.source_kind,
-                            source_ref: existing_asset.source_ref.as_deref(),
-                            definition_json: &existing_asset.definition_json,
-                            installed_version: existing_asset.installed_version.as_deref(),
-                            available_version: connector.manifest.version.as_deref(),
-                            is_locally_modified: true,
-                        })
-                        .await?;
-                    continue;
-                }
-                if existing_asset.installed_version.as_deref()
-                    != connector.manifest.version.as_deref()
-                {
-                    store
-                        .upsert_asset_record(NewAssetRecord {
-                            asset_kind: "connector",
-                            type_name: &existing_asset.type_name,
-                            name: &existing_asset.name,
-                            description: &existing_asset.description,
-                            category: existing_asset.category.as_deref(),
-                            runtime: Some(runtime),
-                            source_kind: &existing_asset.source_kind,
-                            source_ref: existing_asset.source_ref.as_deref().or(Some(dir_name)),
-                            definition_json: &existing_asset.definition_json,
-                            installed_version: existing_asset.installed_version.as_deref(),
-                            available_version: connector.manifest.version.as_deref(),
-                            is_locally_modified: false,
-                        })
-                        .await?;
-                    continue;
-                }
-            }
-            Err(crate::storage::StorageError::AssetRecordNotFound(_, _)) => {}
-            Err(error) => return Err(error.into()),
-        }
-
-        let stored_bundle =
-            asset_store.store_connector_bundle(dir_name, &connector.connector_dir)?;
-        persist_connector_record_from_dir(
-            store,
-            &install_root,
-            &stored_bundle.connector_dir,
-            "shipped",
-            Some(dir_name),
-        )
-        .await?;
-    }
-
-    Ok(())
-}
 
 async fn list_runs(
     State(state): State<AppState>,
@@ -2264,264 +1538,28 @@ async fn connector_inventory(
     connectors_dir: &Path,
     user_id: &str,
 ) -> Result<ConnectorInventoryResponse, TriggerError> {
-    let asset_store_connectors_dir = store.asset_store_connectors_dir();
-    let inspection =
-        inspect_connectors_from_dirs(&[connectors_dir, asset_store_connectors_dir.as_path()])?;
+    let inspection = inspect_connectors_from_dirs(&[connectors_dir])?;
     let workflow_dependencies = connector_usage_by_workflow(store, user_id).await?;
-    let connector_records = connector_record_map(store).await?;
     Ok(ConnectorInventoryResponse {
         connectors: inspection
             .connectors
             .iter()
-            .map(|connector| connector_view(connector, &workflow_dependencies, &connector_records))
+            .map(|connector| connector_view(connector, &workflow_dependencies))
             .collect(),
         invalid_connectors: inspection
             .invalid
             .iter()
             .map(|connector| {
-                invalid_connector_view(connector, &workflow_dependencies, &connector_records)
+                invalid_connector_view(connector, &workflow_dependencies)
             })
             .collect(),
         wasm_enabled: wasm_connectors_enabled(),
     })
 }
 
-async fn connector_record_map(
-    store: &RunStore,
-) -> Result<HashMap<String, ConnectorRecordView>, TriggerError> {
-    let connector_assets = store
-        .list_asset_records()
-        .await?
-        .into_iter()
-        .filter(|record| record.asset_kind == "connector")
-        .map(|record| (record.type_name.clone(), record))
-        .collect::<HashMap<_, _>>();
 
-    Ok(store
-        .list_connector_records()
-        .await?
-        .into_iter()
-        .map(|record| {
-            let asset = connector_assets.get(&record.type_name);
-            (
-                record.type_name.clone(),
-                ConnectorRecordView {
-                    available_version: asset.and_then(|item| item.available_version.clone()),
-                    description: asset.map(|item| item.description.clone()),
-                    installed_version: asset.and_then(|item| item.installed_version.clone()),
-                    is_locally_modified: asset.is_some_and(|item| item.is_locally_modified),
-                    name: asset.map(|item| item.name.clone()),
-                    source_kind: asset
-                        .map(|item| item.source_kind.clone())
-                        .unwrap_or(record.source_kind),
-                    source_ref: asset
-                        .and_then(|item| item.source_ref.clone())
-                        .or(record.source_ref),
-                },
-            )
-        })
-        .collect())
-}
 
-async fn node_record_map(
-    store: &RunStore,
-) -> Result<HashMap<String, NodeRecordView>, TriggerError> {
-    let node_assets = store
-        .list_asset_records()
-        .await?
-        .into_iter()
-        .filter(|record| record.asset_kind == "node")
-        .map(|record| (record.type_name.clone(), record))
-        .collect::<HashMap<_, _>>();
-    let base_type_names = node_asset_base_type_map(store).await?;
-    let mut entries = HashMap::new();
 
-    for record in store.list_node_records().await? {
-        let type_name = record.type_name.clone();
-        let asset = node_assets.get(&type_name);
-        entries.insert(
-            type_name.clone(),
-            NodeRecordView {
-                available_version: asset.and_then(|item| item.available_version.clone()),
-                base_type_name: base_type_names.get(&type_name).cloned(),
-                description: Some(record.description.clone()),
-                installed_version: asset.and_then(|item| item.installed_version.clone()),
-                is_locally_modified: asset.is_some_and(|item| item.is_locally_modified),
-                label: Some(record.label.clone()),
-                source_kind: record.source_kind,
-                source_ref: record.source_ref,
-            },
-        );
-    }
-
-    for (type_name, asset) in node_assets {
-        entries.entry(type_name.clone()).or_insert_with(|| NodeRecordView {
-            available_version: asset.available_version.clone(),
-            base_type_name: base_type_names.get(&type_name).cloned(),
-            description: Some(asset.description.clone()),
-            installed_version: asset.installed_version.clone(),
-            is_locally_modified: asset.is_locally_modified,
-            label: Some(asset.name.clone()),
-            source_kind: asset.source_kind,
-            source_ref: asset.source_ref,
-        });
-    }
-
-    Ok(entries)
-}
-
-async fn node_asset_base_type_map(
-    store: &RunStore,
-) -> Result<HashMap<String, String>, TriggerError> {
-    Ok(store
-        .list_asset_records()
-        .await?
-        .into_iter()
-        .filter(|record| record.asset_kind == "node")
-        .filter_map(|record| {
-            parse_node_asset_base_type(&record)
-                .map(|base_type_name| (record.type_name, base_type_name))
-        })
-        .collect())
-}
-
-fn parse_node_asset_base_type(record: &AssetRecord) -> Option<String> {
-    let definition = serde_json::from_str::<AliasNodeDefinition>(&record.definition_json).ok()?;
-    if definition.kind != "alias" || definition.base_type.trim().is_empty() {
-        return None;
-    }
-
-    Some(definition.base_type)
-}
-
-fn node_record_response(
-    record: crate::storage::NodeRecord,
-    base_type_name: Option<String>,
-) -> NodeRecordResponse {
-    NodeRecordResponse {
-        base_type_name,
-        category: record.category,
-        description: record.description,
-        id: record.id,
-        label: record.label,
-        source_kind: record.source_kind,
-        source_ref: record.source_ref,
-        type_name: record.type_name,
-        updated_at: record.updated_at,
-    }
-}
-
-fn built_in_step_specs() -> [(&'static str, &'static str, &'static str, &'static str); 17] {
-    [
-        ("constant", "Set value", "Produce a fixed value for downstream steps.", "Data"),
-        ("noop", "Pass through", "Pass inputs through without changing them.", "Flow"),
-        ("condition", "Branch", "Route execution based on a condition.", "Flow"),
-        ("switch", "Choose path", "Select one branch from named options.", "Flow"),
-        (
-            "loop",
-            "Repeat for each item",
-            "Run the inner step for each item in a collection.",
-            "Flow",
-        ),
-        (
-            "parallel",
-            "Run in parallel",
-            "Run nested steps at the same time and join their outputs.",
-            "Flow",
-        ),
-        ("http_request", "Send request", "Send an HTTP request to an app or API.", "Apps"),
-        ("database_query", "Query data", "Run a query against the configured database.", "Data"),
-        ("file_read", "Read file", "Read a file from the local data workspace.", "Data"),
-        ("file_write", "Write file", "Write a file to the local data workspace.", "Data"),
-        (
-            "llm_completion",
-            "Generate text",
-            "Generate a completion with the configured LLM provider.",
-            "AI",
-        ),
-        ("classification", "Classify", "Assign labels to a record using the AI model.", "AI"),
-        ("extraction", "Extract fields", "Pull structured fields from unstructured text.", "AI"),
-        (
-            "embedding",
-            "Store knowledge",
-            "Store text as an embedding in the in-memory vector store.",
-            "AI",
-        ),
-        (
-            "retrieval",
-            "Find related knowledge",
-            "Search stored embeddings for similar content.",
-            "AI",
-        ),
-        (
-            "approval",
-            "Request approval",
-            "Pause until a reviewer approves or rejects the task.",
-            "Human",
-        ),
-        ("manual_input", "Ask for input", "Pause until a human provides a value.", "Human"),
-    ]
-}
-
-fn built_in_step_spec(
-    type_name: &str,
-) -> Option<(&'static str, &'static str, &'static str, &'static str)> {
-    built_in_step_specs().into_iter().find(|(candidate, _, _, _)| *candidate == type_name)
-}
-
-fn built_in_node_asset_definition_json(type_name: &str) -> Result<String, TriggerError> {
-    serde_json::to_string(&json!({
-        "asset_kind": "node",
-        "type_name": type_name,
-        "built_in": true,
-    }))
-    .map_err(|error| TriggerError::SerializeWorkflowYaml { message: error.to_string() })
-}
-
-async fn ensure_shipped_asset_records(store: &RunStore) -> Result<(), TriggerError> {
-    for (type_name, name, description, category) in built_in_step_specs() {
-        if store.get_asset_record("node", type_name).await.is_ok() {
-            continue;
-        }
-        let definition_json = serde_json::to_string(&json!({
-            "asset_kind": "node",
-            "type_name": type_name,
-            "built_in": true,
-        }))
-        .map_err(|error| TriggerError::SerializeWorkflowYaml { message: error.to_string() })?;
-        store
-            .upsert_asset_record(NewAssetRecord {
-                asset_kind: "node",
-                type_name,
-                name,
-                description,
-                category: Some(category),
-                runtime: None,
-                source_kind: "shipped",
-                source_ref: Some("built_in"),
-                definition_json: &definition_json,
-                installed_version: Some("1.0.0"),
-                available_version: Some("1.0.0"),
-                is_locally_modified: false,
-            })
-            .await?;
-    }
-
-    Ok(())
-}
-
-async fn asset_record_map(
-    store: &RunStore,
-    asset_kind: &str,
-) -> Result<HashMap<String, AssetRecord>, TriggerError> {
-    Ok(store
-        .list_asset_records()
-        .await?
-        .into_iter()
-        .filter(|record| record.asset_kind == asset_kind)
-        .map(|record| (record.type_name.clone(), record))
-        .collect())
-}
 
 async fn connector_usage_by_workflow(
     store: &RunStore,
@@ -2550,176 +1588,136 @@ async fn connector_usage_by_workflow(
 }
 
 async fn node_catalog(
-    store: &RunStore,
+    _store: &RunStore,
     connectors_dir: &Path,
 ) -> Result<(Vec<StepTypeEntry>, Vec<TriggerTypeEntry>), TriggerError> {
-    ensure_shipped_asset_records(store).await?;
-    let shipped_node_assets = asset_record_map(store, "node").await?;
-    let shipped_connector_assets = asset_record_map(store, "connector").await?;
-    let node_records = node_record_map(store).await?;
     let mut step_types = vec![
         StepTypeEntry {
-            app_record: node_records.get("constant").cloned(),
             category: "Data".to_string(),
             description: "Produce a fixed value for downstream steps.".to_string(),
             label: "Set value".to_string(),
             runtime: None,
-            source: "built_in".to_string(),
             type_name: "constant".to_string(),
         },
         StepTypeEntry {
-            app_record: node_records.get("noop").cloned(),
             category: "Flow".to_string(),
             description: "Pass inputs through without changing them.".to_string(),
             label: "Pass through".to_string(),
             runtime: None,
-            source: "built_in".to_string(),
             type_name: "noop".to_string(),
         },
         StepTypeEntry {
-            app_record: node_records.get("condition").cloned(),
             category: "Flow".to_string(),
             description: "Route execution based on a condition.".to_string(),
             label: "Branch".to_string(),
             runtime: None,
-            source: "built_in".to_string(),
             type_name: "condition".to_string(),
         },
         StepTypeEntry {
-            app_record: node_records.get("switch").cloned(),
             category: "Flow".to_string(),
             description: "Select one branch from named options.".to_string(),
             label: "Choose path".to_string(),
             runtime: None,
-            source: "built_in".to_string(),
             type_name: "switch".to_string(),
         },
         StepTypeEntry {
-            app_record: node_records.get("loop").cloned(),
             category: "Flow".to_string(),
             description: "Run the inner step for each item in a collection.".to_string(),
             label: "Repeat for each item".to_string(),
             runtime: None,
-            source: "built_in".to_string(),
             type_name: "loop".to_string(),
         },
         StepTypeEntry {
-            app_record: node_records.get("parallel").cloned(),
             category: "Flow".to_string(),
             description: "Run nested steps at the same time and join their outputs.".to_string(),
             label: "Run in parallel".to_string(),
             runtime: None,
-            source: "built_in".to_string(),
             type_name: "parallel".to_string(),
         },
         StepTypeEntry {
-            app_record: node_records.get("http_request").cloned(),
             category: "Apps".to_string(),
             description: "Send an HTTP request to an app or API.".to_string(),
             label: "Send request".to_string(),
             runtime: None,
-            source: "built_in".to_string(),
             type_name: "http_request".to_string(),
         },
         StepTypeEntry {
-            app_record: node_records.get("database_query").cloned(),
             category: "Data".to_string(),
             description: "Run a query against the configured database.".to_string(),
             label: "Query data".to_string(),
             runtime: None,
-            source: "built_in".to_string(),
             type_name: "database_query".to_string(),
         },
         StepTypeEntry {
-            app_record: node_records.get("file_read").cloned(),
             category: "Data".to_string(),
             description: "Read a file from the local data workspace.".to_string(),
             label: "Read file".to_string(),
             runtime: None,
-            source: "built_in".to_string(),
             type_name: "file_read".to_string(),
         },
         StepTypeEntry {
-            app_record: node_records.get("file_write").cloned(),
             category: "Data".to_string(),
             description: "Write a file to the local data workspace.".to_string(),
             label: "Write file".to_string(),
             runtime: None,
-            source: "built_in".to_string(),
             type_name: "file_write".to_string(),
         },
         StepTypeEntry {
-            app_record: node_records.get("llm_completion").cloned(),
             category: "AI".to_string(),
             description: "Generate a completion with the configured LLM provider.".to_string(),
             label: "Generate text".to_string(),
             runtime: None,
-            source: "built_in".to_string(),
             type_name: "llm_completion".to_string(),
         },
         StepTypeEntry {
-            app_record: node_records.get("classification").cloned(),
             category: "AI".to_string(),
             description: "Assign labels to a record using the AI model.".to_string(),
             label: "Classify".to_string(),
             runtime: None,
-            source: "built_in".to_string(),
             type_name: "classification".to_string(),
         },
         StepTypeEntry {
-            app_record: node_records.get("extraction").cloned(),
             category: "AI".to_string(),
             description: "Pull structured fields from unstructured text.".to_string(),
             label: "Extract fields".to_string(),
             runtime: None,
-            source: "built_in".to_string(),
             type_name: "extraction".to_string(),
         },
         StepTypeEntry {
-            app_record: node_records.get("embedding").cloned(),
             category: "AI".to_string(),
             description: "Store text as an embedding in the in-memory vector store.".to_string(),
             label: "Store knowledge".to_string(),
             runtime: None,
-            source: "built_in".to_string(),
             type_name: "embedding".to_string(),
         },
         StepTypeEntry {
-            app_record: node_records.get("retrieval").cloned(),
             category: "AI".to_string(),
             description: "Search stored embeddings for similar content.".to_string(),
             label: "Find related knowledge".to_string(),
             runtime: None,
-            source: "built_in".to_string(),
             type_name: "retrieval".to_string(),
         },
         StepTypeEntry {
-            app_record: node_records.get("approval").cloned(),
             category: "Human".to_string(),
             description: "Pause until a reviewer approves or rejects the task.".to_string(),
             label: "Request approval".to_string(),
             runtime: None,
-            source: "built_in".to_string(),
             type_name: "approval".to_string(),
         },
         StepTypeEntry {
-            app_record: node_records.get("manual_input").cloned(),
             category: "Human".to_string(),
             description: "Pause until a human provides a value.".to_string(),
             label: "Ask for input".to_string(),
             runtime: None,
-            source: "built_in".to_string(),
             type_name: "manual_input".to_string(),
         },
     ];
-    let asset_store_connectors_dir = store.asset_store_connectors_dir();
+
     let mut connectors = discover_connector_manifests_from_dirs(&[
         connectors_dir,
-        asset_store_connectors_dir.as_path(),
     ])?
     .into_iter()
     .map(|manifest| StepTypeEntry {
-        app_record: node_records.get(&manifest.type_id).cloned(),
         category: "Apps".to_string(),
         description: format!(
             "{} app connector loaded from manifest.",
@@ -2727,47 +1725,11 @@ async fn node_catalog(
         ),
         label: manifest.name,
         runtime: Some(connector_runtime_name(manifest.runtime).to_string()),
-        source: "connector".to_string(),
         type_name: manifest.type_id,
     })
     .collect::<Vec<_>>();
-    step_types.append(&mut connectors);
-    for entry in &mut step_types {
-        let shipped_asset = match entry.source.as_str() {
-            "built_in" => shipped_node_assets.get(&entry.type_name),
-            "connector" => shipped_connector_assets.get(&entry.type_name),
-            _ => None,
-        };
 
-        if let Some(asset) = shipped_asset {
-            entry.label = asset.name.clone();
-            entry.description = asset.description.clone();
-            if let Some(category) = &asset.category {
-                entry.category = category.clone();
-            }
-            if entry.source == "connector" {
-                entry.runtime = asset.runtime.clone().or_else(|| entry.runtime.clone());
-            }
-        }
-    }
-    let existing_type_names =
-        step_types.iter().map(|entry| entry.type_name.clone()).collect::<HashSet<_>>();
-    let mut standalone_records = store
-        .list_node_records()
-        .await?
-        .into_iter()
-        .filter(|record| !existing_type_names.contains(&record.type_name))
-        .map(|record| StepTypeEntry {
-            app_record: node_records.get(&record.type_name).cloned(),
-            category: record.category,
-            description: record.description,
-            label: record.label,
-            runtime: None,
-            source: record.source_kind,
-            type_name: record.type_name,
-        })
-        .collect::<Vec<_>>();
-    step_types.append(&mut standalone_records);
+    step_types.append(&mut connectors);
     step_types.sort_by(|left, right| left.label.cmp(&right.label));
 
     Ok((
@@ -2795,7 +1757,6 @@ async fn node_catalog(
 fn connector_view(
     connector: &crate::connectors::DiscoveredConnector,
     workflow_dependencies: &HashMap<String, Vec<String>>,
-    connector_records: &HashMap<String, ConnectorRecordView>,
 ) -> ConnectorView {
     let state = connector_state(connector);
     let readme_path = connector.connector_dir.join("README.md");
@@ -2810,20 +1771,12 @@ fn connector_view(
     if !sample_input_path.exists() {
         notes.push("Add a sample input to enable one-click sample tests.".to_string());
     }
-    let app_record = connector_records.get(&connector.manifest.type_id).cloned();
-    let name = app_record
-        .as_ref()
-        .and_then(|record| record.name.clone())
-        .unwrap_or_else(|| connector.manifest.name.clone());
-    let description = app_record
-        .as_ref()
-        .and_then(|record| record.description.clone())
-        .unwrap_or_else(|| connector.manifest.name.clone());
+    let name = connector.manifest.name.clone();
+    let description = connector.manifest.name.clone();
 
     ConnectorView {
         allowed_env: connector.manifest.allowed_env.clone(),
         allowed_hosts: connector.manifest.allowed_hosts.clone(),
-        app_record,
         connector_dir: state.install_validity.connector_dir.clone(),
         connector_state: state.clone(),
         description,
@@ -2862,7 +1815,6 @@ fn connector_view(
 fn invalid_connector_view(
     connector: &crate::connectors::InvalidConnector,
     workflow_dependencies: &HashMap<String, Vec<String>>,
-    connector_records: &HashMap<String, ConnectorRecordView>,
 ) -> InvalidConnectorView {
     let state = invalid_connector_state(connector);
     let provided_step_types = connector.attempted_type_id.clone().into_iter().collect::<Vec<_>>();
@@ -2874,11 +1826,6 @@ fn invalid_connector_view(
     used_by_workflows.sort();
     used_by_workflows.dedup();
     InvalidConnectorView {
-        app_record: connector
-            .attempted_type_id
-            .as_ref()
-            .and_then(|type_name| connector_records.get(type_name))
-            .cloned(),
         connector_dir: state.install_validity.connector_dir.clone(),
         connector_state: state,
         error: connector.error.clone(),
@@ -3275,15 +2222,7 @@ fn resolve_connector_test_inputs(
     serde_json::from_str(&raw).map_err(|error| TriggerError::Connector(ConnectorError::Json(error)))
 }
 
-fn parse_connector_runtime(runtime: &str) -> Result<ConnectorRuntime, TriggerError> {
-    match runtime {
-        "process" => Ok(ConnectorRuntime::Process),
-        "wasm" => Ok(ConnectorRuntime::Wasm),
-        other => Err(TriggerError::Connector(ConnectorError::InvalidManifest {
-            message: format!("unsupported connector runtime {other}"),
-        })),
-    }
-}
+
 
 const fn default_true() -> bool {
     true
@@ -3921,46 +2860,43 @@ async fn authenticate_user(
 
 #[cfg(test)]
 mod tests {
-    use crate::triggers::UserId;
     use std::collections::{BTreeMap, HashMap};
-
     use axum::{
         body::to_bytes,
-        extract::{Path as AxumPath, State as AxumState},
         http::{header::AUTHORIZATION, HeaderMap, HeaderValue, StatusCode},
         response::IntoResponse,
         Json,
     };
+
     use chrono::Utc;
     use serde_json::json;
     use serde_yaml::Value as YamlValue;
 
     use super::{
-        apply_connector_update, apply_node_asset_update, authenticate_webhook,
+        authenticate_webhook,
         build_workflow_summary, compute_signature, connector_inventory, connector_view,
-        create_connector, create_workflow_document, cron_schedule, ensure_shipped_asset_records,
+        create_workflow_document, cron_schedule,
         import_n8n_workflow, invalid_connector_view,
         node_catalog, parse_workflow_document_state,
         read_workflow_document, rename_workflow_document, request_has_engine_token, run_view,
         save_workflow_document, seed_workflows_from_directory_if_missing, serialize_workflow_yaml,
-        slugify_workflow_name, sync_repo_authored_connector_assets, update_connector_record,
-        validate_secret_value, validate_workflow_id, workflow_inventory, AppState,
-        ApplyAssetUpdateRequest, CreateConnectorRequest, CreateWorkflowRequest,
-        EngineAccessControl, N8nImportRequest, RenameWorkflowRequest, RunDetailResponse,
-        RunPageResponse, TriggerError, UpdateConnectorRecordRequest, WebhookSignatureAuth,
+        slugify_workflow_name,
+        validate_secret_value, validate_workflow_id, workflow_inventory,
+        CreateWorkflowRequest,
+        N8nImportRequest, RenameWorkflowRequest, RunDetailResponse,
+        RunPageResponse, TriggerError, WebhookSignatureAuth,
         WebhookWorkflow,
     };
     use crate::{
-        engine::{compile_workflow, ExecutionConfig, WorkflowEngine},
+        engine::compile_workflow,
         models::{Step, Trigger, Workflow},
-        nodes::{BuiltInNodeConfig, NodeRegistry},
         product_state::{
             connector_state_from_facts, latest_workflow_telemetry, ConnectorInstallValidityState,
             ConnectorRuntimeMode, ConnectorStateFacts, ConnectorValidityState,
             WorkflowConnectorRequirementsState, WorkflowFacts, WorkflowLifecycleState,
             WorkflowTelemetryFacts, WorkflowValidationState,
         },
-        storage::{NewAssetRecord, NewConnectorRecord, NewNodeRecord, RunRecord, RunStore},
+        storage::{RunRecord, RunStore},
     };
 
     #[test]
@@ -4050,242 +2986,7 @@ mod tests {
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
     }
 
-    #[test]
-    fn shipped_asset_seeding_creates_built_in_assets() {
-        let temp_dir = write_temp_directory("shipped-asset-seeding");
-        let db_path = temp_dir.join("runs.sqlite");
-        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
-        runtime.block_on(async {
-            let store = RunStore::connect(&db_path).await.expect("store should connect");
-            ensure_shipped_asset_records(&store).await.expect("asset seeding should succeed");
 
-            let assets = store.list_asset_records().await.expect("assets should list");
-            assert!(assets.iter().any(|asset| {
-                asset.asset_kind == "node"
-                    && asset.type_name == "constant"
-                    && asset.source_kind == "shipped"
-            }));
-        });
-
-        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
-    }
-
-    #[tokio::test]
-    async fn repo_authored_connector_sync_copies_bundle_into_asset_store() {
-        let temp_dir = write_temp_directory("repo-connector-sync");
-        let db_path = temp_dir.join("runs.sqlite");
-        let repo_connectors_dir = temp_dir.join("repo-connectors");
-        let source_connector_dir = repo_connectors_dir.join("ship-demo");
-        std::fs::create_dir_all(&source_connector_dir).expect("source connector dir should exist");
-        std::fs::write(
-            source_connector_dir.join("manifest.json"),
-            r#"{
-  "name": "Ship Demo",
-  "type": "ship_demo",
-  "runtime": "process",
-  "entry": "python3 main.py",
-  "outputs": ["ok"],
-  "limits": { "timeout": 1000 }
-}"#,
-        )
-        .expect("manifest should write");
-        std::fs::write(source_connector_dir.join("main.py"), "print('ok')\n")
-            .expect("connector code should write");
-
-        let store = RunStore::connect(&db_path).await.expect("store should connect");
-        sync_repo_authored_connector_assets(&store, &repo_connectors_dir)
-            .await
-            .expect("repo-authored connector sync should succeed");
-
-        let connector_record = store
-            .get_connector_record_by_type("ship_demo")
-            .await
-            .expect("connector record should persist");
-        let asset_record = store
-            .get_asset_record("connector", "ship_demo")
-            .await
-            .expect("asset record should persist");
-
-        assert_eq!(connector_record.source_kind, "shipped");
-        assert_eq!(asset_record.source_kind, "shipped");
-        assert!(store
-            .asset_store_connectors_dir()
-            .join("ship-demo")
-            .join("manifest.json")
-            .exists());
-        assert!(std::path::Path::new(&connector_record.connector_dir).ends_with("ship-demo"));
-
-        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
-    }
-
-    #[tokio::test]
-    async fn repo_authored_connector_sync_keeps_locally_modified_shipped_bundle() {
-        let temp_dir = write_temp_directory("repo-connector-sync-local-modified");
-        let db_path = temp_dir.join("runs.sqlite");
-        let repo_connectors_dir = temp_dir.join("repo-connectors");
-        let source_connector_dir = repo_connectors_dir.join("ship-demo");
-        std::fs::create_dir_all(&source_connector_dir).expect("source connector dir should exist");
-        std::fs::write(
-            source_connector_dir.join("manifest.json"),
-            r#"{
-  "name": "Ship Demo",
-  "type": "ship_demo",
-  "runtime": "process",
-  "entry": "python3 main.py",
-  "outputs": ["ok"],
-  "limits": { "timeout": 1000 }
-}"#,
-        )
-        .expect("manifest should write");
-        std::fs::write(source_connector_dir.join("main.py"), "print('repo-v1')\n")
-            .expect("connector code should write");
-
-        let store = RunStore::connect(&db_path).await.expect("store should connect");
-        sync_repo_authored_connector_assets(&store, &repo_connectors_dir)
-            .await
-            .expect("initial sync should succeed");
-
-        let stored_connector_main =
-            store.asset_store_connectors_dir().join("ship-demo").join("main.py");
-        std::fs::write(&stored_connector_main, "print('local-edit')\n")
-            .expect("local modification should write");
-        let existing_asset = store
-            .get_asset_record("connector", "ship_demo")
-            .await
-            .expect("asset record should exist");
-        store
-            .upsert_asset_record(NewAssetRecord {
-                asset_kind: "connector",
-                type_name: &existing_asset.type_name,
-                name: &existing_asset.name,
-                description: &existing_asset.description,
-                category: existing_asset.category.as_deref(),
-                runtime: existing_asset.runtime.as_deref(),
-                source_kind: &existing_asset.source_kind,
-                source_ref: existing_asset.source_ref.as_deref(),
-                definition_json: &existing_asset.definition_json,
-                installed_version: existing_asset.installed_version.as_deref(),
-                available_version: existing_asset.available_version.as_deref(),
-                is_locally_modified: true,
-            })
-            .await
-            .expect("asset record should mark local modification");
-        std::fs::write(source_connector_dir.join("main.py"), "print('repo-v2')\n")
-            .expect("repo update should write");
-
-        sync_repo_authored_connector_assets(&store, &repo_connectors_dir)
-            .await
-            .expect("second sync should succeed");
-
-        assert_eq!(
-            std::fs::read_to_string(&stored_connector_main).expect("stored connector should read"),
-            "print('local-edit')\n"
-        );
-
-        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
-    }
-
-    #[tokio::test]
-    async fn repo_authored_connector_sync_marks_newer_repo_version_as_available_update() {
-        let temp_dir = write_temp_directory("repo-connector-sync-update-available");
-        let db_path = temp_dir.join("runs.sqlite");
-        let repo_connectors_dir = temp_dir.join("repo-connectors");
-        let source_connector_dir = repo_connectors_dir.join("ship-demo");
-        std::fs::create_dir_all(&source_connector_dir).expect("source connector dir should exist");
-        std::fs::write(
-            source_connector_dir.join("manifest.json"),
-            r#"{
-  "name": "Ship Demo",
-  "type": "ship_demo",
-  "runtime": "process",
-  "entry": "python3 main.py",
-  "outputs": ["ok"],
-  "version": "1.0.0",
-  "limits": { "timeout": 1000 }
-}"#,
-        )
-        .expect("manifest should write");
-        std::fs::write(source_connector_dir.join("main.py"), "print('repo-v1')\n")
-            .expect("connector code should write");
-
-        let store = RunStore::connect(&db_path).await.expect("store should connect");
-        sync_repo_authored_connector_assets(&store, &repo_connectors_dir)
-            .await
-            .expect("initial sync should succeed");
-
-        std::fs::write(
-            source_connector_dir.join("manifest.json"),
-            r#"{
-  "name": "Ship Demo",
-  "type": "ship_demo",
-  "runtime": "process",
-  "entry": "python3 main.py",
-  "outputs": ["ok"],
-  "version": "1.1.0",
-  "limits": { "timeout": 1000 }
-}"#,
-        )
-        .expect("updated manifest should write");
-        std::fs::write(source_connector_dir.join("main.py"), "print('repo-v2')\n")
-            .expect("updated connector code should write");
-
-        sync_repo_authored_connector_assets(&store, &repo_connectors_dir)
-            .await
-            .expect("second sync should succeed");
-
-        let asset = store
-            .get_asset_record("connector", "ship_demo")
-            .await
-            .expect("asset record should exist");
-        assert_eq!(asset.installed_version.as_deref(), Some("1.0.0"));
-        assert_eq!(asset.available_version.as_deref(), Some("1.1.0"));
-        assert_eq!(
-            std::fs::read_to_string(
-                store.asset_store_connectors_dir().join("ship-demo").join("main.py")
-            )
-            .expect("stored connector should read"),
-            "print('repo-v1')\n"
-        );
-
-        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
-    }
-
-    #[test]
-    fn node_catalog_prefers_shipped_asset_registry_metadata_for_built_ins() {
-        let temp_dir = write_temp_directory("node-catalog-shipped-asset-overrides");
-        let db_path = temp_dir.join("runs.sqlite");
-        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
-        let (steps, _triggers) = runtime.block_on(async {
-            let store = RunStore::connect(&db_path).await.expect("store should connect");
-            store
-                .upsert_asset_record(NewAssetRecord {
-                    asset_kind: "node",
-                    type_name: "constant",
-                    name: "Compose value",
-                    description: "Compose a reusable value for later steps.",
-                    category: Some("Data"),
-                    runtime: None,
-                    source_kind: "shipped",
-                    source_ref: Some("built_in"),
-                    definition_json: r#"{"type":"constant"}"#,
-                    installed_version: Some("1.0.0"),
-                    available_version: Some("1.0.0"),
-                    is_locally_modified: true,
-                })
-                .await
-                .expect("asset record should persist");
-            node_catalog(&store, &temp_dir).await.expect("catalog should load")
-        });
-
-        let constant = steps
-            .iter()
-            .find(|entry| entry.type_name == "constant")
-            .expect("constant step should exist");
-        assert_eq!(constant.label, "Compose value");
-        assert_eq!(constant.description, "Compose a reusable value for later steps.");
-
-        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
-    }
 
     #[test]
     fn node_catalog_uses_outcome_language_for_built_in_triggers() {
@@ -4315,333 +3016,7 @@ mod tests {
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
     }
 
-    #[test]
-    fn node_catalog_exposes_app_record_metadata() {
-        let temp_dir = write_temp_directory("node-catalog-app-record");
-        let db_path = temp_dir.join("runs.sqlite");
-        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
-        let (steps, _triggers) = runtime.block_on(async {
-            let store = RunStore::connect(&db_path).await.expect("store should connect");
-            store
-                .upsert_node_record(NewNodeRecord {
-                    type_name: "llm_completion",
-                    label: "Write summary",
-                    description: "Generate a short summary for downstream steps.",
-                    category: "AI",
-                    source_kind: "generated",
-                    source_ref: Some("prompt:demo"),
-                })
-                .await
-                .expect("node record should persist");
-            node_catalog(&store, &temp_dir).await.expect("catalog should load")
-        });
 
-        let llm_step = steps
-            .iter()
-            .find(|entry| entry.type_name == "llm_completion")
-            .expect("llm step should exist");
-        let payload = serde_json::to_value(llm_step).expect("step should serialize");
-
-        assert_eq!(payload["app_record"]["source_kind"], json!("generated"));
-        assert_eq!(payload["app_record"]["source_ref"], json!("prompt:demo"));
-
-        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
-    }
-
-    #[test]
-    fn node_catalog_includes_standalone_generated_node_records() {
-        let temp_dir = write_temp_directory("node-catalog-standalone-record");
-        let db_path = temp_dir.join("runs.sqlite");
-        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
-        let (steps, _triggers) = runtime.block_on(async {
-            let store = RunStore::connect(&db_path).await.expect("store should connect");
-            store
-                .upsert_node_record(NewNodeRecord {
-                    type_name: "send_whatsapp_message",
-                    label: "Send WhatsApp message",
-                    description: "Send a WhatsApp message to a contact.",
-                    category: "Apps",
-                    source_kind: "generated",
-                    source_ref: Some("n8n:send-email"),
-                })
-                .await
-                .expect("node record should persist");
-            node_catalog(&store, &temp_dir).await.expect("catalog should load")
-        });
-
-        let generated_step = steps
-            .iter()
-            .find(|entry| entry.type_name == "send_whatsapp_message")
-            .expect("generated step should exist");
-        assert_eq!(generated_step.label, "Send WhatsApp message");
-        assert_eq!(generated_step.source, "generated");
-        assert_eq!(
-            generated_step.app_record.as_ref().map(|record| record.source_ref.as_deref()),
-            Some(Some("n8n:send-email"))
-        );
-
-        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
-    }
-
-    #[test]
-    fn node_catalog_exposes_generated_node_base_type_metadata() {
-        let temp_dir = write_temp_directory("node-catalog-base-type");
-        let db_path = temp_dir.join("runs.sqlite");
-        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
-        let (steps, _triggers) = runtime.block_on(async {
-            let store = RunStore::connect(&db_path).await.expect("store should connect");
-            store
-                .upsert_node_record(NewNodeRecord {
-                    type_name: "send_whatsapp_message",
-                    label: "Send WhatsApp message",
-                    description: "Send a WhatsApp message to a contact.",
-                    category: "Apps",
-                    source_kind: "generated",
-                    source_ref: Some("prompt:whatsapp"),
-                })
-                .await
-                .expect("node record should persist");
-            store
-                .upsert_asset_record(NewAssetRecord {
-                    asset_kind: "node",
-                    type_name: "send_whatsapp_message",
-                    name: "Send WhatsApp message",
-                    description: "Send a WhatsApp message to a contact.",
-                    category: Some("Apps"),
-                    runtime: Some("alias"),
-                    source_kind: "generated",
-                    source_ref: Some("prompt:whatsapp"),
-                    definition_json:
-                        r#"{"kind":"alias","base_type":"http_request","default_params":{}}"#,
-                    installed_version: None,
-                    available_version: None,
-                    is_locally_modified: false,
-                })
-                .await
-                .expect("asset record should persist");
-            node_catalog(&store, &temp_dir).await.expect("catalog should load")
-        });
-
-        let generated_step = steps
-            .iter()
-            .find(|entry| entry.type_name == "send_whatsapp_message")
-            .expect("generated step should exist");
-        let payload = serde_json::to_value(generated_step).expect("step should serialize");
-
-        assert_eq!(payload["app_record"]["base_type_name"], json!("http_request"));
-
-        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
-    }
-
-
-
-    #[tokio::test]
-    async fn create_connector_persists_connector_record() {
-        let temp_dir = write_temp_directory("create-connector-record");
-        let state = starter_pack_test_state(&temp_dir).await;
-
-        let response = create_connector(
-            axum::Extension(UserId("local".to_string())),
-            AxumState(state.clone()),
-            Json(CreateConnectorRequest {
-                name: "Sample Echo".to_string(),
-                runtime: "process".to_string(),
-                type_id: "sample_echo".to_string(),
-            }),
-        )
-        .await
-        .into_response();
-
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let record = state
-            .engine
-            .store()
-            .get_connector_record_by_type("sample_echo")
-            .await
-            .expect("scaffolded connector record should persist");
-        assert_eq!(record.name, "Sample Echo");
-        assert_eq!(record.source_kind, "custom");
-        assert_eq!(record.source_ref, None);
-        assert!(record.manifest_json.contains("\"type\":\"sample_echo\""));
-
-        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
-    }
-
-    #[tokio::test]
-    async fn update_connector_record_updates_asset_metadata_and_marks_local_modification() {
-        let temp_dir = write_temp_directory("update-connector-record");
-        let state = starter_pack_test_state(&temp_dir).await;
-
-        let create_response = create_connector(
-            axum::Extension(UserId("local".to_string())),
-            AxumState(state.clone()),
-            Json(CreateConnectorRequest {
-                name: "Sample Echo".to_string(),
-                runtime: "process".to_string(),
-                type_id: "sample_echo".to_string(),
-            }),
-        )
-        .await
-        .into_response();
-        assert_eq!(create_response.status(), StatusCode::CREATED);
-
-        let update_response = update_connector_record(
-            AxumState(state.clone()),
-            AxumPath("sample_echo".to_string()),
-            Json(UpdateConnectorRecordRequest {
-                name: "Echo requests".to_string(),
-                description: "Echo a request payload back for testing.".to_string(),
-            }),
-        )
-        .await
-        .into_response();
-
-        assert_eq!(update_response.status(), StatusCode::OK);
-
-        let connector_record = state
-            .engine
-            .store()
-            .get_connector_record_by_type("sample_echo")
-            .await
-            .expect("connector record should exist");
-        assert_eq!(connector_record.name, "Echo requests");
-
-        let asset_record = state
-            .engine
-            .store()
-            .get_asset_record("connector", "sample_echo")
-            .await
-            .expect("asset record should exist");
-        assert_eq!(asset_record.name, "Echo requests");
-        assert_eq!(asset_record.description, "Echo a request payload back for testing.");
-        assert!(asset_record.is_locally_modified);
-
-        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
-    }
-
-    #[tokio::test]
-    async fn apply_connector_update_installs_latest_shipped_bundle_and_clears_update_state() {
-        let temp_dir = write_temp_directory("apply-connector-update");
-        let state = starter_pack_test_state(&temp_dir).await;
-        let source_connector_dir = state.connectors_dir.join("ship-demo");
-        std::fs::create_dir_all(&source_connector_dir).expect("source connector dir should exist");
-        std::fs::write(
-            source_connector_dir.join("manifest.json"),
-            r#"{
-  "name": "Ship Demo",
-  "type": "ship_demo",
-  "runtime": "process",
-  "entry": "python3 main.py",
-  "outputs": ["ok"],
-  "version": "1.0.0",
-  "limits": { "timeout": 1000 }
-}"#,
-        )
-        .expect("manifest should write");
-        std::fs::write(source_connector_dir.join("main.py"), "print('repo-v1')\n")
-            .expect("connector code should write");
-
-        sync_repo_authored_connector_assets(state.engine.store(), &state.connectors_dir)
-            .await
-            .expect("initial sync should succeed");
-
-        std::fs::write(
-            source_connector_dir.join("manifest.json"),
-            r#"{
-  "name": "Ship Demo",
-  "type": "ship_demo",
-  "runtime": "process",
-  "entry": "python3 main.py",
-  "outputs": ["ok"],
-  "version": "1.1.0",
-  "limits": { "timeout": 1000 }
-}"#,
-        )
-        .expect("updated manifest should write");
-        std::fs::write(source_connector_dir.join("main.py"), "print('repo-v2')\n")
-            .expect("updated connector code should write");
-        sync_repo_authored_connector_assets(state.engine.store(), &state.connectors_dir)
-            .await
-            .expect("update sync should succeed");
-
-        let response = apply_connector_update(
-            axum::Extension(UserId("local".to_string())),
-            AxumState(state.clone()),
-            AxumPath("ship_demo".to_string()),
-            Json(ApplyAssetUpdateRequest),
-        )
-        .await
-        .into_response();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let asset = state
-            .engine
-            .store()
-            .get_asset_record("connector", "ship_demo")
-            .await
-            .expect("asset should exist");
-        assert_eq!(asset.installed_version.as_deref(), Some("1.1.0"));
-        assert_eq!(asset.available_version.as_deref(), Some("1.1.0"));
-        assert!(!asset.is_locally_modified);
-        assert_eq!(
-            std::fs::read_to_string(
-                state.engine.store().asset_store_connectors_dir().join("ship-demo").join("main.py")
-            )
-            .expect("stored connector should read"),
-            "print('repo-v2')\n"
-        );
-
-        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
-    }
-
-    #[tokio::test]
-    async fn apply_node_asset_update_resets_shipped_metadata_and_clears_local_modification() {
-        let temp_dir = write_temp_directory("apply-node-update");
-        let state = starter_pack_test_state(&temp_dir).await;
-
-        state
-            .engine
-            .store()
-            .upsert_asset_record(NewAssetRecord {
-                asset_kind: "node",
-                type_name: "constant",
-                name: "Compose value",
-                description: "Custom local description.",
-                category: Some("Data"),
-                runtime: None,
-                source_kind: "shipped",
-                source_ref: Some("built_in"),
-                definition_json: r#"{"asset_kind":"node","type_name":"constant","built_in":true}"#,
-                installed_version: Some("1.0.0"),
-                available_version: Some("1.1.0"),
-                is_locally_modified: false,
-            })
-            .await
-            .expect("asset record should persist");
-
-        let response = apply_node_asset_update(
-            AxumState(state.clone()),
-            AxumPath("constant".to_string()),
-            Json(ApplyAssetUpdateRequest),
-        )
-        .await
-        .into_response();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let asset = state
-            .engine
-            .store()
-            .get_asset_record("node", "constant")
-            .await
-            .expect("asset record should exist");
-        assert_eq!(asset.name, "Set value");
-        assert_eq!(asset.description, "Produce a fixed value for downstream steps.");
-        assert_eq!(asset.installed_version.as_deref(), Some("1.1.0"));
-        assert_eq!(asset.available_version.as_deref(), Some("1.1.0"));
-        assert!(!asset.is_locally_modified);
-
-        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
-    }
 
     #[tokio::test]
     async fn import_n8n_workflow_endpoint_returns_translation_payload() {
@@ -4739,25 +3114,6 @@ mod tests {
             .contains("invalid n8n workflow payload"));
     }
 
-    async fn starter_pack_test_state(temp_dir: &std::path::Path) -> AppState {
-        let connectors_dir = temp_dir.join("connectors");
-        let workflows_dir = temp_dir.join("workflows");
-        std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
-        std::fs::create_dir_all(&workflows_dir).expect("workflows dir should be created");
-
-        let db_path = temp_dir.join("runs.sqlite");
-        let store = RunStore::connect(&db_path).await.expect("run store should connect");
-        let registry = NodeRegistry::built_in(BuiltInNodeConfig::default());
-        let engine = WorkflowEngine::with_registry(store, registry, ExecutionConfig::default());
-
-        AppState {
-            access_control: EngineAccessControl { allow_remote: true, auth_token: None },
-            connectors_dir,
-            engine,
-            webhook_workflows: std::sync::Arc::new(HashMap::new()),
-            workflows_dir,
-        }
-    }
 
     #[test]
     fn rejects_workflow_ids_with_path_traversal_characters() {
@@ -5620,151 +3976,7 @@ steps:
         std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
     }
 
-    #[test]
-    fn connector_inventory_exposes_app_record_metadata() {
-        let temp_dir = write_temp_directory("connector-inventory-app-record");
-        let connectors_dir = temp_dir.join("connectors");
-        std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
 
-        let valid_connector_dir = connectors_dir.join("report-summary");
-        std::fs::create_dir_all(&valid_connector_dir).expect("valid connector dir should exist");
-        std::fs::write(
-            valid_connector_dir.join("manifest.json"),
-            r#"{
-  "entry": "main.py",
-  "inputs": ["payload"],
-  "limits": { "timeout": 1000 },
-  "name": "Report Summary",
-  "outputs": ["summary"],
-  "runtime": "process",
-  "type": "report-summary"
-}"#,
-        )
-        .expect("valid manifest should be written");
-        std::fs::write(valid_connector_dir.join("main.py"), "print('{}')")
-            .expect("valid connector script should exist");
-
-        let db_path = temp_dir.join("runs.sqlite");
-        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
-        let inventory = runtime.block_on(async {
-            let store = RunStore::connect(&db_path).await.expect("store should connect");
-            store
-                .upsert_connector_record(NewConnectorRecord {
-                    type_name: "report-summary",
-                    name: "Report Summary",
-                    runtime: "process",
-                    source_kind: "starter_pack",
-                    source_ref: Some("report-summary-pack"),
-                    connector_dir: &valid_connector_dir.display().to_string(),
-                    manifest_path: &valid_connector_dir.join("manifest.json").display().to_string(),
-                    manifest_json: r#"{"type":"report-summary"}"#,
-                })
-                .await
-                .expect("connector record should persist");
-
-            connector_inventory(&store, &connectors_dir, "local")
-                .await
-                .expect("connector inventory should build")
-        });
-
-        let valid_payload = serde_json::to_value(
-            inventory
-                .connectors
-                .iter()
-                .find(|connector| connector.type_name == "report-summary")
-                .expect("valid connector should exist"),
-        )
-        .expect("valid connector should serialize");
-
-        assert_eq!(valid_payload["app_record"]["source_kind"], json!("starter_pack"));
-        assert_eq!(valid_payload["app_record"]["source_ref"], json!("report-summary-pack"));
-        assert_eq!(valid_payload["app_record"]["is_locally_modified"], json!(false));
-
-        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
-    }
-
-    #[test]
-    fn connector_inventory_prefers_asset_metadata_and_exposes_update_state() {
-        let temp_dir = write_temp_directory("connector-inventory-asset-metadata");
-        let connectors_dir = temp_dir.join("connectors");
-        std::fs::create_dir_all(&connectors_dir).expect("connectors dir should be created");
-
-        let connector_dir = connectors_dir.join("report-summary");
-        std::fs::create_dir_all(&connector_dir).expect("connector dir should exist");
-        std::fs::write(
-            connector_dir.join("manifest.json"),
-            r#"{
-  "entry": "main.py",
-  "inputs": ["payload"],
-  "limits": { "timeout": 1000 },
-  "name": "Report Summary",
-  "outputs": ["summary"],
-  "runtime": "process",
-  "type": "report-summary",
-  "version": "1.0.0"
-}"#,
-        )
-        .expect("manifest should be written");
-        std::fs::write(connector_dir.join("main.py"), "print('{}')\n")
-            .expect("connector code should be written");
-
-        let db_path = temp_dir.join("runs.sqlite");
-        let runtime = tokio::runtime::Runtime::new().expect("runtime should create");
-        let inventory = runtime.block_on(async {
-            let store = RunStore::connect(&db_path).await.expect("store should connect");
-            store
-                .upsert_connector_record(NewConnectorRecord {
-                    type_name: "report-summary",
-                    name: "Report Summary",
-                    runtime: "process",
-                    source_kind: "starter_pack",
-                    source_ref: Some("report-summary-pack"),
-                    connector_dir: &connector_dir.display().to_string(),
-                    manifest_path: &connector_dir.join("manifest.json").display().to_string(),
-                    manifest_json: r#"{"type":"report-summary"}"#,
-                })
-                .await
-                .expect("connector record should persist");
-            store
-                .upsert_asset_record(NewAssetRecord {
-                    asset_kind: "connector",
-                    type_name: "report-summary",
-                    name: "Custom Report Summary",
-                    description: "Summarize the latest report payload.",
-                    category: Some("Apps"),
-                    runtime: Some("process"),
-                    source_kind: "starter_pack",
-                    source_ref: Some("report-summary-pack"),
-                    definition_json: r#"{"type":"report-summary"}"#,
-                    installed_version: Some("1.0.0"),
-                    available_version: Some("1.1.0"),
-                    is_locally_modified: true,
-                })
-                .await
-                .expect("asset record should persist");
-
-            connector_inventory(&store, &connectors_dir, "local")
-                .await
-                .expect("connector inventory should build")
-        });
-
-        let payload = serde_json::to_value(
-            inventory
-                .connectors
-                .iter()
-                .find(|connector| connector.type_name == "report-summary")
-                .expect("connector should exist"),
-        )
-        .expect("connector should serialize");
-
-        assert_eq!(payload["name"], json!("Custom Report Summary"));
-        assert_eq!(payload["description"], json!("Summarize the latest report payload."));
-        assert_eq!(payload["app_record"]["installed_version"], json!("1.0.0"));
-        assert_eq!(payload["app_record"]["available_version"], json!("1.1.0"));
-        assert_eq!(payload["app_record"]["is_locally_modified"], json!(true));
-
-        std::fs::remove_dir_all(temp_dir).expect("temp directory cleanup should succeed");
-    }
 
     #[test]
     fn create_workflow_succeeds_when_post_write_summary_enrichment_fails() {
@@ -6147,7 +4359,7 @@ steps:
                 .expect("manifest should canonicalize"),
         };
 
-        let view = connector_view(&connector, &HashMap::new(), &HashMap::new());
+        let view = connector_view(&connector, &HashMap::new());
         let payload = serde_json::to_value(view).expect("connector view should serialize");
 
         assert_eq!(payload["connector_state"]["install_validity"]["valid"], json!(true));
@@ -6188,7 +4400,6 @@ steps:
                 attempted_type_id: None,
                 manifest_path: Some(manifest_path.clone()),
             },
-            &HashMap::new(),
             &HashMap::new(),
         );
         let invalid_payload =
