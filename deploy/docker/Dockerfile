@@ -1,4 +1,4 @@
-FROM rust:1-bookworm AS engine-builder
+FROM rust:1.90-bookworm AS engine-builder
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY core ./core
@@ -26,6 +26,8 @@ COPY --from=engine-builder /app/target/release/acsa-core /usr/local/bin/acsa-cor
 COPY --from=ui-builder /app/ui/.next/standalone /app/ui
 COPY --from=ui-builder /app/ui/.next/static /app/ui/.next/static
 COPY --from=ui-builder /app/ui/public /app/ui/public
+COPY workflows /app/workflows
+COPY connectors /app/connectors
 COPY deploy/docker/start.sh /usr/local/bin/acsa-start
 RUN chmod +x /usr/local/bin/acsa-start \
     && mkdir -p /app/workflows /app/data

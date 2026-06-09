@@ -15,7 +15,7 @@
 # ==========================================
 # Stage 1: Build the Rust Engine (acsa-core)
 # ==========================================
-FROM rust:1-bookworm AS builder
+FROM rust:1.90-bookworm AS builder
 WORKDIR /app
 
 # Install build dependencies
